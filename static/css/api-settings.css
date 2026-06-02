@@ -260,11 +260,11 @@ body.show-ms .ms-hint { display:block; }
 body.show-runninghub .runninghub-hint { display:block; }
 .runninghub-hint a { color:var(--text); font-weight:800; text-decoration:underline; text-underline-offset:3px; }
 .volcengine-hint { display:none; margin-top:8px; color:var(--muted); font-size:11.5px; line-height:1.65; font-weight:600; }
-body.show-volcengine .volcengine-hint { display:block; }
+body.show-volcengine-standalone .volcengine-hint { display:block; }
 .rh-key-stack { display:none; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 body.show-runninghub .rh-key-stack { display:grid; }
 .volcengine-key-stack { display:none; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
-body.show-volcengine .volcengine-key-stack:not([hidden]) { display:grid; }
+body.show-volcengine-standalone .volcengine-key-stack:not([hidden]) { display:grid; }
 .volcengine-key-stack .rh-key-item:first-child,
 .volcengine-key-stack .volcengine-project-card { grid-column:1/-1; }
 .volcengine-project-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
@@ -510,8 +510,8 @@ body.show-runninghub .model-grid,
 body.show-runninghub #probeAsyncBtn,
 body.show-runninghub .advanced-endpoints,
 body.show-runninghub .protocol-selector-wrap,
-body.show-volcengine #probeAsyncBtn,
-body.show-volcengine .protocol-selector-wrap,
+body.show-volcengine-standalone #probeAsyncBtn,
+body.show-volcengine-standalone .protocol-selector-wrap,
 body.show-jimeng #probeAsyncBtn,
 body.show-jimeng .advanced-endpoints { display:none !important; }
 .protocol-selector-wrap { height:36px; padding:0 4px; flex-shrink:0; background:var(--panel); }

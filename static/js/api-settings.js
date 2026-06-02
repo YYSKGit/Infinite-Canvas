@@ -223,16 +223,15 @@ function provider(){
     return visibleProviders().find(item => item.id === selectedId) || visibleProviders()[0] || providers[0];
 }
 function isProviderTemporarilyHidden(item){
-    if(!item || item.id === 'volcengine') return false;
-    const hasStandaloneVolcengine = (providers || []).some(provider => provider.id === 'volcengine');
-    return hasStandaloneVolcengine && String(item.protocol || '').toLowerCase() === 'volcengine';
+    return false;
 }
 function visibleProviders(){
     return (providers || []).filter(item => !isProviderTemporarilyHidden(item));
 }
 function isFixedProvider(itemOrId){
     const id = typeof itemOrId === 'string' ? itemOrId : itemOrId?.id;
-    return id === 'modelscope' || id === 'runninghub' || id === 'volcengine' || id === 'jimeng';
+    // 即梦 CLI 不再是固定平台：可删除、可排序，未添加则不存在。
+    return id === 'modelscope' || id === 'runninghub' || id === 'volcengine';
 }
 function unique(values){
     const seen = new Set();
@@ -606,10 +605,15 @@ function updateProtocolFromInput(){
     const item = provider();
     if(!item || !protocolInput || item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine' || item.id === 'jimeng') return;
     const value = String(protocolInput.value || 'openai').toLowerCase();
-    item.protocol = ['openai', 'apimart', 'gemini', 'jimeng'].includes(value) ? value : 'openai';
+    item.protocol = ['openai', 'apimart', 'gemini', 'volcengine', 'jimeng'].includes(value) ? value : 'openai';
     if(item.protocol === 'jimeng') item.base_url = '';
     document.body.classList.toggle('show-jimeng', item.protocol === 'jimeng');
     clearVerifyResult();
+    // 协议会改变整个表单（如即梦 CLI 账户面板、默认模型、Key 占位）。renderEditor 是唯一切换这些的入口，
+    // 这里复跑一次让面板立即出现；保存并恢复 Key 输入框，避免推荐流程里先填的 Key 被 renderEditor 清空。
+    const savedKey = keyInput ? keyInput.value : '';
+    renderEditor();
+    if(keyInput) keyInput.value = savedKey;
 }
 function isVolcengineProvider(item){
     return String(item?.protocol || '').toLowerCase() === 'volcengine';
@@ -1992,7 +1996,7 @@ async function saveRecommendedApi(index){
     if(ok) setStatus(trf('api.recommendSaved', {name:api.name}));
 }
 function sortedProviders(){
-    const order = ['modelscope', 'runninghub', 'volcengine', 'jimeng'];
+    const order = ['modelscope', 'runninghub', 'volcengine'];
     return visibleProviders().sort((a, b) => {
         const ai = order.indexOf(a.id);
         const bi = order.indexOf(b.id);
@@ -2126,7 +2130,8 @@ function renderEditor(){
     keyHint.textContent = item.has_key ? `${tr('api.keySaved')}${item.key_env || 'API/.env'}` : tr('api.noKey');
     const isModelScope = item.id === 'modelscope';
     const isRunningHub = item.id === 'runninghub';
-    const isVolcengine = item.id === 'volcengine';
+    const isVolcengine = item.id === 'volcengine' || String(protocolInput?.value || item.protocol || '').toLowerCase() === 'volcengine';
+    const isStandaloneVolcengine = item.id === 'volcengine';
     const isJimeng = item.id === 'jimeng' || String(protocolInput?.value || item.protocol || '').toLowerCase() === 'jimeng';
     if(isRunningHub){
         ensureRunningHubLists(item);
@@ -2173,6 +2178,7 @@ function renderEditor(){
     document.body.classList.toggle('show-ms', isModelScope);
     document.body.classList.toggle('show-runninghub', isRunningHub);
     document.body.classList.toggle('show-volcengine', isVolcengine);
+    document.body.classList.toggle('show-volcengine-standalone', isStandaloneVolcengine);
     document.body.classList.toggle('show-jimeng', isJimeng);
     renderProviderOnboarding(item);
     renderRecommendApi();
@@ -2372,36 +2378,46 @@ async function probeAsync(){
     showVerifyResult(`<span style="color:var(--muted);font-size:11px;font-weight:700">正在检测协议类型...</span>`);
     try {
         const apiKey = currentProviderApiKey(item);
+        const currentProtocol = String(protocolInput?.value || item.protocol || 'openai').toLowerCase();
         const data = await fetch('/api/providers/probe-async', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, provider_id: item.id })
+            body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, provider_id: item.id, protocol: currentProtocol })
         }).then(async r => {
             if(!r.ok) throw new Error((await r.json()).detail || '请求失败');
             return r.json();
         });
-        const isAsync = data.ok === true;
-        // 自动设置协议下拉
-        if(protocolInput && protocolInput.value !== 'gemini'){
+        const detectedProtocol = String(data.protocol || '').toLowerCase();
+        const isAsync = data.ok === true && detectedProtocol === 'apimart';
+        const isOpenAiCompat = data.ok === true && detectedProtocol === 'openai';
+        const keepManualProtocol = ['gemini', 'volcengine', 'jimeng'].includes(currentProtocol);
+        if(protocolInput && !keepManualProtocol){
             protocolInput.value = isAsync ? 'apimart' : 'openai';
-            // 触发 change 以便其他地方同步
             protocolInput.dispatchEvent(new Event('change'));
         }
         const rawJson = JSON.stringify(data.raw, null, 2);
         const probeMessage = String(data.message || '');
         const hideTasksEndpointTip = probeMessage.includes('/v1/tasks/');
-        const color = isAsync ? '#15803d' : data.ok === null ? '#b45309' : '#64748b';
-        const icon = isAsync ? '✓' : '⚠';
-        const proto = isAsync ? 'APIMart 异步' : 'OpenAI 兼容';
+        const color = (isAsync || isOpenAiCompat || data.ok === true) ? '#15803d' : data.ok === null ? '#b45309' : '#64748b';
+        const icon = (isAsync || isOpenAiCompat || data.ok === true) ? '✓' : '⚠';
+        const proto = detectedProtocol === 'volcengine'
+            ? '方舟/Ark 任务协议'
+            : isAsync
+                ? 'APIMart 异步'
+                : detectedProtocol === 'openai'
+                    ? 'OpenAI 兼容'
+                    : keepManualProtocol
+                    ? (currentProtocol === 'gemini' ? 'Gemini' : currentProtocol.toUpperCase())
+                    : 'OpenAI 兼容';
         showVerifyResult(`
             ${hideTasksEndpointTip ? '' : `<div style="font-size:11px;font-weight:800;color:${color}">${icon} ${escapeHtml(probeMessage)}</div>`}
-            <div style="font-size:11px;color:var(--muted);font-weight:700;margin-top:2px">协议已自动设置为：<strong style="color:var(--text)">${proto}</strong></div>
+            <div style="font-size:11px;color:var(--muted);font-weight:700;margin-top:2px">${keepManualProtocol ? '协议已验证为' : '协议已自动设置为'}：<strong style="color:var(--text)">${proto}</strong></div>
             <details style="margin-top:6px">
                 <summary style="font-size:10.5px;color:var(--muted);cursor:pointer;font-weight:700;user-select:none">▸ 查看原始响应 (HTTP ${data.status_code})</summary>
                 <pre style="margin-top:6px;padding:10px 12px;border-radius:10px;background:var(--soft);border:1px solid var(--line-2);font-size:10.5px;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-all;color:var(--text);max-height:200px;overflow:auto">${escapeHtml(rawJson)}</pre>
             </details>`);
     } catch(e){
-        const keepManualProtocol = (protocolInput?.value || '') === 'gemini';
+        const keepManualProtocol = ['gemini', 'volcengine', 'jimeng'].includes(String(protocolInput?.value || item.protocol || '').toLowerCase());
         if(protocolInput && !keepManualProtocol){ protocolInput.value = 'openai'; protocolInput.dispatchEvent(new Event('change')); }
         const suffix = keepManualProtocol ? '，已保留当前手动选择的协议' : '，协议已设为 OpenAI 兼容';
         showVerifyResult(`<div style="font-size:11px;font-weight:800;color:#b45309">⚠ ${escapeHtml(e.message || String(e))}${suffix}</div>`);
@@ -2830,7 +2846,7 @@ async function saveProviders(){
             ? 'volcengine'
             : item.id === 'jimeng'
             ? 'jimeng'
-            : ['openai', 'apimart', 'gemini', 'jimeng'].includes(String(item.protocol || '').toLowerCase()) ? String(item.protocol).toLowerCase() : 'openai';
+            : ['openai', 'apimart', 'gemini', 'volcengine', 'jimeng'].includes(String(item.protocol || '').toLowerCase()) ? String(item.protocol).toLowerCase() : 'openai';
         if(item.id === 'jimeng') item.base_url = '';
         if(item.id === 'jimeng') item.video_models = unique([...(item.video_models || []).filter(model => !JIMENG_LEGACY_VIDEO_MODELS.has(String(model || '').trim())), ...JIMENG_DEFAULT_VIDEO_MODELS]);
         item.image_generation_endpoint = '';
