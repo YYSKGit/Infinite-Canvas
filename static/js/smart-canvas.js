@@ -56,6 +56,7 @@ const promptTemplateBody = document.getElementById('promptTemplateBody');
 const composerTemplateBtn = document.getElementById('composerTemplateBtn');
 let minimapViewport = document.getElementById('minimapViewport');
 let canvas = null;
+let canvasUsesConnections = true;
 let nodes = [];
 let selectedId = '';
 let selectedIds = [];
@@ -1095,6 +1096,19 @@ function rhActiveFields(sourceSettings=settings){
     }
     fields = fields.filter(f => f.enabled === true);
     return sortRunningHubFields(fields);
+}
+function runningHubRunNeedsPrompt(sourceSettings=settings){
+    if((sourceSettings || settings).engine !== 'runninghub') return true;
+    const fields = rhActiveFields(sourceSettings);
+    const promptFields = fields.filter(field => rhFieldRole(field) === 'prompt');
+    if(!promptFields.length) return false;
+    return promptFields.some(field => field.required === true && !rhDefaultValue(field).trim());
+}
+function smartRunNeedsPrompt(sourceSettings=settings){
+    sourceSettings = sourceSettings || settings;
+    if(sourceSettings.engine === 'runninghub') return runningHubRunNeedsPrompt(sourceSettings);
+    if(sourceSettings.engine === 'comfy' && sourceSettings.comfyMode === 'enhance') return false;
+    return true;
 }
 function sortRunningHubFields(fields){
     return [...(fields || [])].sort((a, b) => {
@@ -3891,6 +3905,7 @@ async function loadCanvas(){
         if(!res.ok) return;
         const data = await res.json();
         canvas = data.canvas;
+        canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
         nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
@@ -3904,6 +3919,7 @@ async function loadCanvas(){
             }
         });
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
+        const cleanedDetachedInputs = cleanupDetachedRunInputRefs();
         viewport = {...viewport, ...(canvas.viewport || {})};
         viewport.scale = safeScale(viewport.scale);
         if(canvas.settings) settings = {...settings, ...canvas.settings};
@@ -3914,6 +3930,7 @@ async function loadCanvas(){
         updateProviderModels();
         applyViewport();
         render();
+        if(cleanedDetachedInputs) scheduleSave();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
         startCanvasMetaPoll();
@@ -5821,6 +5838,7 @@ function disconnectConnection(index){
     if(toNode && Array.isArray(toNode.inputNodeIds)){
         toNode.inputNodeIds = toNode.inputNodeIds.filter(id => id !== conn.from);
     }
+    if(toNode && ['input','flow'].includes(conn.kind || 'flow')) clearDetachedRunInputRefs(toNode);
     if((conn.kind || 'flow') === 'history'){
         const group = nodes.find(n => n.id === conn.to && isHistoryGroupNode(n) && n.historyFor === conn.from);
         demoteHistoryGroupNode(group);
@@ -8573,10 +8591,13 @@ function connectInputNode(fromId, toId){
 function upstreamNodesForKinds(node, kinds=['input']){
     if(!node) return [];
     const allowed = new Set(kinds);
-    const ids = new Set(allowed.has('input') ? (node.inputNodeIds || []) : []);
+    const ids = new Set();
     (canvas?.connections || []).forEach(conn => {
         if(conn.to === node.id && allowed.has(conn.kind || 'flow')) ids.add(conn.from);
     });
+    if(!canvasUsesConnections && allowed.has('input')){
+        (node.inputNodeIds || []).forEach(id => ids.add(id));
+    }
     return [...ids].map(id => nodes.find(n => n.id === id)).filter(Boolean);
 }
 function inputNodesFor(node){
@@ -8584,6 +8605,30 @@ function inputNodesFor(node){
 }
 function workflowInputNodesFor(node){
     return upstreamNodesForKinds(node, ['input', 'flow']);
+}
+function clearDetachedRunInputRefs(node){
+    if(!node) return;
+    const hasUpstream = Boolean((canvas?.connections || []).some(conn => conn.to === node.id && ['input','flow'].includes(conn.kind || 'flow')));
+    if(hasUpstream || (!canvasUsesConnections && Array.isArray(node.inputNodeIds) && node.inputNodeIds.some(id => nodes.some(n => n.id === id)))) return;
+    delete node.runInputRefs;
+    delete node.runPromptRefs;
+    delete node.sourceNodeId;
+}
+function cleanupDetachedRunInputRefs(){
+    if(!canvasUsesConnections) return false;
+    let changed = false;
+    nodes.forEach(node => {
+        const hadRefs = Array.isArray(node?.runInputRefs) && node.runInputRefs.length;
+        const hadPromptRefs = Array.isArray(node?.runPromptRefs) && node.runPromptRefs.length;
+        const hadSource = Boolean(node?.sourceNodeId);
+        clearDetachedRunInputRefs(node);
+        if(hadRefs !== (Array.isArray(node?.runInputRefs) && node.runInputRefs.length)
+            || hadPromptRefs !== (Array.isArray(node?.runPromptRefs) && node.runPromptRefs.length)
+            || hadSource !== Boolean(node?.sourceNodeId)){
+            changed = true;
+        }
+    });
+    return changed;
 }
 function imagesForNode(node){
     return (node?.images || []).map((img, index) => ({...imageForDisplay(img), nodeId:node.id, imageIndex:index}));
@@ -10119,7 +10164,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     );
     const prompt = (request.prompt || '').trim();
     const displayPrompt = (request.displayPrompt || '').trim();
-    if(!prompt || (!displayPrompt && !(runSettings.engine === 'comfy' && runSettings.comfyMode === 'enhance'))){
+    if((!prompt || !displayPrompt) && smartRunNeedsPrompt(runSettings)){
         settings = previousSettings;
         throw new Error('链路节点缺少提示词');
     }
@@ -10209,7 +10254,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         const request = buildPromptRequestForNode(rootNode, refsForRequest.length ? refsForRequest : null, ctx);
         const prompt = (request.prompt || '').trim();
         const displayPrompt = (request.displayPrompt || '').trim();
-        if(!prompt || (!displayPrompt && !(runSettings.engine === 'comfy' && runSettings.comfyMode === 'enhance'))) throw new Error('链路节点缺少提示词');
+        if((!prompt || !displayPrompt) && smartRunNeedsPrompt(runSettings)) throw new Error('链路节点缺少提示词');
         const meta = {
             prompt,
             displayPrompt:request.displayPrompt || '',
@@ -10594,11 +10639,15 @@ async function runGeneration(){
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     const prompt = request.prompt.trim();
     if(!node) return;
-    if(!prompt){ toast(tr('smart.toastNeedPrompt')); return; }
     const refs = request.refs;
     const previousSettings = cloneSmartSettings(settings);
     const runSettings = smartSettingsForNode(node);
     settings = {...settings, ...cloneSmartSettings(runSettings || {})};
+    if(!prompt && smartRunNeedsPrompt(settings)){
+        settings = previousSettings;
+        toast(tr('smart.toastNeedPrompt'));
+        return;
+    }
     const outpaintSize = node?.outpaintSize && Number(node.outpaintSize.width) > 0 && Number(node.outpaintSize.height) > 0
         ? {width:Math.round(Number(node.outpaintSize.width)), height:Math.round(Number(node.outpaintSize.height))}
         : null;
@@ -11418,6 +11467,7 @@ function ungroupNode(groupId){
             created_at:Date.now()
         };
         inheritNodeMetaFromImage(node);
+        clearDetachedRunInputRefs(node);
         return node;
     });
     nodes = nodes.filter(n => n.id !== groupId);
