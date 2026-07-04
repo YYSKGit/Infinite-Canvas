@@ -8190,9 +8190,25 @@ def apimart_size_resolution(size):
     best = min(common, key=lambda item: abs(ratio - item[0] / item[1]))
     return best[2], resolution
 
-VENICE_PIXEL_MODELS = ("venice-sd35", "qwen-image")
+VENICE_PIXEL_MODELS = ("venice-sd35", "qwen-image", "z-image-turbo", "chroma")
 VENICE_ASPECT_MODELS = ("qwen-image-2",)
 VENICE_RESOLUTION_MODELS = ("gpt-image-2", "nano-banana-2", "nano-banana-pro")
+VENICE_IMAGE_BLOCK_HEADERS = (
+    "x-venice-is-blurred",
+    "x-venice-is-content-violation",
+    "x-venice-is-adult-model-content-violation",
+    "x-venice-contains-minor",
+)
+VENICE_IMAGE_EDIT_MODEL_ALIASES = {
+    "chroma": "firered-image-edit",
+    "z-image-turbo": "qwen-edit-uncensored",
+    "grok-imagine-image-quality": "grok-imagine-quality-edit",
+    "grok-imagine": "grok-imagine-edit",
+    "qwen-image-2-pro": "qwen-image-2-pro-edit",
+    "qwen-image-2": "qwen-image-2-edit",
+    "seedream-v5-lite": "seedream-v5-lite-edit",
+    "seedream-v4": "seedream-v4-edit"
+}
 
 def venice_api_root(provider=None):
     base_url = str((provider or {}).get("base_url") or VENICE_DEFAULT_BASE_URL).strip().rstrip("/")
@@ -8258,6 +8274,39 @@ def venice_image_request_body(prompt, size, quality, model):
     if quality in {"low", "medium", "high"}:
         body["quality"] = quality
     return body
+
+def venice_reference_image_input(ref, max_size=4096):
+    value = reference_to_data_url(ref, max_size=max_size)
+    if isinstance(value, str) and value.startswith("data:") and ";base64," in value:
+        return value.split(";base64,", 1)[1]
+    return value
+
+def venice_image_edit_model(model):
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+    normalized = raw.lower().replace("_", "-")
+    if normalized.endswith("-edit"):
+        return raw
+    return VENICE_IMAGE_EDIT_MODEL_ALIASES.get(normalized)
+
+def venice_blocked_headers(headers):
+    blocked = []
+    for header in VENICE_IMAGE_BLOCK_HEADERS:
+        value = str((headers or {}).get(header) or "").strip().lower()
+        if value in {"true", "1", "yes", "on"}:
+            blocked.append(header)
+    return blocked
+
+def venice_raise_for_blocked_response(response):
+    blocked = venice_blocked_headers(getattr(response, "headers", None))
+    if blocked:
+        raise HTTPException(status_code=400, detail=f"Venice 返回内容被过滤：{', '.join(blocked)}")
+
+async def venice_binary_image_response_to_data_url(response):
+    content_type = str(response.headers.get("content-type") or "image/png").split(";", 1)[0].strip().lower() or "image/png"
+    encoded = base64.b64encode(response.content).decode("ascii")
+    return {"type": "b64", "value": encoded, "mime_type": content_type}
 
 VOLCENGINE_MIN_PIXELS = 3_686_400
 VOLCENGINE_MIN_EDGE = 1536
@@ -9638,20 +9687,45 @@ async def generate_runninghub_video(payload, provider):
 
 async def generate_venice_provider_image(prompt, size, quality, model, reference_images=None, provider=None):
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
-    if refs:
-        raise HTTPException(status_code=400, detail="Venice 图片接口当前仅支持文生图，暂不支持参考图/编辑。")
     base_url = venice_api_root(provider)
     if not base_url:
         raise HTTPException(status_code=400, detail=f"{(provider or {}).get('name') or (provider or {}).get('id') or 'Venice'} 未配置 Base URL")
-    body = venice_image_request_body(prompt, size, quality, model)
     timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        headers = api_headers(provider=provider, model=model)
+        if refs:
+            image_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() != "mask"]
+            if len(image_refs) != 1 or len(refs) != len(image_refs):
+                raise HTTPException(status_code=400, detail="Venice 图片编辑当前只支持单张参考图，不支持 mask 或多图参考。")
+            edit_model = venice_image_edit_model(model)
+            if not edit_model:
+                raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {model} 没有对应的编辑模型，无法执行图片编辑。")
+            edit_body = {
+                "model": edit_model,
+                "image": venice_reference_image_input(image_refs[0], max_size=4096),
+                "prompt": str(prompt or ""),
+                "safe_mode": False,
+            }
+            if quality in {"low", "medium", "high"}:
+                edit_body["quality"] = quality
+            response = await client.post(f"{base_url}/image/edit", headers=headers, json=edit_body)
+            response.raise_for_status()
+            venice_raise_for_blocked_response(response)
+            image_data = await venice_binary_image_response_to_data_url(response)
+            raw = {
+                "model": edit_model,
+                "content_type": response.headers.get("content-type") or "image/png",
+                "headers": dict(response.headers),
+            }
+            return image_data, raw
+        body = venice_image_request_body(prompt, size, quality, model)
         response = await client.post(
             f"{base_url}/image/generate",
-            headers=api_headers(provider=provider, model=model),
+            headers=headers,
             json=body,
         )
         response.raise_for_status()
+        venice_raise_for_blocked_response(response)
         raw = response.json()
     images = raw.get("images") if isinstance(raw, dict) else []
     if not isinstance(images, list) or not images:
