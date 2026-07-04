@@ -8367,9 +8367,7 @@ async def generate_volcengine_provider_image(prompt, size, model, reference_imag
         return extract_image(raw), raw
 
 def runninghub_api_headers(provider):
-    api_key = str((provider or {}).get("api_key") or "").strip() or runninghub_api_key(provider)
-    if not api_key:
-        raise HTTPException(status_code=400, detail="未配置 RunningHub API Key，请在 API 设置中填写。")
+    api_key = runninghub_api_key(provider, prefer_wallet=True)
     return {"Authorization": bearer_auth_value(api_key), "Accept": "application/json", "Content-Type": "application/json"}
 
 def runninghub_json_headers(provider):
@@ -9459,7 +9457,7 @@ async def generate_runninghub_video(payload, provider):
             result = await wait_for_runninghub_openapi_task(client, provider, task_id, "video")
         urls = video_output_urls(result)
         if not urls:
-            outputs = runninghub_extract_outputs(result.get("data") if isinstance(result, dict) else result)
+            outputs = runninghub_extract_outputs(result)
             urls = [url for url in outputs if str(url).startswith(("http://", "https://", "/output/", "/assets/"))]
         if not urls:
             raise HTTPException(status_code=502, detail=f"RunningHub 视频生成成功但没有返回视频：{result}")
@@ -12454,7 +12452,7 @@ def video_output_urls(raw):
     for node in candidates:
         if not isinstance(node, dict):
             continue
-        for key in ("videos", "outputs", "content"):
+        for key in ("videos", "outputs", "content", "results"):
             value = node.get(key)
             if value:
                 _collect_video_url(value, urls)
