@@ -12530,7 +12530,7 @@ def video_output_urls(raw):
     for node in candidates:
         if not isinstance(node, dict):
             continue
-        for key in ("videos", "outputs", "content"):
+        for key in ("videos", "outputs", "content", "results"):
             value = node.get(key)
             if value:
                 _collect_video_url(value, urls)
