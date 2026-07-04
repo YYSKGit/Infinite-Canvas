@@ -1,5 +1,5 @@
 {
-  "version": "2026.07.04",
+  "version": "2026.07.04.2",
   "updated_at": "2026-07-04T07:20:36+08:00",
   "items": [
     {
@@ -20,7 +20,7 @@
     },
     {
       "type": "feature",
-      "text": "CLI文件夹新增Gemini的支持（普通版本的pro账号无法登录，似乎是需要专业账号）"
+      "text": "支持GPT/Gemini pro个人账号，调用CLI免费生图，需要下载CLI文件夹自行安装"
     }
   ]
 }

@@ -7,7 +7,7 @@ set "LOG_FILE=D:\Projects\Visual Studio Code\Infinite-Canvas\_self_restart.log"
 echo [%date% %time%] restart scheduled >> "%LOG_FILE%"
 timeout /t 3 /nobreak >nul
 echo [%date% %time%] stopping old process >> "%LOG_FILE%"
-taskkill /F /PID 62508 >nul 2>&1
+taskkill /F /PID 26664 >nul 2>&1
 timeout /t 2 /nobreak >nul
 cd /d "%APP_DIR%"
 if exist "%LAUNCHER%" (
