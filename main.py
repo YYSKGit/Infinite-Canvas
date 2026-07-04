@@ -264,7 +264,7 @@ JIMENG_LOGIN_SESSION = {
 }
 
 PROVIDER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,40}$")
-SUPPORTED_PROVIDER_PROTOCOLS = {"openai", "apimart", "gemini", "gemini-cli", "volcengine", "runninghub", "jimeng", "codex"}
+SUPPORTED_PROVIDER_PROTOCOLS = {"openai", "apimart", "gemini", "gemini-cli", "volcengine", "runninghub", "jimeng", "codex", "venice"}
 SUPPORTED_IMAGE_REQUEST_MODES = {"openai", "openai-json", "openai-video-proxy", "openai-responses"}
 RUNNINGHUB_DEFAULT_BASE_URL = "https://www.runninghub.cn"
 RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
@@ -328,6 +328,15 @@ except Exception:
 VOLCENGINE_DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 VOLCENGINE_DEFAULT_PROJECT_NAME = "default"
 VOLCENGINE_DEFAULT_REGION = "cn-beijing"
+VENICE_DEFAULT_BASE_URL = "https://api.venice.ai"
+VENICE_DEFAULT_IMAGE_MODELS = [
+    "gpt-image-2",
+    "nano-banana-pro",
+    "nano-banana-2",
+    "qwen-image-2",
+    "qwen-image",
+    "venice-sd35",
+]
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
     "gpt-image-2/image-to-image-official-stable",
@@ -767,6 +776,22 @@ def default_api_providers():
             "volcengine_project_name": VOLCENGINE_DEFAULT_PROJECT_NAME,
             "volcengine_region": VOLCENGINE_DEFAULT_REGION,
         },
+        {
+            "id": "venice",
+            "name": "Venice",
+            "base_url": VENICE_DEFAULT_BASE_URL,
+            "protocol": "venice",
+            "image_request_mode": "openai",
+            "image_generation_endpoint": "",
+            "image_edit_endpoint": "",
+            "enabled": True,
+            "primary": False,
+            "image_models": VENICE_DEFAULT_IMAGE_MODELS,
+            "chat_models": [],
+            "video_models": [],
+            "ms_loras": [],
+            "ms_defaults_version": 0,
+        },
     ]
 
 def merge_default_api_providers(providers):
@@ -1155,6 +1180,9 @@ def normalize_provider(item):
         base_url = base_url or VOLCENGINE_DEFAULT_BASE_URL
         volc_project = volc_project or VOLCENGINE_DEFAULT_PROJECT_NAME
         volc_region = volc_region or VOLCENGINE_DEFAULT_REGION
+    if provider_id == "venice" or protocol == "venice":
+        protocol = "venice"
+        base_url = base_url or VENICE_DEFAULT_BASE_URL
     if protocol == "jimeng":
         base_url = ""
     if protocol in {"codex", "gemini-cli"}:
@@ -4057,7 +4085,7 @@ def provider_protocol(provider):
 # 单模型可覆盖的协议（仅 OpenAI / Gemini，二者可共用同一站点的 Base URL + Key）
 PER_MODEL_PROTOCOL_OPTIONS = {"openai", "gemini"}
 # 协议固定、不支持单模型覆盖的内置平台
-FIXED_PROTOCOL_PROVIDER_IDS = {"modelscope", "volcengine", "runninghub"}
+FIXED_PROTOCOL_PROVIDER_IDS = {"modelscope", "volcengine", "runninghub", "venice"}
 
 def normalize_model_protocols(value):
     """规整 {模型名: 协议} 覆盖表，仅保留 openai/gemini。"""
@@ -4107,6 +4135,9 @@ def is_gemini_provider(provider):
 
 def is_volcengine_provider(provider):
     return provider_protocol(provider) == "volcengine"
+
+def is_venice_provider(provider):
+    return provider_protocol(provider) == "venice"
 
 def is_runninghub_provider(provider):
     return provider_protocol(provider) == "runninghub" or str((provider or {}).get("id") or "").strip().lower() == "runninghub"
@@ -8159,6 +8190,75 @@ def apimart_size_resolution(size):
     best = min(common, key=lambda item: abs(ratio - item[0] / item[1]))
     return best[2], resolution
 
+VENICE_PIXEL_MODELS = ("venice-sd35", "qwen-image")
+VENICE_ASPECT_MODELS = ("qwen-image-2",)
+VENICE_RESOLUTION_MODELS = ("gpt-image-2", "nano-banana-2", "nano-banana-pro")
+
+def venice_api_root(provider=None):
+    base_url = str((provider or {}).get("base_url") or VENICE_DEFAULT_BASE_URL).strip().rstrip("/")
+    if not base_url:
+        base_url = VENICE_DEFAULT_BASE_URL
+    if base_url.endswith("/api/v1"):
+        return base_url
+    if base_url.endswith("/api"):
+        return f"{base_url}/v1"
+    return f"{base_url}/api/v1"
+
+def venice_size_aspect_ratio(size):
+    width, height = parse_size_pair(size)
+    if not width or not height:
+        return "1:1"
+    divisor = math.gcd(width, height) or 1
+    return f"{max(1, width // divisor)}:{max(1, height // divisor)}"
+
+def venice_size_resolution(size):
+    raw = str(size or "").strip().lower()
+    if raw in {"1k", "2k", "4k"}:
+        return raw.upper()
+    width, height = parse_size_pair(size)
+    if not width or not height:
+        return "1K"
+    long_edge = max(width, height)
+    pixels = width * height
+    if long_edge >= 3072 or pixels >= 7_500_000:
+        return "4K"
+    if long_edge >= 1800 or pixels >= 2_400_000:
+        return "2K"
+    return "1K"
+
+def venice_model_sizing_mode(model):
+    text = str(model or "").strip().lower()
+    if any(key in text for key in VENICE_RESOLUTION_MODELS):
+        return "resolution"
+    if any(key in text for key in VENICE_ASPECT_MODELS):
+        return "aspect"
+    if any(key in text for key in VENICE_PIXEL_MODELS):
+        return "pixel"
+    return "resolution"
+
+def venice_image_request_body(prompt, size, quality, model):
+    body = {
+        "model": model,
+        "prompt": str(prompt or ""),
+        "format": "png",
+        "safe_mode": False,
+    }
+    mode = venice_model_sizing_mode(model)
+    if mode == "pixel":
+        width, height = parse_size_pair(size)
+        if not width or not height:
+            width, height = 1024, 1024
+        body["width"] = max(1, min(1280, int(width)))
+        body["height"] = max(1, min(1280, int(height)))
+    elif mode == "aspect":
+        body["aspect_ratio"] = venice_size_aspect_ratio(size)
+    else:
+        body["aspect_ratio"] = venice_size_aspect_ratio(size)
+        body["resolution"] = venice_size_resolution(size)
+    if quality in {"low", "medium", "high"}:
+        body["quality"] = quality
+    return body
+
 VOLCENGINE_MIN_PIXELS = 3_686_400
 VOLCENGINE_MIN_EDGE = 1536
 VOLCENGINE_MAX_EDGE = 4096
@@ -9536,6 +9636,31 @@ async def generate_runninghub_video(payload, provider):
         local_urls = [await save_remote_video_to_output(url, prefix="rh_video_") for url in urls]
         return {"videos": local_urls, "task_id": task_id, "raw": result}
 
+async def generate_venice_provider_image(prompt, size, quality, model, reference_images=None, provider=None):
+    refs = [ref for ref in (reference_images or []) if ref.get("url")]
+    if refs:
+        raise HTTPException(status_code=400, detail="Venice 图片接口当前仅支持文生图，暂不支持参考图/编辑。")
+    base_url = venice_api_root(provider)
+    if not base_url:
+        raise HTTPException(status_code=400, detail=f"{(provider or {}).get('name') or (provider or {}).get('id') or 'Venice'} 未配置 Base URL")
+    body = venice_image_request_body(prompt, size, quality, model)
+    timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        response = await client.post(
+            f"{base_url}/image/generate",
+            headers=api_headers(provider=provider, model=model),
+            json=body,
+        )
+        response.raise_for_status()
+        raw = response.json()
+    images = raw.get("images") if isinstance(raw, dict) else []
+    if not isinstance(images, list) or not images:
+        raise HTTPException(status_code=502, detail=f"Venice 图片接口没有返回 images：{raw}")
+    first = images[0]
+    if not isinstance(first, str) or not first.strip():
+        raise HTTPException(status_code=502, detail=f"Venice 图片接口返回了不可识别的图片数据：{raw}")
+    return {"type": "b64", "value": first.strip(), "mime_type": "image/png"}, raw
+
 async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly"):
     provider = get_api_provider(provider_id)
     if provider["id"] == "modelscope":
@@ -9550,6 +9675,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
         return await generate_runninghub_provider_image(prompt, size, model, reference_images, provider)
     if effective_protocol(provider, model) == "gemini":
         return await generate_gemini_provider_image(prompt, size, model, reference_images, provider)
+    if is_venice_provider(provider):
+        return await generate_venice_provider_image(prompt, size, quality, model, reference_images, provider)
     if is_volcengine_provider(provider):
         return await generate_volcengine_provider_image(prompt, size, model, reference_images, provider)
     is_gpt2 = is_gpt_image_2_model(model)
