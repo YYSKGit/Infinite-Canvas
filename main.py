@@ -8428,10 +8428,12 @@ def runninghub_local_asset_path(url):
 def runninghub_output_ext(remote, content_type=""):
     tail = str(remote or "").split("?", 1)[0].split("#", 1)[0]
     ext = os.path.splitext(tail)[1].lower().strip(".")
-    allowed = {"png","jpg","jpeg","webp","gif","bmp","mp4","webm","mov","m4v","mkv","mp3","wav","ogg","m4a","flac","aac"}
+    allowed = {"png","jpg","jpeg","webp","gif","bmp","mp4","webm","mov","m4v","mkv","mp3","wav","ogg","m4a","flac","aac","zip"}
     if ext in allowed:
         return ext
     ct = str(content_type or "").lower()
+    if "zip" in ct or "octet-stream" in ct and ext == "zip":
+        return "zip"
     if "mp4" in ct:
         return "mp4"
     if "webm" in ct:
@@ -8449,6 +8451,26 @@ def runninghub_output_ext(remote, content_type=""):
     if "jpeg" in ct:
         return "jpg"
     return "png"
+
+_RH_MEDIA_EXTS = {"png","jpg","jpeg","webp","gif","bmp","mp4","webm","mov","m4v","mkv","mp3","wav","ogg","m4a","flac","aac"}
+
+def runninghub_extract_zip_media(content: bytes) -> list:
+    """解压 ZIP，提取其中所有媒体文件，保存到 output 目录，返回本地 URL 列表。"""
+    urls = []
+    try:
+        with zipfile.ZipFile(BytesIO(content), "r") as zf:
+            for name in zf.namelist():
+                ext = os.path.splitext(name)[1].lower().strip(".")
+                if ext not in _RH_MEDIA_EXTS:
+                    continue
+                filename = f"rh_{uuid.uuid4().hex[:12]}.{ext}"
+                path = output_path_for(filename, "output")
+                with open(path, "wb") as f:
+                    f.write(zf.read(name))
+                urls.append(output_url_for(filename, "output"))
+    except Exception:
+        pass
+    return urls
 
 def runninghub_extract_outputs(data):
     arr = []
@@ -8474,18 +8496,26 @@ def runninghub_extract_outputs(data):
                 outputs.append(str(url))
     return outputs
 
-async def runninghub_store_remote_output(client, remote):
+async def runninghub_store_remote_output(client, remote) -> list:
+    """下载远程输出文件，返回本地 URL 列表（ZIP 文件会解压后返回多个）。"""
     if not str(remote or "").startswith(("http://", "https://")):
-        return remote
+        return [remote]
     response = await client.get(remote, follow_redirects=True)
     if not response.is_success:
-        return remote
-    ext = runninghub_output_ext(remote, response.headers.get("content-type", ""))
+        return [remote]
+    ct = response.headers.get("content-type", "")
+    ext = runninghub_output_ext(remote, ct)
+    # ZIP：解压后提取媒体文件
+    if ext == "zip" or response.content[:2] == b"PK":
+        extracted = runninghub_extract_zip_media(response.content)
+        if extracted:
+            return extracted
+        # 解压失败或无媒体文件时回退：直接保存 zip
     filename = f"rh_{uuid.uuid4().hex[:12]}.{ext}"
     path = output_path_for(filename, "output")
     with open(path, "wb") as f:
         f.write(response.content)
-    return output_url_for(filename, "output")
+    return [output_url_for(filename, "output")]
 
 def runninghub_fail_reason(raw):
     data = raw.get("data") if isinstance(raw, dict) else None
@@ -10985,11 +11015,12 @@ async def runninghub_query(taskId: str = ""):
             status = "SUCCESS"
             for remote in runninghub_extract_outputs(raw.get("data")):
                 try:
-                    local_url = await runninghub_store_remote_output(client, remote)
+                    local_urls = await runninghub_store_remote_output(client, remote)
                 except Exception:
-                    local_url = remote
-                urls.append(local_url)
-                image_items.append(image_output_meta(local_url))
+                    local_urls = [remote]
+                for local_url in local_urls:
+                    urls.append(local_url)
+                    image_items.append(image_output_meta(local_url))
         elif code in (804, "804"):
             status = "RUNNING"
         elif code in (813, "813"):
