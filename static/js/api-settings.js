@@ -252,6 +252,22 @@ const RECOMMEND_GROUPS = [
     {key:'stable', titleKey:'api.recommendGroupStable', icon:'shield-check'},
     {key:'cheap', titleKey:'api.recommendGroupCheap', icon:'badge-percent'}
 ];
+const LOCKED_RECOMMENDED_PROTOCOL_IDS = new Set(['exellome', 'fhl']);
+function lockedRecommendedApi(itemOrId){
+    const id = typeof itemOrId === 'string' ? itemOrId : itemOrId?.id;
+    if(!LOCKED_RECOMMENDED_PROTOCOL_IDS.has(id)) return null;
+    return RECOMMENDED_APIS.find(api => api.id === id) || null;
+}
+function hasLockedRecommendedProtocol(itemOrId){
+    return Boolean(lockedRecommendedApi(itemOrId));
+}
+function applyLockedRecommendedProtocol(item){
+    const api = lockedRecommendedApi(item);
+    if(!item || !api) return false;
+    item.protocol = String(api.protocol || 'openai').toLowerCase();
+    item.image_request_mode = normalizeImageRequestMode(api.image_request_mode);
+    return true;
+}
 
 function refreshIcons(){ if(window.lucide) lucide.createIcons(); }
 function tr(key){ return window.StudioI18n ? window.StudioI18n.t(key) : key; }
@@ -715,13 +731,24 @@ function syncEditor(){
     item.id = nextId;
     if(oldId !== item.id) selectedId = item.id;
     item.name = nameInput.value.trim() || item.id;
-    const selectedProtocol = item.id === 'modelscope' ? 'openai' : item.id === 'runninghub' ? 'runninghub' : item.id === 'volcengine' ? 'volcengine' : (protocolInput?.value || 'openai');
+    const lockedApi = lockedRecommendedApi(item);
+    const selectedProtocol = lockedApi
+        ? lockedApi.protocol
+        : item.id === 'modelscope'
+        ? 'openai'
+        : item.id === 'runninghub'
+        ? 'runninghub'
+        : item.id === 'volcengine'
+        ? 'volcengine'
+        : (protocolInput?.value || 'openai');
     item.base_url = CLI_PROTOCOLS.has(selectedProtocol) ? '' : baseInput.value.trim();
     // 固定平台不从协议下拉读取
     item.protocol = selectedProtocol;
     item.image_request_mode = normalizeImageRequestMode(
         item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine' || CLI_PROTOCOLS.has(selectedProtocol)
             ? 'openai'
+            : lockedApi
+            ? lockedApi.image_request_mode
             : (imageRequestModeInput?.value || item.image_request_mode)
     );
     item.image_edit_route = normalizeImageEditRoute(
@@ -758,6 +785,11 @@ function ensureRunningHubLists(item){
 function updateProtocolFromInput(){
     const item = provider();
     if(!item || !protocolInput || item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine') return;
+    if(applyLockedRecommendedProtocol(item)){
+        protocolInput.value = item.protocol;
+        if(imageRequestModeInput) imageRequestModeInput.value = item.image_request_mode;
+        return;
+    }
     const value = String(protocolInput.value || 'openai').toLowerCase();
     item.protocol = API_PROTOCOLS.includes(value) ? value : 'openai';
     if(CLI_PROTOCOLS.has(item.protocol)) item.base_url = '';
@@ -2367,14 +2399,17 @@ function renderEditor(){
     clearVerifyResult();
     baseInput.placeholder = EXAMPLE_BASE_URL;
     baseInput.value = item.base_url || '';
+    const lockedApi = lockedRecommendedApi(item);
+    if(lockedApi) applyLockedRecommendedProtocol(item);
     if(protocolInput){
         protocolInput.value = item.id === 'runninghub' ? 'runninghub' : item.id === 'volcengine' ? 'volcengine' : (item.protocol || 'openai');
-        protocolInput.disabled = FIXED_PROTOCOL_PROVIDER_IDS.has(item.id);
-        protocolInput.title = protocolInput.disabled ? '内置平台使用固定协议' : '';
+        protocolInput.disabled = FIXED_PROTOCOL_PROVIDER_IDS.has(item.id) || Boolean(lockedApi);
+        protocolInput.title = lockedApi ? '推荐平台使用固定协议' : (protocolInput.disabled ? '内置平台使用固定协议' : '');
     }
     if(imageRequestModeInput){
         imageRequestModeInput.value = normalizeImageRequestMode(item.image_request_mode);
-        imageRequestModeInput.disabled = item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine' || CLI_PROTOCOLS.has(String(protocolInput?.value || item.protocol || '').toLowerCase());
+        imageRequestModeInput.disabled = Boolean(lockedApi) || item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine' || CLI_PROTOCOLS.has(String(protocolInput?.value || item.protocol || '').toLowerCase());
+        imageRequestModeInput.title = lockedApi ? '推荐平台使用固定图片协议' : '';
     }
     if(imageEditRouteInput){
         imageEditRouteInput.value = normalizeImageEditRoute(item.image_edit_route);
@@ -2775,6 +2810,11 @@ function isRunningHubContext(item, baseUrl=''){
 function applyDetectedImageRequestMode(mode){
     const item = provider();
     if(!item || !imageRequestModeInput) return false;
+    if(applyLockedRecommendedProtocol(item)){
+        if(protocolInput) protocolInput.value = item.protocol;
+        imageRequestModeInput.value = item.image_request_mode;
+        return false;
+    }
     const detected = normalizeImageRequestMode(mode);
     const changed = normalizeImageRequestMode(item.image_request_mode) !== detected || normalizeImageRequestMode(imageRequestModeInput.value) !== detected;
     imageRequestModeInput.value = detected;
@@ -2785,6 +2825,11 @@ function applyDetectedProtocol(protocol){
     const item = provider();
     const detected = String(protocol || '').toLowerCase();
     if(!item || !protocolInput || !API_PROTOCOLS.includes(detected)) return false;
+    if(applyLockedRecommendedProtocol(item)){
+        protocolInput.value = item.protocol;
+        if(imageRequestModeInput) imageRequestModeInput.value = item.image_request_mode;
+        return false;
+    }
     if(String(protocolInput.value || '').toLowerCase() === detected && String(item.protocol || '').toLowerCase() === detected) return false;
     protocolInput.value = detected;
     item.protocol = detected;
@@ -3481,6 +3526,7 @@ async function saveProviders(){
     syncEditor();
     providers.forEach(item => {
         item.id = normalizeId(item.id);
+        applyLockedRecommendedProtocol(item);
         item.protocol = item.id === 'runninghub'
             ? 'runninghub'
             : item.id === 'volcengine'
@@ -3630,6 +3676,11 @@ window.onload = () => {
     if(imageRequestModeInput) imageRequestModeInput.addEventListener('change', () => {
         const item = provider();
         if(!item) return;
+        if(applyLockedRecommendedProtocol(item)){
+            if(protocolInput) protocolInput.value = item.protocol;
+            imageRequestModeInput.value = item.image_request_mode;
+            return;
+        }
         item.image_request_mode = normalizeImageRequestMode(imageRequestModeInput.value);
     });
     if(imageEditRouteInput) imageEditRouteInput.addEventListener('change', () => {
