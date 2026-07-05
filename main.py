@@ -26,6 +26,7 @@ import math
 import shlex
 import functools
 import html
+import inspect
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, Thread
@@ -337,6 +338,12 @@ VENICE_DEFAULT_IMAGE_MODELS = [
     "qwen-image",
     "venice-sd35",
 ]
+VENICE_DEFAULT_VIDEO_MODELS = [
+    "seedance-2-0-enhanced-reference-to-video",
+]
+VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
+VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
+VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
     "gpt-image-2/image-to-image-official-stable",
@@ -659,6 +666,9 @@ def volcengine_access_key_env():
 def volcengine_secret_key_env():
     return "VOLCENGINE_SECRET_ACCESS_KEY"
 
+def venice_client_env(provider_id: str = "venice"):
+    return f"API_PROVIDER_{re.sub(r'[^A-Za-z0-9]', '_', str(provider_id or 'venice')).upper()}_CLIENT"
+
 def read_api_env_value(key: str) -> str:
     key = str(key or "").strip()
     if not key or not os.path.exists(API_ENV_FILE):
@@ -697,6 +707,40 @@ def volcengine_access_key_value() -> str:
 def volcengine_secret_key_value() -> str:
     env_key = volcengine_secret_key_env()
     return os.getenv(env_key, "") or read_api_env_value(env_key)
+
+def venice_client_cookie_value(provider_id: str = "venice") -> str:
+    env_key = venice_client_env(provider_id)
+    return os.getenv(env_key, "") or read_api_env_value(env_key)
+
+def normalize_venice_client_cookie(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    # 允许用户直接粘贴 "__client=..." 或整段 Cookie 字符串
+    if "__client=" in text:
+        for part in text.split(";"):
+            seg = str(part or "").strip()
+            if seg.startswith("__client="):
+                text = seg.split("=", 1)[1].strip()
+                break
+    if ";" in text:
+        text = text.split(";", 1)[0].strip()
+    return text
+
+def validate_venice_client_cookie(value: str) -> str:
+    cookie = normalize_venice_client_cookie(value)
+    if not cookie:
+        raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 不能为空。")
+    # Header 必须是 ASCII；并拒绝常见的占位/脱敏误填
+    try:
+        cookie.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 包含非 ASCII 字符，可能误填了“保持当前...”或脱敏文本，请重新粘贴浏览器中的原始 __client 值。") from exc
+    if "••" in cookie or "保持当前" in cookie or cookie.startswith("..."):
+        raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 看起来是占位/脱敏文本，请粘贴浏览器 Cookie 中的原始 __client 值。")
+    if any(ch in cookie for ch in ("\r", "\n")):
+        raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 格式不合法。")
+    return cookie
 
 def volcengine_provider_api_key(explicit_key: str = "") -> str:
     explicit_key = str(explicit_key or "").strip()
@@ -788,7 +832,7 @@ def default_api_providers():
             "primary": False,
             "image_models": VENICE_DEFAULT_IMAGE_MODELS,
             "chat_models": [],
-            "video_models": [],
+            "video_models": VENICE_DEFAULT_VIDEO_MODELS,
             "ms_loras": [],
             "ms_defaults_version": 0,
         },
@@ -1263,6 +1307,13 @@ def public_provider(provider):
             "volcengine_secret_key_env": volcengine_secret_key_env(),
             "volcengine_project_name": provider.get("volcengine_project_name") or VOLCENGINE_DEFAULT_PROJECT_NAME,
             "volcengine_region": provider.get("volcengine_region") or VOLCENGINE_DEFAULT_REGION,
+        })
+    if str(provider.get("protocol") or "").strip().lower() == "venice":
+        client_cookie = venice_client_cookie_value(provider["id"])
+        item.update({
+            "has_venice_client": bool(client_cookie),
+            "__client": mask_secret(client_cookie),
+            "__client_env": venice_client_env(provider["id"]),
         })
     return item
 
@@ -2429,6 +2480,7 @@ class CanvasVideoRequest(BaseModel):
     generate_audio: bool = False
     multimodal: bool = False
     trusted_asset: bool = False
+    provider_prompts: Dict[str, str] = Field(default_factory=dict)
 
 class TempShUploadRequest(BaseModel):
     url: str = ""
@@ -2518,10 +2570,15 @@ class ApiProviderPayload(BaseModel):
     volcengine_secret_access_key: Optional[str] = None
     api_key: Optional[str] = None
     wallet_api_key: Optional[str] = None
+    venice_client: Optional[str] = Field(default=None, alias="__client")
     clear_key: bool = False
     clear_wallet_key: bool = False
+    clear_venice_client: bool = Field(default=False, alias="clear__client")
     clear_volcengine_access_key_id: bool = False
     clear_volcengine_secret_access_key: bool = False
+
+    class Config:
+        allow_population_by_field_name = True
 
 class ChatRequest(BaseModel):
     conversation_id: str = ""
@@ -8209,6 +8266,14 @@ VENICE_IMAGE_EDIT_MODEL_ALIASES = {
     "seedream-v5-lite": "seedream-v5-lite-edit",
     "seedream-v4": "seedream-v4-edit"
 }
+VENICE_FACE_CONSENT_MODELS = ("seedance-2-0", "seedance2.0", "sd2.0")
+VENICE_VIDEO_ALLOWED_ASPECTS = ("21:9", "16:9", "4:3", "1:1", "3:4", "9:16")
+VENICE_SEEDANCE_FACE_CONSENT = {
+    "confirmedLegalRight": True,
+    "confirmedScreeningAcknowledged": True,
+    "consentText": "[check] The likeness in any media you upload -- and in any video Venice generates from it -- is your own, or you have explicit, legal consent from any depicted individual(s).\n[check] You are a real person and this is your verified identity.\n[check] You understand that a real-person verification check can be performed to confirm the above.\n[check] You own or have permission to use all media you uploaded for content generation.\n[check] You agree to the Venice.ai Terms of Service and Privacy Policy. Violations can lead to account suspension and legal liability. You can withdraw consent to the Privacy Policy by contacting support@venice.ai.\n[notice] No content is stored by Venice.",
+    "consentVersion": "v2.0",
+}
 
 def venice_api_root(provider=None):
     base_url = str((provider or {}).get("base_url") or VENICE_DEFAULT_BASE_URL).strip().rstrip("/")
@@ -8289,6 +8354,344 @@ def venice_image_edit_model(model):
     if normalized.endswith("-edit"):
         return raw
     return VENICE_IMAGE_EDIT_MODEL_ALIASES.get(normalized)
+
+def venice_video_requires_face_consent(model):
+    text = str(model or "").strip().lower()
+    return any(key in text for key in VENICE_FACE_CONSENT_MODELS)
+
+def venice_queue_task_id(raw):
+    if not isinstance(raw, dict):
+        return ""
+    direct = str(raw.get("queue_id") or raw.get("queueId") or raw.get("id") or raw.get("task_id") or extract_task_id(raw) or "").strip()
+    if direct:
+        return direct
+    data = raw.get("data")
+    if isinstance(data, dict):
+        return str(data.get("queue_id") or data.get("queueId") or data.get("id") or data.get("task_id") or extract_task_id(data) or "").strip()
+    return ""
+
+def venice_pick_active_session_id(client_payload):
+    payload = client_payload.get("response") if isinstance(client_payload.get("response"), dict) else client_payload
+    sessions = payload.get("sessions") if isinstance(payload, dict) else []
+    if not isinstance(sessions, list) or not sessions:
+        return ""
+    active = next((item for item in sessions if str((item or {}).get("status") or "").strip().lower() == "active"), None)
+    selected = active or next((item for item in sessions if isinstance(item, dict) and item.get("id")), {})
+    return str((selected or {}).get("id") or "").strip()
+
+def venice_video_reference_url(ref):
+    text = str(getattr(ref, "url", "") or "").strip()
+    if not text:
+        return ""
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    data_url = reference_to_data_url(ref.dict(), max_size=4096)
+    return str(data_url or "").strip()
+
+def venice_aspect_ratio_value(value: str) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    parts = raw.split(":", 1) if ":" in raw else re.split(r"[xX*]", raw, maxsplit=1)
+    if len(parts) != 2:
+        return 0.0
+    try:
+        width = float(parts[0])
+        height = float(parts[1])
+    except (TypeError, ValueError):
+        return 0.0
+    return width / height if width > 0 and height > 0 else 0.0
+
+def venice_closest_video_aspect(ratio: float) -> str:
+    if not (isinstance(ratio, (int, float)) and math.isfinite(ratio) and ratio > 0):
+        return "16:9"
+    return min(
+        VENICE_VIDEO_ALLOWED_ASPECTS,
+        key=lambda item: abs(math.log(max(ratio, 1e-6) / max(venice_aspect_ratio_value(item), 1e-6))),
+    )
+
+def venice_local_image_ratio(url: str) -> float:
+    path = output_file_from_url(url)
+    if not path or not os.path.isfile(path):
+        return 0.0
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+    except (OSError, ValueError):
+        return 0.0
+    return (float(width) / float(height)) if width > 0 and height > 0 else 0.0
+
+def venice_local_video_ratio(url: str) -> float:
+    path = output_file_from_url(url)
+    if not path or not os.path.isfile(path):
+        return 0.0
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0:s=x",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if proc.returncode != 0:
+            return 0.0
+        return venice_aspect_ratio_value(str(proc.stdout or "").strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0
+
+def venice_payload_source_ratio(payload: CanvasVideoRequest) -> float:
+    for ref in (payload.images or []):
+        ratio = venice_local_image_ratio(str(getattr(ref, "url", "") or "").strip())
+        if ratio > 0:
+            return ratio
+    for item in (payload.videos or []):
+        ratio = venice_local_video_ratio(str(item or "").strip())
+        if ratio > 0:
+            return ratio
+    width, height = parse_size_pair(payload.size)
+    if width > 0 and height > 0:
+        return float(width) / float(height)
+    return 0.0
+
+def venice_video_aspect_ratio(payload: CanvasVideoRequest) -> str:
+    value = str(payload.aspect_ratio or "").strip().lower()
+    if value == "9:21":
+        return "9:16"
+    if value in VENICE_VIDEO_ALLOWED_ASPECTS:
+        return value
+    if value in {"", "adaptive", "source", "keep_ratio"}:
+        return venice_closest_video_aspect(venice_payload_source_ratio(payload))
+    parsed = venice_aspect_ratio_value(value)
+    if parsed > 0:
+        return venice_closest_video_aspect(parsed)
+    return "16:9"
+
+def venice_error_with_task_id(detail: Any, queue_id: str) -> str:
+    text = str(detail or "").strip() or "Venice 视频任务失败"
+    task_id = str(queue_id or "").strip()
+    if not task_id:
+        return text
+    if re.search(r"(task_id|queue_id)\s*[=:：]\s*", text, flags=re.IGNORECASE):
+        return text
+    return f"{text} (task_id={task_id})"
+
+def venice_http_error_detail(response, fallback_message: str) -> str:
+    if response is None:
+        return str(fallback_message or "Venice 请求失败")
+    raw_text = str(getattr(response, "text", "") or "").strip()
+    payload: Any = None
+    try:
+        if raw_text:
+            payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        return json.dumps(payload, ensure_ascii=False)
+    if isinstance(payload, list):
+        return json.dumps(payload, ensure_ascii=False)
+    if raw_text:
+        return raw_text[:1000]
+    return str(fallback_message or f"Venice 请求失败(HTTP {getattr(response, 'status_code', '')})")
+
+def save_video_bytes_to_output(content: bytes, content_type: str = "", prefix: str = "video_", category: str = "output"):
+    media_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    ext = ".mp4"
+    if "webm" in media_type:
+        ext = ".webm"
+    elif "quicktime" in media_type or "mov" in media_type:
+        ext = ".mov"
+    elif "x-matroska" in media_type or "mkv" in media_type:
+        ext = ".mkv"
+    elif "x-msvideo" in media_type or media_type.endswith("/avi"):
+        ext = ".avi"
+    elif "x-flv" in media_type or media_type.endswith("/flv"):
+        ext = ".flv"
+    filename = f"{prefix}{uuid.uuid4().hex[:10]}{ext}"
+    path = output_path_for(filename, category)
+    try:
+        with open(path, "wb") as f:
+            f.write(content or b"")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"保存 Venice 视频失败：{exc}") from exc
+    if not os.path.exists(path) or os.path.getsize(path) <= 0:
+        raise HTTPException(status_code=502, detail="Venice 返回的视频内容为空。")
+    return output_url_for(filename, category)
+
+def is_transient_poll_status(status_code: int) -> bool:
+    try:
+        code = int(status_code)
+    except Exception:
+        return False
+    return code == 429 or code >= 500
+
+async def poll_call_with_retry(call, retry_state: Dict[str, Any], context: str):
+    try:
+        result = call()
+        if inspect.isawaitable(result):
+            result = await result
+        retry_state["consecutive_errors"] = 0
+        base_delay = float(retry_state.get("base_error_delay") or retry_state.get("error_delay") or 2.0)
+        retry_state["error_delay"] = base_delay
+        return result
+    except httpx.HTTPStatusError as exc:
+        retry_state["last_error"] = exc
+        status_code = exc.response.status_code
+        if not is_transient_poll_status(status_code):
+            raise
+        retry_state["consecutive_errors"] = int(retry_state.get("consecutive_errors") or 0) + 1
+        max_errors = int(retry_state.get("max_consecutive_errors") or 5)
+        if retry_state["consecutive_errors"] >= max_errors:
+            raise HTTPException(
+                status_code=502,
+                detail=f"{context}连续失败 {retry_state['consecutive_errors']} 次（最后状态 {status_code}）：{(exc.response.text or '')[:500]}",
+            ) from exc
+        delay = float(retry_state.get("error_delay") or retry_state.get("base_error_delay") or 2.0)
+        await asyncio.sleep(delay)
+        backoff = float(retry_state.get("error_backoff") or 1.5)
+        max_delay = float(retry_state.get("error_max_delay") or 12.0)
+        retry_state["error_delay"] = min(delay * backoff, max_delay)
+        return None
+    except (httpx.HTTPError, ValueError) as exc:
+        retry_state["last_error"] = exc
+        retry_state["consecutive_errors"] = int(retry_state.get("consecutive_errors") or 0) + 1
+        max_errors = int(retry_state.get("max_consecutive_errors") or 5)
+        if retry_state["consecutive_errors"] >= max_errors:
+            raise HTTPException(status_code=502, detail=f"{context}连续请求失败 {retry_state['consecutive_errors']} 次：{exc}") from exc
+        delay = float(retry_state.get("error_delay") or retry_state.get("base_error_delay") or 2.0)
+        await asyncio.sleep(delay)
+        backoff = float(retry_state.get("error_backoff") or 1.5)
+        max_delay = float(retry_state.get("error_max_delay") or 12.0)
+        retry_state["error_delay"] = min(delay * backoff, max_delay)
+        return None
+
+async def venice_web_auth_jwt(client, provider):
+    client_cookie = validate_venice_client_cookie(venice_client_cookie_value((provider or {}).get("id") or "venice"))
+    cookie_header = {"Cookie": f"__client={client_cookie}", "Accept": "application/json"}
+    client_resp = await client.get(VENICE_CLERK_CLIENT_URL, headers=cookie_header)
+    client_resp.raise_for_status()
+    client_raw = client_resp.json()
+    session_id = venice_pick_active_session_id(client_raw)
+    if not session_id:
+        raise HTTPException(status_code=502, detail=f"Venice Clerk 未返回可用 session：{client_raw}")
+    token_resp = await client.post(f"{VENICE_CLERK_CLIENT_URL}/sessions/{urllib.parse.quote(session_id, safe='')}/tokens", headers=cookie_header)
+    token_resp.raise_for_status()
+    token_raw = token_resp.json()
+    token = str(token_raw.get("jwt") or "").strip()
+    if not token:
+        raise HTTPException(status_code=502, detail=f"Venice Clerk 未返回 jwt：{token_raw}")
+    return token
+
+async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw=None):
+    retrieve_url = f"{venice_api_root(provider)}/video/retrieve"
+    retrieve_body = {"model": model, "queue_id": queue_id, "delete_media_on_completion": False}
+    fallback_urls = video_output_urls(queue_raw or {})
+    if isinstance(queue_raw, dict):
+        for key in ("download_url", "downloadUrl"):
+            value = str(queue_raw.get(key) or "").strip()
+            if value:
+                fallback_urls.append(value)
+    fallback_urls = [item for item in fallback_urls if isinstance(item, str) and item]
+    deadline = time.monotonic() + VIDEO_POLL_TIMEOUT
+    delay = max(2.0, IMAGE_POLL_INTERVAL)
+    last_payload = {}
+    retry_state = {
+        "consecutive_errors": 0,
+        "max_consecutive_errors": 5,
+        "last_error": None,
+        "base_error_delay": delay,
+        "error_delay": delay,
+        "error_backoff": 1.5,
+        "error_max_delay": 12.0,
+    }
+    while time.monotonic() < deadline:
+        async def do_retrieve():
+            resp = await client.post(retrieve_url, headers=api_headers(provider=provider, model=model), json=retrieve_body)
+            resp.raise_for_status()
+            return resp
+        response = await poll_call_with_retry(do_retrieve, retry_state, f"Venice 视频轮询(task_id={queue_id})")
+        if response is None:
+            continue
+        content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        if content_type and "json" not in content_type:
+            local_url = save_video_bytes_to_output(response.content, content_type, prefix="venice_video_")
+            return {"videos": [local_url], "task_id": queue_id, "raw": {"status": "COMPLETED", "content_type": content_type}}
+        raw = await poll_call_with_retry(lambda: response.json(), retry_state, f"Venice 视频轮询(JSON解析, task_id={queue_id})")
+        if raw is None:
+            continue
+        last_payload = raw
+        status = str((raw or {}).get("status") or "").strip().upper()
+        if status == "COMPLETED":
+            urls = video_output_urls(raw)
+            if not urls and fallback_urls:
+                urls = fallback_urls
+            if not urls:
+                raise HTTPException(status_code=502, detail=f"Venice 视频已完成，但没有返回视频地址：{raw} (task_id={queue_id})")
+            local_urls = [await save_remote_video_to_output(url, prefix="venice_video_") for url in urls]
+            return {"videos": local_urls, "task_id": queue_id, "raw": raw}
+        if status in VIDEO_TASK_FAILURE_STATUSES:
+            reason = (raw or {}).get("error") or (raw or {}).get("message") or str(raw)
+            raise HTTPException(status_code=502, detail=f"Venice 视频任务失败：{reason} (task_id={queue_id})")
+        await asyncio.sleep(delay)
+        delay = min(delay * 1.4, 10.0)
+    timeout_hint = f"；最近错误：{retry_state.get('last_error')}" if retry_state.get("last_error") else ""
+    raise HTTPException(status_code=504, detail=f"Venice 视频生成任务超时：{last_payload or queue_id}{timeout_hint} (task_id={queue_id})")
+
+async def generate_venice_video(client, payload, provider, requested_model):
+    model = selected_model(requested_model, "seedance-2-0-enhanced-reference-to-video")
+    jwt = await venice_web_auth_jwt(client, provider)
+    aspect_ratio = venice_video_aspect_ratio(payload)
+    provider_prompts = payload.provider_prompts if isinstance(payload.provider_prompts, dict) else {}
+    prompt_text = str(provider_prompts.get("venice_video") or payload.prompt or "").strip()
+    body = {
+        "modelId": model,
+        "prompt": prompt_text,
+        "duration": str(max(1, min(60, int(payload.duration or 5)))),
+        "aspectRatio": aspect_ratio,
+        "resolution": str(payload.resolution or "480p"),
+        "audio": bool(payload.generate_audio),
+        "simpleMode": False,
+    }
+    reference_urls = []
+    for ref in (payload.images or [])[:4]:
+        ref_url = venice_video_reference_url(ref)
+        if ref_url:
+            reference_urls.append(ref_url)
+    if reference_urls:
+        body["referenceImageUrls"] = reference_urls
+    if venice_video_requires_face_consent(model):
+        body["faceConsent"] = dict(VENICE_SEEDANCE_FACE_CONSENT)
+    queue_headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": bearer_auth_value(jwt),
+        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+    }
+    queue_resp = await client.post(VENICE_OUTERFACE_VIDEO_QUEUE_URL, headers=queue_headers, json=body)
+    if queue_resp.status_code >= 400:
+        detail = venice_http_error_detail(queue_resp, f"Venice 视频队列请求失败(HTTP {queue_resp.status_code})")
+        raise HTTPException(status_code=queue_resp.status_code, detail=detail)
+    queue_raw = queue_resp.json()
+    queue_id = venice_queue_task_id(queue_raw)
+    if not queue_id:
+        raise HTTPException(status_code=502, detail=f"Venice 视频队列接口没有返回 queue_id：{queue_raw}")
+    try:
+        return await wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw)
+    except HTTPException as exc:
+        raise HTTPException(status_code=exc.status_code, detail=venice_error_with_task_id(getattr(exc, "detail", ""), queue_id)) from exc
+    except httpx.HTTPStatusError as exc:
+        detail = venice_http_error_detail(getattr(exc, "response", None), f"Venice 视频任务请求失败(HTTP {getattr(getattr(exc, 'response', None), 'status_code', 0)})")
+        raise HTTPException(status_code=(getattr(exc.response, "status_code", None) or 502), detail=venice_error_with_task_id(detail, queue_id)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=venice_error_with_task_id(f"Venice 视频任务请求失败：{exc}", queue_id)) from exc
 
 def venice_blocked_headers(headers):
     blocked = []
@@ -9186,11 +9589,24 @@ async def wait_for_runninghub_image_task(client, provider, task_id):
     query_url = runninghub_openapi_url(provider, "query")
     deadline = time.monotonic() + 1800
     last_payload = None
+    retry_state = {
+        "consecutive_errors": 0,
+        "max_consecutive_errors": 5,
+        "last_error": None,
+        "base_error_delay": 2.0,
+        "error_delay": 2.0,
+        "error_backoff": 1.5,
+        "error_max_delay": 12.0,
+    }
     while time.monotonic() < deadline:
         await asyncio.sleep(2)
-        response = await client.post(query_url, headers=runninghub_api_headers(provider), json={"taskId": task_id})
-        response.raise_for_status()
-        raw = response.json()
+        async def query_raw():
+            response = await client.post(query_url, headers=runninghub_api_headers(provider), json={"taskId": task_id})
+            response.raise_for_status()
+            return response.json()
+        raw = await poll_call_with_retry(query_raw, retry_state, "RunningHub 生图轮询")
+        if raw is None:
+            continue
         last_payload = raw
         status = runninghub_query_status(raw)
         if status in {"success", "succeeded", "completed", "complete", "finished", "finish", "done", "3"}:
@@ -9201,7 +9617,8 @@ async def wait_for_runninghub_image_task(client, provider, task_id):
             return {"data": {"results": [runninghub_extract_image(raw)]}}
         except HTTPException:
             pass
-    raise HTTPException(status_code=504, detail=f"RunningHub 生图任务超时：{last_payload}")
+    timeout_hint = f"；最近错误：{retry_state.get('last_error')}" if retry_state.get("last_error") else ""
+    raise HTTPException(status_code=504, detail=f"RunningHub 生图任务超时：{last_payload}{timeout_hint}")
 
 RUNNINGHUB_ENTRY_MODEL_RE = re.compile(r"^(app|workflow):(.+)$")
 
@@ -9533,10 +9950,24 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         query_url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
         deadline = time.monotonic() + 1800
         last_payload = None
+        retry_state = {
+            "consecutive_errors": 0,
+            "max_consecutive_errors": 5,
+            "last_error": None,
+            "base_error_delay": 2.5,
+            "error_delay": 2.5,
+            "error_backoff": 1.5,
+            "error_max_delay": 12.0,
+        }
         while time.monotonic() < deadline:
             await asyncio.sleep(2.5)
-            query_response = await client.post(query_url, headers=runninghub_app_headers(True), json={"apiKey": api_key, "taskId": task_id})
-            query_raw = query_response.json()
+            async def query_outputs():
+                query_response = await client.post(query_url, headers=runninghub_app_headers(True), json={"apiKey": api_key, "taskId": task_id})
+                query_response.raise_for_status()
+                return query_response.json()
+            query_raw = await poll_call_with_retry(query_outputs, retry_state, "RunningHub 任务输出轮询")
+            if query_raw is None:
+                continue
             last_payload = query_raw
             code = query_raw.get("code") if isinstance(query_raw, dict) else None
             if code in (0, "0"):
@@ -9548,7 +9979,8 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             if code in (805, "805"):
                 raise HTTPException(status_code=502, detail=f"RunningHub 任务失败：{runninghub_fail_reason(query_raw) or query_raw}")
             # 804 运行中 / 813 排队中 / 其他状态继续轮询
-        raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload}")
+        timeout_hint = f"；最近错误：{retry_state.get('last_error')}" if retry_state.get("last_error") else ""
+        raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload}{timeout_hint}")
 
 async def generate_runninghub_provider_image(prompt, size, model, reference_images=None, provider=None):
     entry = runninghub_entry_config_from_model(provider, model)
@@ -9608,11 +10040,24 @@ async def wait_for_runninghub_openapi_task(client, provider, task_id, output_kin
     query_url = runninghub_openapi_url(provider, "query")
     deadline = time.monotonic() + 1800
     last_payload = None
+    retry_state = {
+        "consecutive_errors": 0,
+        "max_consecutive_errors": 5,
+        "last_error": None,
+        "base_error_delay": 3.0,
+        "error_delay": 3.0,
+        "error_backoff": 1.5,
+        "error_max_delay": 12.0,
+    }
     while time.monotonic() < deadline:
         await asyncio.sleep(3)
-        response = await client.post(query_url, headers=runninghub_json_headers(provider), json={"taskId": task_id})
-        response.raise_for_status()
-        raw = response.json()
+        async def query_raw():
+            response = await client.post(query_url, headers=runninghub_json_headers(provider), json={"taskId": task_id})
+            response.raise_for_status()
+            return response.json()
+        raw = await poll_call_with_retry(query_raw, retry_state, "RunningHub 任务轮询")
+        if raw is None:
+            continue
         last_payload = raw
         status = runninghub_query_status(raw).upper()
         if status in {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "FINISHED", "DONE", "3"}:
@@ -9621,7 +10066,8 @@ async def wait_for_runninghub_openapi_task(client, provider, task_id, output_kin
             raise HTTPException(status_code=502, detail=f"RunningHub 任务失败：{runninghub_fail_reason(raw) or raw}")
         if output_kind == "video" and video_output_urls(raw):
             return raw
-    raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload or task_id}")
+    timeout_hint = f"；最近错误：{retry_state.get('last_error')}" if retry_state.get("last_error") else ""
+    raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload or task_id}{timeout_hint}")
 
 async def generate_runninghub_video(payload, provider):
     model_def = await runninghub_model_definition(provider, payload.model)
@@ -11657,6 +12103,12 @@ async def save_providers(payload: List[ApiProviderPayload]):
             env_updates[key_env] = ""
         elif item.api_key is not None and item.api_key.strip():
             env_updates[key_env] = item.api_key.strip()
+        if str(provider.get("protocol") or "").strip().lower() == "venice":
+            client_env = venice_client_env(provider["id"])
+            if item.clear_venice_client:
+                env_updates[client_env] = ""
+            elif item.venice_client is not None and item.venice_client.strip():
+                env_updates[client_env] = validate_venice_client_cookie(item.venice_client)
         if provider["id"] == "runninghub":
             wallet_env = runninghub_wallet_key_env()
             if item.clear_wallet_key:
@@ -13138,10 +13590,12 @@ async def canvas_video(payload: CanvasVideoRequest):
     is_volcengine = is_volcengine_provider(provider)
     is_yuli = is_yuli_provider(provider)
     is_agnes = is_agnes_provider(provider, payload.model)
+    is_venice = is_venice_provider(provider)
     volc_is_proxy = bool(is_volcengine and urllib.parse.urlparse(base_url).path.rstrip("/"))
     submit_urls = video_submit_url_candidates(provider, base_url)
     submit_url = submit_urls[0]
-    requested_model = selected_model(payload.model, "agnes-video-v2.0" if is_agnes else "veo3-fast")
+    default_video_model = "seedance-2-0-enhanced-reference-to-video" if is_venice else ("agnes-video-v2.0" if is_agnes else "veo3-fast")
+    requested_model = selected_model(payload.model, default_video_model)
     is_veo31 = is_apimart and is_apimart_veo31_model(requested_model)
     if is_agnes:
         try:
@@ -13165,6 +13619,17 @@ async def canvas_video(payload: CanvasVideoRequest):
         except httpx.HTTPError as exc:
             log_net_error(f"视频(玉玉) 网络/TLS错误 model={requested_model}", exc)
             raise HTTPException(status_code=502, detail=f"请求上游视频接口失败：{exc}") from exc
+    if is_venice:
+        try:
+            venice_timeout = httpx.Timeout(connect=20.0, read=VIDEO_POLL_TIMEOUT, write=120.0, pool=20.0)
+            async with httpx.AsyncClient(timeout=venice_timeout, follow_redirects=True) as venice_client:
+                return await generate_venice_video(venice_client, payload, provider, requested_model)
+        except httpx.HTTPStatusError as exc:
+            text = exc.response.text
+            raise HTTPException(status_code=exc.response.status_code, detail=f"Venice 视频接口错误：{text}") from exc
+        except httpx.HTTPError as exc:
+            log_net_error(f"视频(Venice) 网络/TLS错误 model={requested_model}", exc)
+            raise HTTPException(status_code=502, detail=f"请求 Venice 视频接口失败：{exc}") from exc
     try:
         async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as client:
             # --- 构造图片载荷 ---

@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2026.07.4.2.1783154648"></script>
     <script src="/static/js/i18n.js?v=2026.07.4.2.1783154644"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.4.2.1783154638">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.4.2.1783176744">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.4.2.1783212405">
 </head>
 <body>
     <div class="page">
@@ -199,6 +199,24 @@
                                                 <input id="volcRegionInput" type="text" value="cn-beijing">
                                             </div>
                                         </div>
+                                    </div>
+                                </div>
+                                <div class="venice-client-stack">
+                                    <div class="rh-key-item">
+                                        <div class="rh-key-head">
+                                            <div>
+                                                <div class="rh-key-title">Venice __client Cookie · 视频生成必填</div>
+                                                <div class="rh-key-desc">仅 Venice 网页视频队列接口需要，值来自浏览器 Cookie 的 <span class="inline-code">__client</span>。</div>
+                                            </div>
+                                        </div>
+                                        <div class="key-input-line">
+                                            <div class="field-frame"><input id="veniceClientInput" type="password" placeholder="粘贴 __client Cookie"></div>
+                                            <div class="key-actions">
+                                                <button class="key-btn" type="button" onclick="saveVeniceClientOnly()" title="保存 __client Cookie"><i data-lucide="check" class="w-4 h-4"></i></button>
+                                                <button class="key-btn key-clear" type="button" onclick="clearVeniceClientOnly()" title="清除 __client Cookie"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                            </div>
+                                        </div>
+                                        <span id="veniceClientHint" class="hint"></span>
                                     </div>
                                 </div>
                                 <div class="ms-hint">
@@ -566,6 +584,6 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=2026.07.4.2.1783180748"></script>
+    <script src="/static/js/api-settings.js?v=2026.07.4.2.1783213333"></script>
 </body>
 </html>

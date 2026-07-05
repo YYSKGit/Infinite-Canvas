@@ -2542,6 +2542,43 @@ function parseRatioValue(value){
     const h = Number(parts[1]);
     return w > 0 && h > 0 ? w / h : 0;
 }
+const VENICE_VIDEO_ASPECTS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
+function isVeniceVideoProvider(providerId=''){
+    const idText = String(providerId || '').trim();
+    if(/venice/i.test(idText)) return true;
+    const provider = videoProviderById(idText);
+    const nameText = String(provider?.name || provider?.label || '').trim();
+    return /venice/i.test(nameText);
+}
+function nearestVeniceVideoAspectByRatio(ratio){
+    const target = Number(ratio);
+    if(!(target > 0 && Number.isFinite(target))) return '16:9';
+    return VENICE_VIDEO_ASPECTS.reduce((best, candidate) => {
+        const bestRatio = parseRatioValue(best) || (16 / 9);
+        const candidateRatio = parseRatioValue(candidate) || (16 / 9);
+        const bestDelta = Math.abs(Math.log(target / bestRatio));
+        const candidateDelta = Math.abs(Math.log(target / candidateRatio));
+        return candidateDelta < bestDelta ? candidate : best;
+    }, '16:9');
+}
+function ratioFromSmartRef(ref){
+    if(!ref || typeof ref !== 'object') return 0;
+    const width = Number(ref.natural_w || ref.naturalW || ref.width || ref.w || ref.layout_w || 0);
+    const height = Number(ref.natural_h || ref.naturalH || ref.height || ref.h || ref.layout_h || 0);
+    return width > 0 && height > 0 ? width / height : 0;
+}
+function normalizeVeniceVideoAspect(value, refs=[]){
+    const raw = String(value || '').trim().toLowerCase();
+    if(raw === '9:21') return '9:16';
+    if(VENICE_VIDEO_ASPECTS.includes(raw)) return raw;
+    if(['', 'keep_ratio', 'adaptive', 'source'].includes(raw)){
+        const ratio = imageRefsOnly(refs).map(ratioFromSmartRef).find(r => r > 0) || 0;
+        return nearestVeniceVideoAspectByRatio(ratio);
+    }
+    const parsed = parseRatioValue(raw);
+    if(parsed > 0) return nearestVeniceVideoAspectByRatio(parsed);
+    return '16:9';
+}
 function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSizeValue=''){
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
@@ -6633,7 +6670,21 @@ function smartRunRequestMeta(run){
     if(run?.kind === 'video') return {provider_id:s.videoProvider || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
     return {provider_id:s.provider_id || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
 }
-function smartRunSnapshot(node, prompt, refs=[], kind='image'){
+function smartRequestPromptForRun(prompt, runSettings={}, kind='image', requestMeta=null){
+    const basePrompt = String(prompt || '').trim();
+    if(kind !== 'video') return basePrompt;
+    if(requestMeta && typeof requestMeta === 'object'){
+        const actualPrompt = String(requestMeta.actualApiPrompt || '').trim();
+        if(actualPrompt) return actualPrompt;
+    }
+    const settingsSnapshot = runSettings || {};
+    if(!isVeniceVideoProvider(settingsSnapshot.videoProvider || '')) return basePrompt;
+    const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
+        ? requestMeta.providerPrompts
+        : {};
+    return String(providerPrompts.venice_video || basePrompt).trim() || basePrompt;
+}
+function smartRunSnapshot(node, prompt, refs=[], kind='image', requestMeta=null){
     const settingsSnapshot = cloneSmartSettings(settings);
     return {
         nodeId:node?.id || '',
@@ -6641,6 +6692,7 @@ function smartRunSnapshot(node, prompt, refs=[], kind='image'){
         kind,
         settings:settingsSnapshot,
         prompt:prompt || '',
+        requestPrompt:smartRequestPromptForRun(prompt, settingsSnapshot, kind, requestMeta),
         refs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || 'image', kind:ref.kind || ''})).filter(ref => ref.url),
         size: kind === 'image' && isApiLikeEngine(settingsSnapshot.engine) ? sizeForRun(settingsSnapshot) : ''
     };
@@ -6669,7 +6721,7 @@ function addSmartGenerationLog({run, outputs=[], runMs=0, error=''}) {
         nodeType:run?.nodeType || 'smart-image',
         model:smartRunTaskLabel(run),
         request:smartRunRequestMeta(run),
-        prompt:run?.prompt || '',
+        prompt:run?.requestPrompt || run?.prompt || '',
         outputs:outputItems,
         refs:run?.refs || [],
         runMs:Number(runMs || 0),
@@ -11179,6 +11231,7 @@ function loadPromptDraft(subject){
     } else {
         setPromptText('');
     }
+    refreshPromptMentionTokenLabels();
 }
 function positionComposerForNode(node){
     if(!node) return;
@@ -11257,15 +11310,23 @@ function renderInputThumbsRow(node){
         add: addActive,
         mode: node ? smartImageMode(node) : ''
     });
-    if(inputThumbsRow.dataset.thumbsSig === thumbsSignature) return;
+    if(inputThumbsRow.dataset.thumbsSig === thumbsSignature){
+        refreshPromptMentionTokenLabels();
+        return;
+    }
     inputThumbsRow.dataset.thumbsSig = thumbsSignature;
     inputThumbsRow.classList.toggle('has-items', Boolean(node));
-    if(!node){ inputThumbsRow.innerHTML = ''; return; }
+    if(!node){
+        inputThumbsRow.innerHTML = '';
+        refreshPromptMentionTokenLabels();
+        return;
+    }
     const addButton = `<button class="input-thumb-add ${addActive ? 'active' : ''}" type="button" data-input-add-reference title="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}" aria-label="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}"><i data-lucide="image-plus"></i></button>`;
     if(!dedup.length){
         inputThumbsRow.innerHTML = `<div class="input-thumb-list empty"></div><div class="input-thumb-actions">${addButton}</div>`;
         bindInputThumbReferenceActions();
         refreshIcons();
+        refreshPromptMentionTokenLabels();
         return;
     }
     const mediaCounters = {image:0, video:0, audio:0, text:0, file:0};
@@ -11294,6 +11355,7 @@ function renderInputThumbsRow(node){
     bindInputThumbsDrag(node, dedup, manualRefKeys);
     bindInputThumbReferenceActions();
     refreshIcons();
+    refreshPromptMentionTokenLabels();
 }
 function bindInputThumbReferenceActions(){
     inputThumbsRow?.querySelectorAll('[data-input-add-reference]').forEach(btn => {
@@ -11925,8 +11987,9 @@ function mentionTokenHtml(img){
     if(!img?.url) return '';
     const kind = mediaKindForItem(img);
     const name = img.alias || img.name || (kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
+    const label = img.refLabel || img.label || name;
     const media = mentionTokenMediaHtml(img, kind);
-    return `<span class="mention-image-token" contenteditable="false" data-url="${escapeHtml(img.url)}" data-kind="${escapeHtml(kind)}" data-name="${escapeHtml(name)}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${escapeHtml(img.imageIndex ?? '')}">${media}<span>${escapeHtml(name)}</span></span>`;
+    return `<span class="mention-image-token" contenteditable="false" data-url="${escapeHtml(img.url)}" data-kind="${escapeHtml(kind)}" data-name="${escapeHtml(name)}" data-ref-label="${escapeHtml(label)}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${escapeHtml(img.imageIndex ?? '')}">${media}<span class="mention-token-label">${escapeHtml(label)}</span></span>`;
 }
 function mentionTokenMediaHtml(img, kind=mediaKindForItem(img)){
     if(kind === 'audio'){
@@ -11943,6 +12006,21 @@ function mentionOptionMediaHtml(img){
         return `<div class="media-thumb audio-thumb mention-option-audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.alias || img.name || 'Audio')}</span></div>`;
     }
     return kind === 'video' ? smartVideoPreviewHtml(img, 256, 'alt=""') : smartPreviewImgHtml(img, 256, 'alt=""');
+}
+function createMentionTokenElement(img){
+    const token = document.createElement('span');
+    const kind = mediaKindForItem(img);
+    token.className = 'mention-image-token';
+    token.contentEditable = 'false';
+    token.dataset.url = img.url || '';
+    token.dataset.kind = kind;
+    token.dataset.name = img.alias || img.name || (kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
+    token.dataset.refLabel = img.refLabel || img.label || token.dataset.name;
+    token.dataset.nodeId = img.nodeId || '';
+    token.dataset.imageIndex = String(img.imageIndex ?? '');
+    token.dataset.assetUris = JSON.stringify(img.asset_uris || {});
+    token.innerHTML = `${mentionTokenMediaHtml(img, kind)}<span class="mention-token-label">${escapeHtml(token.dataset.refLabel)}</span>`;
+    return token;
 }
 function promptHtmlWithMentionTokens(text, refs=[]){
     const value = String(text || '');
@@ -11963,6 +12041,235 @@ function promptHtmlWithMentionTokens(text, refs=[]){
         index += 1;
     }
     return html;
+}
+function promptMentionTokenLabel(index){
+    const n = Math.max(1, Number(index) || 1);
+    return `图${n}`;
+}
+function promptReferenceLabelMap(node=null){
+    const target = node || selectedNode() || activeComposerNode();
+    if(!target) return new Map();
+    const refs = uniqueReferenceImages(defaultReferenceImagesFor(target, false, smartLoopContext));
+    const map = new Map();
+    refs.forEach((ref, index) => {
+        const key = promptMentionRefKey(ref);
+        if(!key || map.has(key)) return;
+        map.set(key, promptMentionTokenLabel(index + 1));
+    });
+    return map;
+}
+function promptMentionRefKey(part){
+    if(!part || typeof part !== 'object') return '';
+    const kind = String(part.kind || '').trim().toLowerCase();
+    const url = String(part.url || '').trim();
+    const nodeId = String(part.nodeId || '').trim();
+    const imageIndex = String(part.imageIndex ?? '').trim();
+    if(url) return `${kind}|${url}`;
+    return `${kind}|${nodeId}|${imageIndex}|${String(part.name || '').trim()}`;
+}
+function refreshPromptMentionTokenLabels(){
+    if(!promptInput) return;
+    const tokens = [...promptInput.querySelectorAll('.mention-image-token')];
+    const orderedMap = promptReferenceLabelMap();
+    const extraMap = new Map();
+    tokens.forEach(token => {
+        const key = promptMentionRefKey({
+            kind:token.dataset.kind || '',
+            url:token.dataset.url || '',
+            nodeId:token.dataset.nodeId || '',
+            imageIndex:token.dataset.imageIndex ?? '',
+            name:token.dataset.name || ''
+        });
+        let label = orderedMap.get(key) || extraMap.get(key);
+        if(!label){
+            label = promptMentionTokenLabel(orderedMap.size + extraMap.size + 1);
+            extraMap.set(key, label);
+        }
+        token.dataset.refLabel = label;
+        const labelEl = token.querySelector('.mention-token-label') || token.querySelector('span:last-child');
+        if(labelEl) labelEl.textContent = label;
+    });
+}
+function cleanupPromptLeadingInvisibleChars(){
+    if(!promptInput) return false;
+    const normalizeLeadingText = value => String(value || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\u00A0/g, ' ');
+    const hasMeaningfulContent = node => {
+        if(!node) return false;
+        if(node.nodeType === Node.TEXT_NODE){
+            return normalizeLeadingText(node.textContent).trim().length > 0;
+        }
+        if(node.nodeType !== Node.ELEMENT_NODE) return false;
+        if(node.classList?.contains('mention-image-token')) return true;
+        if(node.tagName === 'BR') return false;
+        if(node.querySelector?.('.mention-image-token')) return true;
+        const text = normalizeLeadingText(node.textContent || '').trim();
+        return text.length > 0;
+    };
+    let changed = false;
+    // 清理粘贴后开头的不可见字符、空白文本和空节点（如前导 <br>/<div><br></div>），不动 token 本体。
+    while(promptInput.firstChild){
+        const first = promptInput.firstChild;
+        if(first.nodeType === Node.TEXT_NODE){
+            const raw = String(first.textContent || '');
+            const cleaned = normalizeLeadingText(raw);
+            if(!cleaned.trim()){
+                promptInput.removeChild(first);
+                changed = true;
+                continue;
+            }
+            if(cleaned !== raw){
+                first.textContent = cleaned;
+                changed = true;
+            }
+            break;
+        }
+        if(first.nodeType === Node.ELEMENT_NODE){
+            if(hasMeaningfulContent(first)) break;
+            promptInput.removeChild(promptInput.firstChild);
+            changed = true;
+            continue;
+        }
+        promptInput.removeChild(first);
+        changed = true;
+    }
+    return changed;
+}
+function trimPromptFragmentBoundaryWhitespace(fragment){
+    if(!fragment) return false;
+    let changed = false;
+    const trimStart = value => String(value || '').replace(/^[\s\u00A0\u200B-\u200D\uFEFF]+/, '');
+    const trimEnd = value => String(value || '').replace(/[\s\u00A0\u200B-\u200D\uFEFF]+$/, '');
+    while(fragment.firstChild){
+        const first = fragment.firstChild;
+        if(first.nodeType === Node.TEXT_NODE){
+            const raw = String(first.textContent || '');
+            const cleaned = trimStart(raw);
+            if(!cleaned){
+                fragment.removeChild(first);
+                changed = true;
+                continue;
+            }
+            if(cleaned !== raw){
+                first.textContent = cleaned;
+                changed = true;
+            }
+            break;
+        }
+        if(first.nodeType === Node.ELEMENT_NODE && first.tagName === 'BR'){
+            fragment.removeChild(first);
+            changed = true;
+            continue;
+        }
+        break;
+    }
+    while(fragment.lastChild){
+        const last = fragment.lastChild;
+        if(last.nodeType === Node.TEXT_NODE){
+            const raw = String(last.textContent || '');
+            const cleaned = trimEnd(raw);
+            if(!cleaned){
+                fragment.removeChild(last);
+                changed = true;
+                continue;
+            }
+            if(cleaned !== raw){
+                last.textContent = cleaned;
+                changed = true;
+            }
+            break;
+        }
+        if(last.nodeType === Node.ELEMENT_NODE && last.tagName === 'BR'){
+            fragment.removeChild(last);
+            changed = true;
+            continue;
+        }
+        break;
+    }
+    return changed;
+}
+function buildMentionPasteFragmentFromHtml(html){
+    const source = String(html || '');
+    if(!source || !source.includes('mention-image-token')) return null;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = source;
+    if(!tpl.content.querySelector('.mention-image-token')) return null;
+    const fragment = document.createDocumentFragment();
+    const walk = (node, out) => {
+        if(!node) return;
+        if(node.nodeType === Node.TEXT_NODE){
+            out.appendChild(document.createTextNode(node.textContent || ''));
+            return;
+        }
+        if(node.nodeType !== Node.ELEMENT_NODE) return;
+        if(node.classList?.contains('mention-image-token')){
+            const token = node.cloneNode(true);
+            token.contentEditable = 'false';
+            out.appendChild(token);
+            return;
+        }
+        if(node.tagName === 'BR') return;
+        node.childNodes.forEach(child => walk(child, out));
+    };
+    tpl.content.childNodes.forEach(node => walk(node, fragment));
+    trimPromptFragmentBoundaryWhitespace(fragment);
+    return fragment.childNodes.length ? fragment : null;
+}
+function fragmentToHtml(fragment){
+    if(!fragment) return '';
+    const container = document.createElement('div');
+    container.appendChild(fragment.cloneNode(true));
+    // 避免复制片段中的结构性换行字符经 insertHTML 转换成 <br>/<div> 导致中间粘贴意外换行。
+    return String(container.innerHTML || '').replace(/\r?\n/g, '');
+}
+function insertFragmentIntoPromptAtSelection(fragment){
+    if(!promptInput || !fragment) return false;
+    promptInput.focus();
+    const html = fragmentToHtml(fragment);
+    if(html){
+        try {
+            if(typeof document.execCommand === 'function' && document.execCommand('insertHTML', false, html)){
+                return true;
+            }
+        } catch(_err) {}
+    }
+    const sel = window.getSelection();
+    if(!sel || !sel.rangeCount) return false;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    const lastNode = fragment.lastChild;
+    range.insertNode(fragment);
+    if(lastNode){
+        range.setStartAfter(lastNode);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+    return true;
+}
+function tryHandleMentionTokenPaste(event){
+    const html = String(event?.clipboardData?.getData('text/html') || '');
+    if(!html || !html.includes('mention-image-token')) return false;
+    const fragment = buildMentionPasteFragmentFromHtml(html);
+    if(!fragment) return false;
+    event.preventDefault();
+    if(!insertFragmentIntoPromptAtSelection(fragment)) return false;
+    refreshPromptMentionTokenLabels();
+    bindSmartPreviewImageFallbacks(promptInput);
+    // 统一走现有 input 处理链，避免粘贴分支额外的异步重绘把内容回滚为粘贴前状态。
+    promptInput.dispatchEvent(new Event('input', {bubbles:true}));
+    return true;
+}
+function cleanupPromptAfterNativePaste(){
+    if(!promptInput) return;
+    const changed = cleanupPromptLeadingInvisibleChars();
+    if(!changed) return;
+    refreshPromptMentionTokenLabels();
+    delete promptInput.dataset.preserveDraftOnce;
+    savePromptDraftForCurrent();
+    renderInputThumbsRow(selectedNode());
+    scheduleSave();
 }
 function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
     return {
@@ -12740,16 +13047,7 @@ function insertMentionToken(img){
             range.collapse(false);
         }
     }
-    const token = document.createElement('span');
-    token.className = 'mention-image-token';
-    token.contentEditable = 'false';
-    token.dataset.url = img.url;
-    token.dataset.kind = mediaKindForItem(img);
-    token.dataset.name = img.alias || img.name || (token.dataset.kind === 'audio' ? '音频' : token.dataset.kind === 'video' ? '视频' : '图片');
-    token.dataset.nodeId = img.nodeId || '';
-    token.dataset.imageIndex = String(img.imageIndex ?? '');
-    token.dataset.assetUris = JSON.stringify(img.asset_uris || {});
-    token.innerHTML = `${mentionTokenMediaHtml(img, token.dataset.kind)}<span>${escapeHtml(token.dataset.name)}</span>`;
+    const token = createMentionTokenElement(img);
     range.insertNode(token);
     bindSmartPreviewImageFallbacks(token);
     const spacer = document.createTextNode(' ');
@@ -12758,6 +13056,7 @@ function insertMentionToken(img){
     range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
+    refreshPromptMentionTokenLabels();
     closeMentionPicker();
     promptInput.focus();
     renderInputThumbsRow(selectedNode());
@@ -12774,7 +13073,16 @@ function collectPromptParts(){
             let assetUris = {};
             try { assetUris = JSON.parse(node.dataset.assetUris || '{}') || {}; } catch(e) { assetUris = {}; }
             const kind = node.dataset.kind || 'image';
-            parts.push({type:'image', kind, url:node.dataset.url || '', name:node.dataset.name || (kind === 'audio' ? '音频' : '图片'), nodeId:node.dataset.nodeId || '', imageIndex:Number(node.dataset.imageIndex || 0), asset_uris:assetUris});
+            parts.push({
+                type:'image',
+                kind,
+                url:node.dataset.url || '',
+                name:node.dataset.name || (kind === 'audio' ? '音频' : '图片'),
+                refLabel:node.dataset.refLabel || '',
+                nodeId:node.dataset.nodeId || '',
+                imageIndex:Number(node.dataset.imageIndex || 0),
+                asset_uris:assetUris
+            });
             return;
         }
         if(node.tagName === 'BR'){
@@ -12792,12 +13100,21 @@ function collectPromptParts(){
 }
 function originalPromptTextFromParts(parts){
     let text = '';
+    const labelMap = new Map();
     (parts || []).forEach(part => {
         if(part.type === 'text'){
             text += part.text || '';
             return;
         }
-        if(part.type === 'image') text += `@${part.name || '图片'}`;
+        if(part.type === 'image'){
+            const key = promptMentionRefKey(part);
+            let label = labelMap.get(key);
+            if(!label){
+                label = promptMentionTokenLabel(labelMap.size + 1);
+                labelMap.set(key, label);
+            }
+            text += part.refLabel || label;
+        }
     });
     return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
@@ -12814,34 +13131,47 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     const refMap = new Map();
     refs.forEach((img, index) => refMap.set(img.url, index + 1));
     let body = '';
+    let veniceBody = '';
     parts.forEach(part => {
         if(part.type === 'text'){
             body += part.text;
+            veniceBody += part.text;
             return;
         }
         if(!part.url) return;
         hasMentionToken = true;
         const mentionedKey = inputRefKey(part);
         if(blockedRefs.has(mentionedKey)){
-            body += `@${part.name || '图片'}`;
+            const label = part.refLabel || part.name || '图片';
+            body += label;
+            veniceBody += label;
             return;
         }
         if(!refMap.has(part.url)){
             if(refs.length >= SMART_REFERENCE_IMAGE_MAX){
-                body += `@${part.name || '图片'}`;
+                const label = part.refLabel || part.name || '图片';
+                body += label;
+                veniceBody += label;
                 return;
             }
             refMap.set(part.url, refs.length + 1);
             refs.push({url:part.url, name:part.name || `图${refs.length + 1}`, nodeId:part.nodeId, imageIndex:part.imageIndex, kind:part.kind || 'image', asset_uris:part.asset_uris || {}, role:`image_${refs.length + 1}`});
         }
-        body += `图${refMap.get(part.url)}`;
+        const index = refMap.get(part.url);
+        body += `图${index}`;
+        veniceBody += `@image${index}`;
     });
     body = body.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    veniceBody = veniceBody.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     const groupPrompt = isSmartGroupNode(node) ? textForNode(node, ctx).trim() : '';
     const inputPrompt = inputPromptTextFor(node, ctx).trim();
-    if(groupPrompt || inputPrompt) body = [groupPrompt, inputPrompt, body].filter(Boolean).join('\n\n');
+    if(groupPrompt || inputPrompt){
+        body = [groupPrompt, inputPrompt, body].filter(Boolean).join('\n\n');
+        veniceBody = [groupPrompt, inputPrompt, veniceBody].filter(Boolean).join('\n\n');
+    }
     if(!body && settings.engine === 'runninghub'){
         body = rhDefaultPromptSuggestion();
+        if(!veniceBody) veniceBody = body;
     }
     const displayPrompt = originalPrompt || body;
     if(hasMentionToken && refs.length){
@@ -12849,6 +13179,7 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         return {
             prompt:`${tr('smart.refMapHeader')}\n${mapText}\n\n${tr('smart.refUserNeed')}\n${body}`,
             displayPrompt,
+            providerPrompts:{venice_video:veniceBody || body},
             refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
             mentioned:true
         };
@@ -12856,6 +13187,7 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     return {
         prompt:body,
         displayPrompt,
+        providerPrompts:{venice_video:veniceBody || body},
         refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
         mentioned:false
     };
@@ -13078,6 +13410,7 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
     delete pendingNode._selectAfterRunId;
     if(activeComposerSubject?.id && selectedId === activeComposerSubject.id) lastComposerNodeId = `${selectedId}:node`;
     selectedImage = {nodeId:'', index:-1};
+    notifySmartTaskSuccess(kind, imgs.length);
 }
 function restoreFromExtraction(node, extracted){
     if(!node || !extracted) return;
@@ -13603,6 +13936,7 @@ function loadNodePromptDraftToInput(node){
         if(rebuilt) promptInput.innerHTML = rebuilt;
         else setPromptText(node?.runPrompt || '');
     }
+    refreshPromptMentionTokenLabels();
 }
 async function createSmartComfyTask(payload){
     const res = await fetch('/api/canvas-comfy-tasks', {
@@ -13657,13 +13991,14 @@ function buildPromptRequestForNode(node, defaultImages, ctx=smartLoopContext){
         return buildPromptRequest(node, defaultImages, false, ctx);
     } finally {
         promptInput.innerHTML = oldHtml;
+        refreshPromptMentionTokenLabels();
     }
 }
-async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=settings){
+async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=settings, requestMeta=null){
     const activeSettings = runSettings || settings;
     if(activeSettings.engine === 'comfy') return generateComfyUrlsWithSettings(activeSettings, prompt, refs);
     if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video'){
-        return {urls:await runApiVideoGeneration(prompt, refs, activeSettings), kind:'video'};
+        return {urls:await runApiVideoGeneration(prompt, refs, activeSettings, requestMeta), kind:'video'};
     }
     if(isApiLikeEngine(activeSettings.engine)){
         const taskResult = await runApiGeneration(prompt, refs, activeSettings);
@@ -13776,7 +14111,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
         meta.promptText = requestNode.promptDraftText || request.displayPrompt || '';
     }
     const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
-    const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind);
+    const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind, request);
     const runLogStart = nowMs();
     const targetPromptState = {
         promptDraftHtml:targetNode.promptDraftHtml,
@@ -13798,9 +14133,10 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     render();
     settings = previousSettings;
     try {
-        const result = await generateUrlsForCurrentSettings(outputNode, prompt, request.refs || [], runSettings);
+        const result = await generateUrlsForCurrentSettings(outputNode, prompt, request.refs || [], runSettings, request);
         if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : tr('smart.errNoOutImages'));
         if(outpaintSize) delete requestNode.outpaintSize;
+        if(request?.actualApiPrompt && (result.kind || logKind) === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         addSmartGenerationLog({run:{...runLog, kind:result.kind || logKind}, outputs:result.urls, runMs:nowMs() - runLogStart});
         const ext = result.kind === 'video' ? 'mp4' : result.kind === 'audio' ? 'mp3' : result.kind === 'text' ? 'txt' : 'png';
         const additions = result.urls.map((item, i) => {
@@ -13836,6 +14172,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
             return [];
         }
         outputNode.running = false;
+        if(request?.actualApiPrompt && logKind === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
         render();
         throw e;
@@ -13864,7 +14201,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
             createdAt:Date.now()
         };
         const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
-        const runLog = smartRunSnapshot(rootNode, prompt, request.refs || [], logKind);
+        const runLog = smartRunSnapshot(rootNode, prompt, request.refs || [], logKind, request);
         const runLogStart = nowMs();
         const expectedCount = isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'
             ? Math.max(1, Math.min(8, Number(runSettings.count || 1)))
@@ -13912,9 +14249,10 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
             }
             result = {urls:(outputSlot.images || []).map(img => img?.url ? img : null).filter(Boolean), kind:'image'};
         } else {
-            result = await generateUrlsForCurrentSettings(outputSlot, prompt, request.refs || [], runSettings);
+            result = await generateUrlsForCurrentSettings(outputSlot, prompt, request.refs || [], runSettings, request);
         }
         if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : tr('smart.errNoOutImages'));
+        if(request?.actualApiPrompt && (result.kind || logKind) === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         let additions;
         if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'){
             additions = (outputSlot.images || []).map(img => stripImageGenerationMeta({...img})).filter(img => img?.url);
@@ -13939,6 +14277,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         addSmartGenerationLog({run:{...runLog, kind:result.kind || logKind}, outputs:result.urls, runMs:nowMs() - runLogStart});
         return rememberRoundOutputs(ctx, outputSlot, additions);
     } catch(e) {
+        if(request?.actualApiPrompt && logKind === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         if(handleJimengPendingSignal(outputSlot, e)){
             outputSlot.queued = false;
             return [];
@@ -14272,7 +14611,7 @@ async function runGeneration(){
     }
     const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
     const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video' ? 'video' : 'image';
-    const runLog = smartRunSnapshot(node, prompt, refs, logKind);
+    const runLog = smartRunSnapshot(node, prompt, refs, logKind, request);
     rememberRecentSmartSettings(settings, node);
     const runLogStart = nowMs();
     const expectedCount = settings.engine === 'runninghub'
@@ -14330,8 +14669,9 @@ async function runGeneration(){
             return;
         }
         if(isApiLikeEngine(settings.engine) && settings.apiKind === 'video'){
-            const outVideos = await runApiVideoGeneration(prompt, refs);
+            const outVideos = await runApiVideoGeneration(prompt, refs, settings, request);
             if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
+            if(request?.actualApiPrompt) runLog.requestPrompt = String(request.actualApiPrompt || '');
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:outVideos, runMs:nowMs() - runLogStart});
@@ -14383,6 +14723,7 @@ async function runGeneration(){
         scheduleSave();
     } catch(e) {
         settings = previousSettings;
+        if(request?.actualApiPrompt && logKind === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         if(handleJimengPendingSignal(pendingNode, e)){
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             delete pendingNode._runMetaTargetId;
@@ -14405,6 +14746,7 @@ async function runGeneration(){
         if(extracted) restoreFromExtraction(node, extracted);
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
+        notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
         toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
     } finally {
         if(!apiConcurrentRun){
@@ -14514,7 +14856,7 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     }
     throw new Error(tr('smart.rhTimeout'));
 }
-async function runApiVideoGeneration(prompt, refs, runSettings=settings){
+async function runApiVideoGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.videoModel) throw new Error(tr('smart.errNoVideoModel'));
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
@@ -14545,12 +14887,17 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings){
         const refVideos = manualVideo ? manualSmartMediaLinks(runSettings).map(item => item.url).filter(Boolean) : videoRefsOnly(uploadedRefs).map(ref => effUrl(ref)).filter(Boolean);
         const refAudios = audioRefsOnly(uploadedRefs).map(ref => effUrl(ref)).filter(Boolean).slice(0, 3);
         if(mismatchedAsset) toast('部分认证素材属于其它平台，已回退为普通素材。切换到对应平台的视频接口才能用 asset:// 认证地址。');
+        const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
+            ? requestMeta.providerPrompts
+            : {};
+        const veniceProvider = isVeniceVideoProvider(runSettings.videoProvider);
+        const venicePrompt = String(providerPrompts.venice_video || prompt || '').trim() || String(prompt || '');
         const payload = {
-            prompt,
+            prompt: veniceProvider ? venicePrompt : prompt,
             provider_id: runSettings.videoProvider || 'comfly',
             model: runSettings.videoModel || 'veo3-fast',
             duration: Math.max(1, Math.min(60, Number(runSettings.videoDuration) || 5)),
-            aspect_ratio: runSettings.videoAspect || '16:9',
+            aspect_ratio: veniceProvider ? normalizeVeniceVideoAspect(runSettings.videoAspect || '16:9', uploadedRefs) : (runSettings.videoAspect || '16:9'),
             resolution: runSettings.videoResolution || '',
             images: refImages,
             videos: refVideos,
@@ -14561,8 +14908,12 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings){
             camerafixed: Boolean(runSettings.videoCameraFixed),
             generate_audio: Boolean(runSettings.videoGenerateAudio),
             multimodal: Boolean(runSettings.videoMultimodal),
-            trusted_asset: useAssetUris
+            trusted_asset: useAssetUris,
+            provider_prompts: providerPrompts
         };
+        if(requestMeta && typeof requestMeta === 'object'){
+            requestMeta.actualApiPrompt = String(payload.prompt || '');
+        }
         const result = await fetch('/api/canvas-video', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -14616,6 +14967,38 @@ async function urlToBase64(url){
     });
 }
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+function smartBackgroundNotify(title, body=''){
+    if(typeof window === 'undefined' || typeof document === 'undefined') return;
+    if(document.visibilityState === 'visible') return;
+    if(!('Notification' in window)) return;
+    const show = () => {
+        try {
+            new Notification(String(title || '任务通知'), {body:String(body || '').slice(0, 200)});
+        } catch(_err){}
+    };
+    if(Notification.permission === 'granted'){
+        show();
+        return;
+    }
+    if(Notification.permission === 'default'){
+        Notification.requestPermission().then(permission => {
+            if(permission === 'granted') show();
+        }).catch(() => {});
+    }
+}
+function smartTaskKindText(kind='image'){
+    if(kind === 'video') return '视频';
+    if(kind === 'audio') return '音频';
+    if(kind === 'text') return '文本';
+    return '图片';
+}
+function notifySmartTaskSuccess(kind='image', count=1){
+    const amount = Math.max(1, Number(count) || 1);
+    smartBackgroundNotify('任务完成', `已生成 ${amount} 个${smartTaskKindText(kind)}结果`);
+}
+function notifySmartTaskFailure(message=''){
+    smartBackgroundNotify('任务失败', String(message || tr('smart.errRunFailed')));
+}
 async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     const allRefs = refs || [];
     refs = imageRefsOnly(allRefs);
@@ -14818,6 +15201,7 @@ function finalizeJimengPending(node, urls, kind='image'){
     node.runTimerHidden = false;
     render();
     scheduleSave();
+    notifySmartTaskSuccess(kind, additions.length);
     return true;
 }
 function applyJimengQueryResult(node, data){
@@ -14830,6 +15214,7 @@ function applyJimengQueryResult(node, data){
         delete node.jimengPending;
         node.running = false;
         node.pending = 0;
+        notifySmartTaskFailure(data.error || '即梦任务失败');
         toast((data.error || '即梦任务失败').slice(0, 160));
         render();
         scheduleSave();
@@ -15014,6 +15399,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         else node.scale = mediaNodeDefaultScale(node);
         delete node.w;
         delete node.h;
+        notifySmartTaskSuccess(kind, node.images.length);
     }
 }
 async function resumeSmartPendingNode(node, logContext={}){
@@ -15057,6 +15443,7 @@ async function resumeSmartPendingNode(node, logContext={}){
                 node.running = false;
                 node.pending = Math.max(1, smartPendingTasks(node).length);
                 logTaskFailure(task.error, task);
+                notifySmartTaskFailure(task.error || '任务未丢失，可稍后手动查询结果');
                 toast('任务未丢失，可稍后手动查询结果');
                 render();
                 scheduleSave();
@@ -15075,6 +15462,7 @@ async function resumeSmartPendingNode(node, logContext={}){
             failures.push(e);
             logTaskFailure(e.message || tr('smart.errRunFailed'), task);
             if(e && typeof e === 'object') e.smartGenerationLogged = true;
+            notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
             toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
             render();
             scheduleSave();
@@ -16427,10 +16815,16 @@ composer.addEventListener('click', event => {
 });
 promptInput.addEventListener('input', maybeOpenMentionPicker);
 promptInput.addEventListener('input', () => {
+    refreshPromptMentionTokenLabels();
     delete promptInput.dataset.preserveDraftOnce;
     savePromptDraftForCurrent();
     renderInputThumbsRow(selectedNode());
     scheduleSave();
+});
+promptInput.addEventListener('paste', event => {
+    if(tryHandleMentionTokenPaste(event)) return;
+    // 其它内容保留浏览器原生富文本粘贴，仅在粘贴后轻量清理前导不可见字符。
+    setTimeout(cleanupPromptAfterNativePaste, 0);
 });
 promptInput.addEventListener('keyup', maybeOpenMentionPicker);
 promptInput.addEventListener('mouseup', saveMentionRange);

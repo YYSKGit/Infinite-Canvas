@@ -21,6 +21,8 @@ const volcSkInput = document.getElementById('volcSkInput');
 const volcAssetKeyHint = document.getElementById('volcAssetKeyHint');
 const volcProjectInput = document.getElementById('volcProjectInput');
 const volcRegionInput = document.getElementById('volcRegionInput');
+const veniceClientInput = document.getElementById('veniceClientInput');
+const veniceClientHint = document.getElementById('veniceClientHint');
 const jimengCliPanel = document.getElementById('jimengCliPanel');
 const jimengCliStatus = document.getElementById('jimengCliStatus');
 const jimengCredit = document.getElementById('jimengCredit');
@@ -541,6 +543,9 @@ function volcengineAssetKeyHintText(item){
     const sk = item?.has_volcengine_secret_key ? `SK 已保存：${item.volcengine_secret_key_env || 'API/.env'} ${item.volcengine_secret_key_preview || ''}` : 'SK 未保存';
     return `${ak} · ${sk}`;
 }
+function veniceClientHintText(item){
+    return item?.has_venice_client ? `当前 __client 已保存：${item.__client_env || 'API/.env'} ${item.__client || ''}` : '还没有保存 Venice 的 __client Cookie。';
+}
 function isNewUserProvider(item){
     if(!item) return false;
     if(item.id === 'modelscope') return !item.has_key;
@@ -775,6 +780,10 @@ function syncEditor(){
         if(sk) item.volcengine_secret_access_key = sk;
         item.volcengine_project_name = (volcProjectInput?.value.trim() || VOLCENGINE_DEFAULT_PROJECT_NAME);
         item.volcengine_region = (volcRegionInput?.value.trim() || VOLCENGINE_DEFAULT_REGION);
+    }
+    if(selectedProtocol === 'venice'){
+        const clientCookie = veniceClientInput?.value.trim() || '';
+        if(clientCookie) item.venice_client = clientCookie;
     }
 }
 function ensureRunningHubLists(item){
@@ -2433,6 +2442,7 @@ function renderEditor(){
     const isJimeng = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'jimeng';
     const isCodex = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'codex';
     const isGeminiCli = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'gemini-cli';
+    const isVenice = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'venice';
     if(isRunningHub){
         ensureRunningHubLists(item);
         if(rhFreeKeyInput){
@@ -2485,10 +2495,20 @@ function renderEditor(){
         keyInput.placeholder = 'Antigravity CLI 使用本机 agy 登录态，无需 API Key';
         keyHint.textContent = '请先安装 Antigravity CLI，并在终端执行 agy 完成登录';
     }
+    if(isVenice){
+        if(veniceClientInput){
+            veniceClientInput.value = '';
+            veniceClientInput.placeholder = item.has_venice_client ? `保持当前 __client ${item.__client || ''}` : '输入 Venice 的 __client Cookie';
+        }
+        if(veniceClientHint){
+            veniceClientHint.textContent = veniceClientHintText(item);
+        }
+    }
     document.body.classList.toggle('show-ms', isModelScope);
     document.body.classList.toggle('show-runninghub', isRunningHub);
     document.body.classList.toggle('show-volcengine', isVolcengine);
     document.body.classList.toggle('show-volcengine-standalone', isStandaloneVolcengine);
+    document.body.classList.toggle('show-venice', isVenice);
     document.body.classList.toggle('show-jimeng', isJimeng);
     document.body.classList.toggle('show-codex', isCodex);
     document.body.classList.toggle('show-gemini-cli', isGeminiCli);
@@ -3223,6 +3243,24 @@ async function clearKeyOnly(){
     const ok = await saveProviders();
     if(ok) keyInput.value = '';
 }
+async function saveVeniceClientOnly(){
+    const item = provider();
+    if(!item || String(item.protocol || '').toLowerCase() !== 'venice') return;
+    const value = veniceClientInput?.value.trim() || '';
+    if(!value){ alert('请输入 __client Cookie'); return; }
+    item.venice_client = value;
+    const ok = await saveProviders();
+    if(ok && veniceClientInput) veniceClientInput.value = '';
+}
+async function clearVeniceClientOnly(){
+    const item = provider();
+    if(!item || String(item.protocol || '').toLowerCase() !== 'venice') return;
+    if(!item.has_venice_client && !veniceClientInput?.value){ return; }
+    if(!confirm('确认清除 Venice 的 __client Cookie？')) return;
+    item._clearVeniceClient = true;
+    const ok = await saveProviders();
+    if(ok && veniceClientInput) veniceClientInput.value = '';
+}
 const FIXED_PROTOCOL_PROVIDER_IDS = new Set(['modelscope', 'volcengine', 'runninghub']);
 function providerSupportsModelProtocol(item){
     return Boolean(item) && !FIXED_PROTOCOL_PROVIDER_IDS.has(item.id);
@@ -3608,8 +3646,10 @@ async function saveProviders(){
                 volcengine_secret_access_key:item.volcengine_secret_access_key || undefined,
                 api_key:item.api_key || undefined,
                 wallet_api_key:item.wallet_api_key || undefined,
+                __client:item.venice_client || undefined,
                 clear_key:item._clearKey === true,
                 clear_wallet_key:item._clearWalletKey === true,
+                clear__client:item._clearVeniceClient === true,
                 clear_volcengine_access_key_id:item._clearVolcengineAccessKey === true,
                 clear_volcengine_secret_access_key:item._clearVolcengineSecretKey === true
             })))
@@ -3622,8 +3662,10 @@ async function saveProviders(){
             delete item.wallet_api_key;
             delete item.volcengine_access_key_id;
             delete item.volcengine_secret_access_key;
+            delete item.venice_client;
             delete item._clearKey;
             delete item._clearWalletKey;
+            delete item._clearVeniceClient;
             delete item._clearVolcengineAccessKey;
             delete item._clearVolcengineSecretKey;
         });

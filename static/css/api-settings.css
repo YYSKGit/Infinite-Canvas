@@ -313,6 +313,8 @@ body.show-volcengine-standalone .volcengine-hint { display:block; }
 body.show-runninghub .rh-key-stack { display:grid; }
 .volcengine-key-stack { display:none; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 body.show-volcengine-standalone .volcengine-key-stack:not([hidden]) { display:grid; }
+.venice-client-stack { display:none; grid-template-columns:1fr; gap:12px; }
+body.show-venice .venice-client-stack { display:grid; }
 .volcengine-key-stack .rh-key-item:first-child,
 .volcengine-key-stack .volcengine-project-card { grid-column:1/-1; }
 .volcengine-project-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
