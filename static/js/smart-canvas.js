@@ -6660,6 +6660,7 @@ function smartRunPlatformLabel(run){
     const s = run?.settings || {};
     if(s.engine === 'comfy') return 'ComfyUI';
     if(s.engine === 'modelscope') return 'Modelscope';
+    if(s.engine === 'runninghub') return 'RunningHub';
     if(run?.kind === 'video') return videoProviderById(s.videoProvider || '')?.name || s.videoProvider || 'Video';
     return apiProviderById(s.provider_id || '')?.name || s.provider_id || 'API';
 }
@@ -6672,20 +6673,20 @@ function smartRunRequestMeta(run){
 }
 function smartRequestPromptForRun(prompt, runSettings={}, kind='image', requestMeta=null){
     const basePrompt = String(prompt || '').trim();
-    if(kind !== 'video') return basePrompt;
+    const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
+        ? requestMeta.providerPrompts
+        : {};
+    if(kind !== 'video') return String(providerPrompts.api_image || basePrompt).trim() || basePrompt;
     if(requestMeta && typeof requestMeta === 'object'){
         const actualPrompt = String(requestMeta.actualApiPrompt || '').trim();
         if(actualPrompt) return actualPrompt;
     }
     const settingsSnapshot = runSettings || {};
     if(!isVeniceVideoProvider(settingsSnapshot.videoProvider || '')) return basePrompt;
-    const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
-        ? requestMeta.providerPrompts
-        : {};
     return String(providerPrompts.venice_video || basePrompt).trim() || basePrompt;
 }
-function smartRunSnapshot(node, prompt, refs=[], kind='image', requestMeta=null){
-    const settingsSnapshot = cloneSmartSettings(settings);
+function smartRunSnapshot(node, prompt, refs=[], kind='image', requestMeta=null, runSettings=settings){
+    const settingsSnapshot = cloneSmartSettings(runSettings || settings);
     return {
         nodeId:node?.id || '',
         nodeType:node?.type || 'smart-image',
@@ -12994,11 +12995,10 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     }
     const displayPrompt = originalPrompt || body;
     if(hasMentionToken && refs.length){
-        const mapText = refs.map((img, i) => `图${i + 1}：${img.name || `图片${i + 1}`}`).join('\n');
         return {
-            prompt:`${tr('smart.refMapHeader')}\n${mapText}\n\n${tr('smart.refUserNeed')}\n${body}`,
+            prompt:body,
             displayPrompt,
-            providerPrompts:{venice_video:veniceBody || body},
+            providerPrompts:{api_image:body, venice_video:veniceBody || body},
             refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
             mentioned:true
         };
@@ -13006,7 +13006,7 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     return {
         prompt:body,
         displayPrompt,
-        providerPrompts:{venice_video:veniceBody || body},
+        providerPrompts:{api_image:body, venice_video:veniceBody || body},
         refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
         mentioned:false
     };
@@ -13758,10 +13758,18 @@ function loadNodePromptDraftToInput(node){
     refreshPromptMentionTokenLabels();
 }
 async function createSmartComfyTask(payload){
+    const requestBodyJson = JSON.stringify(payload);
+    smartLogActualGenerationRequest('ComfyUI', {
+        kind:'image',
+        endpoint:'/api/canvas-comfy-tasks',
+        prompt:payload?.prompt || '',
+        counts:smartPayloadReferenceMediaCounts(payload),
+        extra:{workflow:payload?.workflow_json || '', type:payload?.type || '', requestBodyJson}
+    });
     const res = await fetch('/api/canvas-comfy-tasks', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(payload)
+        body:requestBodyJson
     });
     if(!res.ok) throw new Error(await smartResponseErrorMessage(res, tr('smart.errRunFailed')));
     return res.json();
@@ -13820,7 +13828,7 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         return {urls:await runApiVideoGeneration(prompt, refs, activeSettings, requestMeta), kind:'video'};
     }
     if(isApiLikeEngine(activeSettings.engine)){
-        const taskResult = await runApiGeneration(prompt, refs, activeSettings);
+        const taskResult = await runApiGeneration(prompt, refs, activeSettings, requestMeta);
         const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
         if(taskIds.length){
             const settled = await Promise.all(taskIds.map(taskId => pollSmartCanvasTask(taskId)));
@@ -13833,7 +13841,7 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
     const urls = activeSettings.engine === 'runninghub'
         ? await runRunningHubGeneration(prompt, refs, activeSettings)
         : activeSettings.engine === 'modelscope'
-            ? await runModelscopeGeneration(prompt, refs, activeSettings)
+            ? await runModelscopeGeneration(prompt, refs, activeSettings, requestMeta)
             : [];
     return {urls, kind:mediaKindForUrls(urls, 'image')};
 }
@@ -13930,7 +13938,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
         meta.promptText = requestNode.promptDraftText || request.displayPrompt || '';
     }
     const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
-    const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind, request);
+    const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind, request, runSettings);
     const runLogStart = nowMs();
     const targetPromptState = {
         promptDraftHtml:targetNode.promptDraftHtml,
@@ -14020,7 +14028,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
             createdAt:Date.now()
         };
         const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
-        const runLog = smartRunSnapshot(rootNode, prompt, request.refs || [], logKind, request);
+        const runLog = smartRunSnapshot(rootNode, prompt, request.refs || [], logKind, request, runSettings);
         const runLogStart = nowMs();
         const expectedCount = isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'
             ? Math.max(1, Math.min(8, Number(runSettings.count || 1)))
@@ -14041,7 +14049,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         settings = previousSettings;
         let result;
         if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'){
-            const taskResult = await runApiGeneration(prompt, request.refs || [], runSettings);
+            const taskResult = await runApiGeneration(prompt, request.refs || [], runSettings, request);
             const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
             const existing = cleanHistoryImages(outputSlot.images || []);
@@ -14430,7 +14438,7 @@ async function runGeneration(){
     }
     const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
     const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video' ? 'video' : 'image';
-    const runLog = smartRunSnapshot(node, prompt, refs, logKind, request);
+    const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, settings);
     rememberRecentSmartSettings(settings, node);
     const runLogStart = nowMs();
     const expectedCount = settings.engine === 'runninghub'
@@ -14502,8 +14510,8 @@ async function runGeneration(){
         const outImages = settings.engine === 'runninghub'
             ? await runRunningHubGeneration(prompt, refs)
             : settings.engine === 'modelscope'
-                ? await runModelscopeGeneration(prompt, refs)
-                : await runApiGeneration(prompt, refs);
+                ? await runModelscopeGeneration(prompt, refs, settings, request)
+                : await runApiGeneration(prompt, refs, settings, request);
         if(isApiLikeEngine(settings.engine)){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
@@ -14624,11 +14632,82 @@ function comfyFieldKind(field){
     if(field?.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
     return 'setting';
 }
-async function runApiGeneration(prompt, refs, runSettings=settings){
+function smartReferenceMediaCounts(refs=[]){
+    const clean = (refs || []).map(ref => typeof ref === 'string' ? {url:ref} : ref).filter(ref => ref?.url);
+    const images = imageRefsOnly(clean).length;
+    const videos = videoRefsOnly(clean).length;
+    const audios = audioRefsOnly(clean).length;
+    return {total:clean.length, images, videos, audios};
+}
+function smartPayloadReferenceMediaCounts(payload={}){
+    const counts = {total:0, images:0, videos:0, audios:0};
+    const add = (kind, amount=1) => {
+        const n = Math.max(0, Number(amount) || 0);
+        if(!n) return;
+        if(kind === 'video') counts.videos += n;
+        else if(kind === 'audio') counts.audios += n;
+        else counts.images += n;
+        counts.total += n;
+    };
+    if(Array.isArray(payload.reference_images)) add('image', payload.reference_images.filter(item => item?.url || item).length);
+    if(Array.isArray(payload.images)) add('image', payload.images.filter(Boolean).length);
+    if(Array.isArray(payload.videos)) add('video', payload.videos.filter(Boolean).length);
+    if(Array.isArray(payload.audios)) add('audio', payload.audios.filter(Boolean).length);
+    const scan = value => {
+        if(!value || typeof value !== 'object') return;
+        Object.entries(value).forEach(([key, entry]) => {
+            const lowerKey = String(key || '').toLowerCase();
+            if(entry && typeof entry === 'object' && !Array.isArray(entry)){
+                ['image','video','audio'].forEach(kind => {
+                    const mediaValue = entry[kind];
+                    if(typeof mediaValue === 'string' && mediaValue.trim()) add(kind);
+                    else if(Array.isArray(mediaValue)) add(kind, mediaValue.filter(Boolean).length);
+                });
+                const rest = Object.fromEntries(Object.entries(entry).filter(([childKey]) => !['image','video','audio'].includes(String(childKey || '').toLowerCase())));
+                scan(rest);
+            } else if(typeof entry === 'string' && entry.trim()){
+                if(lowerKey.includes('video')) add('video');
+                else if(lowerKey.includes('audio')) add('audio');
+                else if(lowerKey.includes('image')) add('image');
+            }
+        });
+    };
+    scan(payload.params);
+    return counts;
+}
+function smartLogActualGenerationRequest(label, {kind='image', endpoint='', prompt='', refs=null, counts=null, provider='', model='', extra={}}={}){
+    const referenceMediaCounts = counts || smartReferenceMediaCounts(refs || []);
+    console.log('[Smart Canvas] actual generation request', {
+        label,
+        kind,
+        endpoint,
+        provider,
+        model,
+        prompt:String(prompt || ''),
+        referenceMediaCount:referenceMediaCounts.total,
+        referenceMediaCounts,
+        ...extra
+    });
+}
+async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
-    const payload = {prompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)};
-    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
+    const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
+        ? requestMeta.providerPrompts
+        : {};
+    const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
+    const payload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)};
+    const requestBodyJson = JSON.stringify(payload);
+    smartLogActualGenerationRequest('API Image', {
+        kind:'image',
+        endpoint:'/api/canvas-image-tasks',
+        provider:payload.provider_id,
+        model:payload.model,
+        prompt:payload.prompt,
+        counts:smartPayloadReferenceMediaCounts(payload),
+        extra:{taskCount:count, size:payload.size, requestBodyJson}
+    });
+    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
         if(!r.ok) throw new Error(await r.text());
         return r.json();
     })));
@@ -14648,10 +14727,18 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const body = mode === 'workflow'
         ? {workflowId:ref.id, nodeInfoList, useWallet:runSettings.rhPayment === 'wallet', ...workflowExtras}
         : {webappId:ref.id, nodeInfoList, instanceType:runSettings.rhInstanceType || '', useWallet:runSettings.rhPayment === 'wallet'};
+    const requestBodyJson = JSON.stringify(body);
+    smartLogActualGenerationRequest('RunningHub', {
+        kind:'image',
+        endpoint,
+        prompt:media.prompt,
+        counts:{total:(media.refs || []).length, images:(media.image || []).length, videos:(media.video || []).length, audios:(media.audio || []).length},
+        extra:{mode, id:ref.id || '', requestBodyJson}
+    });
     const submit = await fetch(endpoint, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(body)
+        body:requestBodyJson
     }).then(async r => {
         const data = await r.json();
         if(!r.ok || data.success === false) throw new Error(data.detail || data.error || tr('smart.rhFailed'));
@@ -14671,7 +14758,10 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
             if(!urls.length) throw new Error(tr('smart.rhOutputsEmpty'));
             return urls;
         }
-        if(data.status === 'FAILED') throw new Error(data.failReason || tr('smart.rhFailed'));
+        if(['FAILED','FAIL','ERROR','CANCELED','CANCELLED','CANCEL','TIMEOUT','EXPIRED','REJECTED','UNKNOWN'].includes(String(data.status || '').toUpperCase())){
+            const statusText = data.status ? ` (${data.status}${data.code !== undefined && data.code !== null ? `/${data.code}` : ''})` : '';
+            throw new Error(data.failReason || `${tr('smart.rhFailed')}${statusText}`);
+        }
     }
     throw new Error(tr('smart.rhTimeout'));
 }
@@ -14730,13 +14820,23 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
             trusted_asset: useAssetUris,
             provider_prompts: providerPrompts
         };
+        const requestBodyJson = JSON.stringify(payload);
+        smartLogActualGenerationRequest('API Video', {
+            kind:'video',
+            endpoint:'/api/canvas-video',
+            provider:payload.provider_id,
+            model:payload.model,
+            prompt:payload.prompt,
+            counts:{total:refImages.length + refVideos.length + refAudios.length, images:refImages.length, videos:refVideos.length, audios:refAudios.length},
+            extra:{duration:payload.duration, aspectRatio:payload.aspect_ratio, resolution:payload.resolution, requestBodyJson}
+        });
         if(requestMeta && typeof requestMeta === 'object'){
             requestMeta.actualApiPrompt = String(payload.prompt || '');
         }
         const result = await fetch('/api/canvas-video', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(payload)
+            body:requestBodyJson
         }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.errRunFailed'))); return r.json(); });
         if(result && result.jimeng_pending) throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
         return resultMediaUrls(result);
@@ -14744,8 +14844,12 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         transientSmartCloudLinks = [];
     }
 }
-async function runModelscopeGeneration(prompt, refs, runSettings=settings){
+async function runModelscopeGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     refs = imageRefsOnly(refs);
+    const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
+        ? requestMeta.providerPrompts
+        : {};
+    const actualPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
     const modelKey = runSettings.msgenModel || 'zimage';
     const msModel = MS_GEN_MODELS[modelKey] || MS_GEN_MODELS.zimage;
     if(msModel.supportsImage && !refs.length) throw new Error(tr('smart.errMsNeedRefs'));
@@ -14762,10 +14866,20 @@ async function runModelscopeGeneration(prompt, refs, runSettings=settings){
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const submit = async () => {
         let body;
-        if(modelKey === 'zimage') body = {prompt, resolution:`${width}x${height}`};
-        else if(modelKey === 'qwen_edit') body = {prompt, image_urls:imageUrls, resolution:`${width}x${height}`};
-        else body = {prompt, model:modelKey === 'custom' ? (runSettings.msCustomModel || modelscopeImageModels()[0]) : msModel.modelId, image_urls:imageUrls, width, height, size:`${width}x${height}`};
-        const data = await fetch(msModel.endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(async r => {
+        if(modelKey === 'zimage') body = {prompt:actualPrompt, resolution:`${width}x${height}`};
+        else if(modelKey === 'qwen_edit') body = {prompt:actualPrompt, image_urls:imageUrls, resolution:`${width}x${height}`};
+        else body = {prompt:actualPrompt, model:modelKey === 'custom' ? (runSettings.msCustomModel || modelscopeImageModels()[0]) : msModel.modelId, image_urls:imageUrls, width, height, size:`${width}x${height}`};
+        const requestBodyJson = JSON.stringify(body);
+        smartLogActualGenerationRequest('Modelscope', {
+            kind:'image',
+            endpoint:msModel.endpoint,
+            provider:'modelscope',
+            model:modelKey === 'custom' ? (runSettings.msCustomModel || '') : msModel.modelId,
+            prompt:body.prompt,
+            counts:{total:imageUrls.length, images:imageUrls.length, videos:0, audios:0},
+            extra:{taskCount:count, size:`${width}x${height}`, requestBodyJson}
+        });
+        const data = await fetch(msModel.endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
             if(!r.ok) throw new Error(await r.text());
             return r.json();
         });

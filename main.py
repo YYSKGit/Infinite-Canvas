@@ -11744,8 +11744,11 @@ async def runninghub_query(taskId: str = ""):
             status = "QUEUED"
         elif code in (805, "805"):
             status = "FAILED"
+        elif code in (806, "806", 807, "807"):
+            status = "CANCELED"
         else:
-            status = "UNKNOWN"
+            fail_reason = str(runninghub_fail_reason(raw) or "").lower()
+            status = "CANCELED" if "cancel" in fail_reason or "取消" in fail_reason else "UNKNOWN"
         return {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
 
 @app.post("/api/runninghub/upload-asset")
