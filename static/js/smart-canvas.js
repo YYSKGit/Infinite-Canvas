@@ -12090,187 +12090,6 @@ function refreshPromptMentionTokenLabels(){
         if(labelEl) labelEl.textContent = label;
     });
 }
-function cleanupPromptLeadingInvisibleChars(){
-    if(!promptInput) return false;
-    const normalizeLeadingText = value => String(value || '')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '')
-        .replace(/\u00A0/g, ' ');
-    const hasMeaningfulContent = node => {
-        if(!node) return false;
-        if(node.nodeType === Node.TEXT_NODE){
-            return normalizeLeadingText(node.textContent).trim().length > 0;
-        }
-        if(node.nodeType !== Node.ELEMENT_NODE) return false;
-        if(node.classList?.contains('mention-image-token')) return true;
-        if(node.tagName === 'BR') return false;
-        if(node.querySelector?.('.mention-image-token')) return true;
-        const text = normalizeLeadingText(node.textContent || '').trim();
-        return text.length > 0;
-    };
-    let changed = false;
-    // 清理粘贴后开头的不可见字符、空白文本和空节点（如前导 <br>/<div><br></div>），不动 token 本体。
-    while(promptInput.firstChild){
-        const first = promptInput.firstChild;
-        if(first.nodeType === Node.TEXT_NODE){
-            const raw = String(first.textContent || '');
-            const cleaned = normalizeLeadingText(raw);
-            if(!cleaned.trim()){
-                promptInput.removeChild(first);
-                changed = true;
-                continue;
-            }
-            if(cleaned !== raw){
-                first.textContent = cleaned;
-                changed = true;
-            }
-            break;
-        }
-        if(first.nodeType === Node.ELEMENT_NODE){
-            if(hasMeaningfulContent(first)) break;
-            promptInput.removeChild(promptInput.firstChild);
-            changed = true;
-            continue;
-        }
-        promptInput.removeChild(first);
-        changed = true;
-    }
-    return changed;
-}
-function trimPromptFragmentBoundaryWhitespace(fragment){
-    if(!fragment) return false;
-    let changed = false;
-    const trimStart = value => String(value || '').replace(/^[\s\u00A0\u200B-\u200D\uFEFF]+/, '');
-    const trimEnd = value => String(value || '').replace(/[\s\u00A0\u200B-\u200D\uFEFF]+$/, '');
-    while(fragment.firstChild){
-        const first = fragment.firstChild;
-        if(first.nodeType === Node.TEXT_NODE){
-            const raw = String(first.textContent || '');
-            const cleaned = trimStart(raw);
-            if(!cleaned){
-                fragment.removeChild(first);
-                changed = true;
-                continue;
-            }
-            if(cleaned !== raw){
-                first.textContent = cleaned;
-                changed = true;
-            }
-            break;
-        }
-        if(first.nodeType === Node.ELEMENT_NODE && first.tagName === 'BR'){
-            fragment.removeChild(first);
-            changed = true;
-            continue;
-        }
-        break;
-    }
-    while(fragment.lastChild){
-        const last = fragment.lastChild;
-        if(last.nodeType === Node.TEXT_NODE){
-            const raw = String(last.textContent || '');
-            const cleaned = trimEnd(raw);
-            if(!cleaned){
-                fragment.removeChild(last);
-                changed = true;
-                continue;
-            }
-            if(cleaned !== raw){
-                last.textContent = cleaned;
-                changed = true;
-            }
-            break;
-        }
-        if(last.nodeType === Node.ELEMENT_NODE && last.tagName === 'BR'){
-            fragment.removeChild(last);
-            changed = true;
-            continue;
-        }
-        break;
-    }
-    return changed;
-}
-function buildMentionPasteFragmentFromHtml(html){
-    const source = String(html || '');
-    if(!source || !source.includes('mention-image-token')) return null;
-    const tpl = document.createElement('template');
-    tpl.innerHTML = source;
-    if(!tpl.content.querySelector('.mention-image-token')) return null;
-    const fragment = document.createDocumentFragment();
-    const walk = (node, out) => {
-        if(!node) return;
-        if(node.nodeType === Node.TEXT_NODE){
-            out.appendChild(document.createTextNode(node.textContent || ''));
-            return;
-        }
-        if(node.nodeType !== Node.ELEMENT_NODE) return;
-        if(node.classList?.contains('mention-image-token')){
-            const token = node.cloneNode(true);
-            token.contentEditable = 'false';
-            out.appendChild(token);
-            return;
-        }
-        if(node.tagName === 'BR') return;
-        node.childNodes.forEach(child => walk(child, out));
-    };
-    tpl.content.childNodes.forEach(node => walk(node, fragment));
-    trimPromptFragmentBoundaryWhitespace(fragment);
-    return fragment.childNodes.length ? fragment : null;
-}
-function fragmentToHtml(fragment){
-    if(!fragment) return '';
-    const container = document.createElement('div');
-    container.appendChild(fragment.cloneNode(true));
-    // 避免复制片段中的结构性换行字符经 insertHTML 转换成 <br>/<div> 导致中间粘贴意外换行。
-    return String(container.innerHTML || '').replace(/\r?\n/g, '');
-}
-function insertFragmentIntoPromptAtSelection(fragment){
-    if(!promptInput || !fragment) return false;
-    promptInput.focus();
-    const html = fragmentToHtml(fragment);
-    if(html){
-        try {
-            if(typeof document.execCommand === 'function' && document.execCommand('insertHTML', false, html)){
-                return true;
-            }
-        } catch(_err) {}
-    }
-    const sel = window.getSelection();
-    if(!sel || !sel.rangeCount) return false;
-    const range = sel.getRangeAt(0);
-    range.deleteContents();
-    const lastNode = fragment.lastChild;
-    range.insertNode(fragment);
-    if(lastNode){
-        range.setStartAfter(lastNode);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-    }
-    return true;
-}
-function tryHandleMentionTokenPaste(event){
-    const html = String(event?.clipboardData?.getData('text/html') || '');
-    if(!html || !html.includes('mention-image-token')) return false;
-    const fragment = buildMentionPasteFragmentFromHtml(html);
-    if(!fragment) return false;
-    event.preventDefault();
-    if(!insertFragmentIntoPromptAtSelection(fragment)) return false;
-    refreshPromptMentionTokenLabels();
-    bindSmartPreviewImageFallbacks(promptInput);
-    // 统一走现有 input 处理链，避免粘贴分支额外的异步重绘把内容回滚为粘贴前状态。
-    promptInput.dispatchEvent(new Event('input', {bubbles:true}));
-    return true;
-}
-function cleanupPromptAfterNativePaste(){
-    if(!promptInput) return;
-    const changed = cleanupPromptLeadingInvisibleChars();
-    if(!changed) return;
-    refreshPromptMentionTokenLabels();
-    delete promptInput.dataset.preserveDraftOnce;
-    savePromptDraftForCurrent();
-    renderInputThumbsRow(selectedNode());
-    scheduleSave();
-}
 function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
     return {
         prompt,
@@ -16821,10 +16640,42 @@ promptInput.addEventListener('input', () => {
     renderInputThumbsRow(selectedNode());
     scheduleSave();
 });
-promptInput.addEventListener('paste', event => {
-    if(tryHandleMentionTokenPaste(event)) return;
-    // 其它内容保留浏览器原生富文本粘贴，仅在粘贴后轻量清理前导不可见字符。
-    setTimeout(cleanupPromptAfterNativePaste, 0);
+promptInput.addEventListener('copy', event => {
+    const sel = window.getSelection();
+    if(!sel || !sel.rangeCount || !promptInput.contains(sel.anchorNode)) return;
+    const range = sel.getRangeAt(0);
+    const container = document.createElement('div');
+    container.appendChild(range.cloneContents());
+    const htmlData = container.innerHTML;
+    if(!htmlData) return;
+    const text = (sel.toString() || '').replace(/^\n+/, '').replace(/\n+$/, '');
+    event.clipboardData.setData('text/html', `<meta charset='utf-8'>${htmlData}`);
+    event.clipboardData.setData('text/plain', text);
+    event.preventDefault();
+});
+promptInput.addEventListener('cut', event => {
+    const sel = window.getSelection();
+    if(!sel || !sel.rangeCount || !promptInput.contains(sel.anchorNode)) return;
+    const range = sel.getRangeAt(0);
+    const container = document.createElement('div');
+    container.appendChild(range.cloneContents());
+    const htmlData = container.innerHTML;
+    if(!htmlData) return;
+    const text = (sel.toString() || '').replace(/^\n+/, '').replace(/\n+$/, '');
+    event.clipboardData.setData('text/html', `<meta charset='utf-8'>${htmlData}`);
+    event.clipboardData.setData('text/plain', text);
+    event.preventDefault();
+    let deletedWithNativeUndo = false;
+    try {
+        deletedWithNativeUndo = typeof document.execCommand === 'function' && document.execCommand('delete');
+    } catch(_) {}
+    if(!deletedWithNativeUndo){
+        range.deleteContents();
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        promptInput.dispatchEvent(new Event('input', {bubbles:true}));
+    }
 });
 promptInput.addEventListener('keyup', maybeOpenMentionPicker);
 promptInput.addEventListener('mouseup', saveMentionRange);
