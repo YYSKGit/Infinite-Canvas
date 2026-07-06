@@ -965,6 +965,14 @@ function clearVolcengineSelectionOutsideVolcengine(target=settings){
 function isSmartImageNode(node){
     return Boolean(node && (node.type === 'smart-image' || !node.type));
 }
+function isGeneratedSmartOutputNode(node){
+    return Boolean(isSmartImageNode(node) && (
+        node.runAt || node.runSettings || node.runPrompt || node.runModelPrompt || node.sourceNodeId
+        || (Array.isArray(node.runInputRefs) && node.runInputRefs.some(ref => ref?.url))
+        || (Array.isArray(node.runPromptRefs) && node.runPromptRefs.some(ref => ref?.url))
+        || (node.images || []).some(img => img?.generatedResult)
+    ));
+}
 function isSmartGroupNode(node){
     return Boolean(node && node.type === 'smart-group');
 }
@@ -12104,12 +12112,43 @@ function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
         createdAt:Date.now()
     };
 }
+function shouldDropRunRefForNode(targetNode, ref, options={}){
+    if(!ref?.url) return true;
+    if(ref.nodeId && targetNode?.id && ref.nodeId === targetNode.id) return true;
+    const currentUrls = currentOutputUrlSetForRun(targetNode);
+    const url = canonicalSmartMediaUrl(ref);
+    if(!url || currentUrls.has(url)) return true;
+    return options.dropGeneratedOutputs === true && isGeneratedOutputRef(ref);
+}
+function cleanSavedRunRefsForNode(targetNode, refs=[], options={}){
+    return uniqueReferenceImages((refs || []).filter(ref => !shouldDropRunRefForNode(targetNode, ref, options)));
+}
+function cleanPromptDraftHtmlForNode(targetNode, html='', options={}){
+    if(!String(html || '').includes('mention-image-token') || typeof document === 'undefined') return html;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    tpl.content.querySelectorAll?.('.mention-image-token').forEach(token => {
+        const ref = {
+            url:token.dataset.url || '',
+            kind:token.dataset.kind || '',
+            name:token.dataset.name || '',
+            nodeId:token.dataset.nodeId || '',
+            imageIndex:token.dataset.imageIndex ?? ''
+        };
+        if(!shouldDropRunRefForNode(targetNode, ref, options)) return;
+        token.replaceWith(document.createTextNode(token.dataset.refLabel || token.dataset.name || ''));
+    });
+    return tpl.innerHTML;
+}
 function attachRunMeta(targetNode, meta){
     if(!targetNode || !meta) return;
+    const cleanOptions = {dropGeneratedOutputs:Boolean(targetNode.id && meta.sourceNodeId && targetNode.id === meta.sourceNodeId)};
+    const cleanPromptRefs = cleanSavedRunRefsForNode(targetNode, meta.promptRefs || [], cleanOptions);
+    const cleanInputRefs = cleanSavedRunRefsForNode(targetNode, meta.inputRefs || meta.promptRefs || [], cleanOptions);
     targetNode.runPrompt = meta.displayPrompt || meta.promptText || meta.prompt;
     targetNode.runModelPrompt = meta.prompt;
-    targetNode.runPromptRefs = meta.promptRefs || [];
-    targetNode.runInputRefs = (meta.inputRefs || meta.promptRefs || []).map(ref => ({
+    targetNode.runPromptRefs = cleanPromptRefs;
+    targetNode.runInputRefs = cleanInputRefs.map(ref => ({
         url:ref.url || '',
         name:ref.name || '',
         nodeId:ref.nodeId || '',
@@ -12122,9 +12161,10 @@ function attachRunMeta(targetNode, meta){
     targetNode.runAt = meta.createdAt;
     // 保存可编辑的 @-提及表单到草稿字段，方便点输出节点时还原原始可编辑形式
     if(meta.promptHtml != null){
-        const htmlHasToken = String(meta.promptHtml || '').includes('mention-image-token');
-        const rebuiltHtml = htmlHasToken ? '' : promptHtmlWithMentionTokens(meta.displayPrompt || meta.promptText || '', meta.promptRefs || []);
-        targetNode.promptDraftHtml = htmlHasToken ? meta.promptHtml : (rebuiltHtml || meta.promptHtml);
+        const cleanPromptHtml = cleanPromptDraftHtmlForNode(targetNode, meta.promptHtml, cleanOptions);
+        const htmlHasToken = String(cleanPromptHtml || '').includes('mention-image-token');
+        const rebuiltHtml = htmlHasToken ? '' : promptHtmlWithMentionTokens(meta.displayPrompt || meta.promptText || '', cleanPromptRefs);
+        targetNode.promptDraftHtml = htmlHasToken ? cleanPromptHtml : (rebuiltHtml || cleanPromptHtml);
         targetNode.promptDraftText = meta.promptText || '';
     }
     targetNode.images = (targetNode.images || []).map(img => stripImageGenerationMeta(img));
@@ -12449,13 +12489,47 @@ function toggleInputRefBlocked(node, img){
 }
 function defaultReferenceImagesFor(node, consume=false, ctx=smartLoopContext){
     if(!node) return [];
-    const self = selfReferenceImagesForNode(node, consume, ctx).filter(img => img?.url);
+    const nodeIsGeneratedOutput = isGeneratedSmartOutputNode(node);
+    const self = nodeIsGeneratedOutput ? [] : selfReferenceImagesForNode(node, consume, ctx).filter(img => img?.url);
     const upstream = (smartImageUsesWorkflowInput(node, ctx) ? workflowInputImagesFor(node, consume, ctx) : inputImagesFor(node, consume, ctx))
         .filter(img => img?.url);
     const manual = manualReferenceImagesFor(node);
     if(smartImageUsesWorkflowInput(node, ctx)) return uniqueReferenceImages([...upstream, ...manual]);
     if(self.length) return uniqueReferenceImages([...self, ...upstream, ...manual]);
     return uniqueReferenceImages([...upstream, ...manual]);
+}
+function currentOutputUrlSetForRun(node){
+    if(!isGeneratedSmartOutputNode(node)) return new Set();
+    return new Set((node.images || []).map(img => canonicalSmartMediaUrl(img)).filter(Boolean));
+}
+function canonicalSmartMediaUrl(itemOrUrl){
+    const raw = smartOriginalMediaUrl(itemOrUrl);
+    if(!raw) return '';
+    try {
+        const parsed = new URL(raw, window.location.origin);
+        if(parsed.pathname === '/api/download-output'){
+            const original = parsed.searchParams.get('url') || '';
+            return original || raw;
+        }
+    } catch(e) {}
+    return raw;
+}
+function isGeneratedOutputRef(ref){
+    const url = canonicalSmartMediaUrl(ref);
+    return /^\/assets\/output\//i.test(url) || /^\/output\//i.test(url);
+}
+function generationReferenceImagesForRun(node, consume=false, ctx=smartLoopContext){
+    const defaults = defaultReferenceImagesFor(node, consume, ctx);
+    if(!isSmartImageNode(node) || isHistoryGroupNode(node) || smartImageUsesWorkflowInput(node, ctx)) return defaults;
+    if(isGeneratedSmartOutputNode(node)){
+        const cleanOptions = {dropGeneratedOutputs:true};
+        const rawSavedInputs = Array.isArray(node.runInputRefs) ? node.runInputRefs.filter(ref => ref?.url) : [];
+        const savedInputs = cleanSavedRunRefsForNode(node, rawSavedInputs, cleanOptions);
+        const filteredDefaults = cleanSavedRunRefsForNode(node, defaults, cleanOptions);
+        return uniqueReferenceImages([...filteredDefaults, ...savedInputs]);
+    }
+    const self = selfReferenceImagesForNode(node, consume, ctx).filter(img => img?.url);
+    return self.length ? uniqueReferenceImages([...self, ...defaults]) : defaults;
 }
 function lineConnectionsFor(node){
     if(!node) return [];
@@ -13064,6 +13138,24 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
     selectedImage = {nodeId:'', index:-1};
     return output;
 }
+function markReplaceExistingOutputsOnNextResult(node){
+    if(node && isSmartImageNode(node) && !isHistoryGroupNode(node) && cleanHistoryImages(node.images || []).length) node._replaceExistingOutputsOnNextResult = true;
+}
+function archiveCurrentOutputsToHistory(node, kind='image'){
+    if(!node) return false;
+    node = liveSmartNode(node);
+    const existing = cleanHistoryImages(node.images || []);
+    if(!existing.length) return false;
+    const history = ensureHistoryGroupForNode(node);
+    history.images = cleanHistoryImages([...existing, ...(history.images || [])]);
+    history.title = '历史分组';
+    history.outputKind = kind;
+    history.scale = MEDIA_GROUP_DEFAULT_SCALE;
+    delete history.w;
+    delete history.h;
+    node.images = [];
+    return true;
+}
 function createParallelLoopOutputNode(templateNode, sourceNode, roundIndex, roundOffset=0){
     const rect = nodeRect(templateNode);
     const output = cloneSmartNode(templateNode, 0, 0);
@@ -13209,14 +13301,8 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
         const itemKind = (typeof item === 'object' && item.kind) || kind;
         return copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true});
     }).filter(img => img.url));
-    pendingNode.images = imgs;
-    markSmartNodeComplete(pendingNode, meta);
-    pendingNode.outputKind = kind;
-    if(imgs.length > 1) pendingNode.title = kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group';
-    else pendingNode.title = kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image';
-    pendingNode.scale = mediaNodeDefaultScale(pendingNode);
-    delete pendingNode.w;
-    delete pendingNode.h;
+    replaceOutputsToNodeWithHistory(pendingNode, imgs, kind, meta);
+    delete pendingNode._replaceExistingOutputsOnNextResult;
     const metaTarget = pendingNode._runMetaTargetId ? nodes.find(n => n.id === pendingNode._runMetaTargetId) : pendingNode;
     if(metaTarget) attachRunMeta(metaTarget, meta);
     pendingNode.images = (pendingNode.images || []).map(img => stripImageGenerationMeta(img));
@@ -14410,9 +14496,9 @@ function runSmartCascadeFromLoop(loopId){
 }
 async function runGeneration(){
     const node = selectedNode();
-    const request = buildPromptRequest(node, null, true, smartLoopContext);
-    const prompt = request.prompt.trim();
     if(!node) return;
+    const request = buildPromptRequest(node, generationReferenceImagesForRun(node, true, smartLoopContext), true, smartLoopContext);
+    const prompt = request.prompt.trim();
     if(smartNodeInFlight(node)) return;
     const refs = request.refs;
     const previousSettings = cloneSmartSettings(settings);
@@ -14447,26 +14533,17 @@ async function runGeneration(){
         ? (settings.comfyMode === 'text' || settings.comfyMode === 'enhance' || settings.comfyMode === 'edit' || settings.comfyMode === 'custom' ? 1 : 1)
         : Math.max(1, Math.min(8, Number(settings.count || 1)));
     const apiConcurrentRun = isApiLikeEngine(settings.engine) || settings.engine === 'runninghub' || settings.engine === 'modelscope' || settings.engine === 'comfy';
-    const nodeHasImages = isSmartGroupNode(node) ? imagesForNode(node).some(img => img?.url) : (node.images || []).some(img => img?.url);
-    const workflowModeRun = smartImageUsesWorkflowInput(node, smartLoopContext);
-    const sourceVisualState = isSmartImageNode(node) && nodeHasImages && !workflowModeRun ? {
-        images:(node.images || []).map(img => ({...img})),
-        title:node.title,
-        w:node.w,
-        h:node.h,
-        scale:node.scale,
-        outputKind:node.outputKind
-    } : null;
     pushUndo();
     let extracted = null;
     let branchNode = null;
     const groupRun = isSmartGroupNode(node);
-    const shouldCreateBranchOutput = groupRun || (nodeHasImages && !workflowModeRun);
+    const shouldCreateBranchOutput = groupRun;
     const pendingMeta = shouldCreateBranchOutput ? stripRunInputMeta(meta) : meta;
     undoSuppressed = true;
     if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, selectOutput:true, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
+    if(!branchNode) markReplaceExistingOutputsOnNextResult(pendingNode);
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
         pendingNode.pending = Math.max(1, Number(expectedCount) || 1);
@@ -14474,9 +14551,11 @@ async function runGeneration(){
         delete pendingNode.runFinishedAt;
         delete pendingNode.runElapsedMs;
         pendingNode.runTimerHidden = false;
-        const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs});
-        pendingNode.w = pendingBox.w;
-        pendingNode.h = pendingBox.h;
+        if(!cleanHistoryImages(pendingNode.images || []).length){
+            const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs});
+            pendingNode.w = pendingBox.w;
+            pendingNode.h = pendingBox.h;
+        }
         attachRunMeta(pendingNode, pendingMeta);
     }
     if(apiConcurrentRun){
@@ -14490,7 +14569,6 @@ async function runGeneration(){
     try {
         if(settings.engine === 'comfy'){
             await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta);
-            if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             settings = previousSettings;
             return;
@@ -14500,7 +14578,6 @@ async function runGeneration(){
             if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
             if(request?.actualApiPrompt) runLog.requestPrompt = String(request.actualApiPrompt || '');
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
-            if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:outVideos, runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
             settings = previousSettings;
@@ -14525,7 +14602,6 @@ async function runGeneration(){
             await saveCanvas();
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart});
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
-                if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
                 clearPromptInput({preserveDraft:true});
                 settings = previousSettings;
                 scheduleSave();
@@ -14533,7 +14609,6 @@ async function runGeneration(){
             }
             if(!(pendingNode.images || []).length) throw new Error(tr('smart.errNoOutImages'));
             if(outpaintSize) delete node.outpaintSize;
-            if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
             settings = previousSettings;
@@ -14543,7 +14618,6 @@ async function runGeneration(){
         if(!outImages.length) throw new Error(tr('smart.errNoOutImages'));
         if(outpaintSize) delete node.outpaintSize;
         finalizePendingNode(pendingNode, outImages, pendingMeta);
-        if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
         clearPromptInput({preserveDraft:true});
         settings = previousSettings;
@@ -14552,7 +14626,6 @@ async function runGeneration(){
         settings = previousSettings;
         if(request?.actualApiPrompt && logKind === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         if(handleJimengPendingSignal(pendingNode, e)){
-            if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             delete pendingNode._runMetaTargetId;
             clearPromptInput({preserveDraft:true});
             return;
@@ -14565,6 +14638,7 @@ async function runGeneration(){
         } else {
             pendingNode.pending = 0;
             pendingNode.running = false;
+            delete pendingNode._replaceExistingOutputsOnNextResult;
             if(!(pendingNode.images || []).length){
                 delete pendingNode.w;
                 delete pendingNode.h;
@@ -15126,6 +15200,7 @@ function finalizeJimengPending(node, urls, kind='image'){
     if(!additions.length) return false;
     delete node.jimengPending;
     replaceOutputsToNodeWithHistory(node, additions, kind, null, {skipShift:true});
+    delete node._replaceExistingOutputsOnNextResult;
     node.running = false;
     node.pending = 0;
     node.runFinishedAt = nowMs();
@@ -15306,6 +15381,10 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     node.pending = Math.max(0, Number(node.pending || 0) - 1);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
     const mediaItems = resultMediaUrls(images);
+    if(node._replaceExistingOutputsOnNextResult && mediaItems.length){
+        archiveCurrentOutputsToHistory(node, kind);
+        delete node._replaceExistingOutputsOnNextResult;
+    }
     const existing = cleanHistoryImages(node.images || []);
     const seen = new Set(existing.map(img => `${img.kind || ''}|${img.url || ''}`));
     const additions = cleanHistoryImages((mediaItems || []).map((item, i) => {
@@ -15322,6 +15401,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     if(additions.length) node.outputKind = kind;
     if(!node.pending && smartPendingTasks(node).length === 0){
         delete node.pendingTasks;
+        delete node._replaceExistingOutputsOnNextResult;
         node.runFinishedAt = nowMs();
         if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
