@@ -1234,7 +1234,39 @@ function playGenerationCompleteSound(){
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(tone.freq, start + tone.at);
                 gain.gain.setValueAtTime(0.0001, start + tone.at);
-                gain.gain.exponentialRampToValueAtTime(0.075, start + tone.at + 0.018);
+                gain.gain.exponentialRampToValueAtTime(0.15, start + tone.at + 0.018);
+                gain.gain.exponentialRampToValueAtTime(0.0001, start + tone.at + tone.duration);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start(start + tone.at);
+                osc.stop(start + tone.at + tone.duration + 0.02);
+            });
+        };
+        if(ctx.state === 'suspended') ctx.resume().then(play).catch(() => {});
+        else play();
+    } catch(e) {}
+}
+let generationErrorSoundAt = 0;
+function playGenerationErrorSound(){
+    const now = Date.now();
+    if(now - generationErrorSoundAt < 1200) return;
+    generationErrorSoundAt = now;
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if(!AudioCtx) return;
+        const ctx = playGenerationCompleteSound._ctx || (playGenerationCompleteSound._ctx = new AudioCtx());
+        const play = () => {
+            const start = ctx.currentTime + 0.015;
+            [
+                {freq:520, at:0, duration:0.13},
+                {freq:380, at:0.14, duration:0.13},
+                {freq:260, at:0.28, duration:0.22}
+            ].forEach(tone => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(tone.freq, start + tone.at);
+                gain.gain.setValueAtTime(0.0001, start + tone.at);
+                gain.gain.exponentialRampToValueAtTime(0.18, start + tone.at + 0.015);
                 gain.gain.exponentialRampToValueAtTime(0.0001, start + tone.at + tone.duration);
                 osc.connect(gain).connect(ctx.destination);
                 osc.start(start + tone.at);
@@ -6773,7 +6805,8 @@ function addSmartGenerationLog({run, outputs=[], runMs=0, error=''}) {
             name:item.name || item.filename || ''
         });
     }).filter(item => item?.url);
-    if(!error && outputItems.length) playGenerationCompleteSound();
+    if(error) playGenerationErrorSound();
+    else if(outputItems.length) playGenerationCompleteSound();
     const entry = {
         id:uid('log'),
         createdAt:Date.now(),
