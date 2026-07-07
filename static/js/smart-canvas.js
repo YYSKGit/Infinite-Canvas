@@ -14746,7 +14746,7 @@ async function runGeneration(){
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
         if(!e?.smartGenerationLogged) notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
-        toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
+        if(!e?.smartGenerationLogged) toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
     } finally {
         if(!apiConcurrentRun){
             clearNodeRunningState(pendingNode);
@@ -14918,13 +14918,22 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     });
     const taskId = submit.taskId;
     if(!taskId) throw new Error(tr('smart.rhNoTaskId'));
+    let rhPollErrors = 0;
     for(let i = 0; i < 720; i++){
         await sleep(2500);
-        const data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}`).then(async r => {
-            const json = await r.json();
-            if(!r.ok || json.success === false) throw new Error(json.detail || json.error || tr('smart.rhFailed'));
-            return json.data || json;
-        });
+        let data;
+        try {
+            data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}`).then(async r => {
+                const json = await r.json();
+                if(!r.ok || json.success === false) throw new Error(json.detail || json.error || tr('smart.rhFailed'));
+                return json.data || json;
+            });
+            rhPollErrors = 0;
+        } catch(pollErr) {
+            rhPollErrors++;
+            if(rhPollErrors >= 5) throw pollErr;
+            continue;
+        }
         if(data.status === 'SUCCESS'){
             const urls = resultMediaUrls(data.image_items?.length ? data.image_items : (data.urls || []));
             if(!urls.length) throw new Error(tr('smart.rhOutputsEmpty'));
@@ -14932,7 +14941,8 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
         }
         if(['FAILED','FAIL','ERROR','CANCELED','CANCELLED','CANCEL','TIMEOUT','EXPIRED','REJECTED','UNKNOWN'].includes(String(data.status || '').toUpperCase())){
             const statusText = data.status ? ` (${data.status}${data.code !== undefined && data.code !== null ? `/${data.code}` : ''})` : '';
-            throw new Error(data.failReason || `${tr('smart.rhFailed')}${statusText}`);
+            const errDetail = data.failReason || data.detail || data.error || '';
+            throw new Error(errDetail ? `${errDetail}${statusText}` : `${tr('smart.rhFailed')}${statusText}`);
         }
     }
     throw new Error(tr('smart.rhTimeout'));
@@ -15579,7 +15589,7 @@ async function resumeSmartPendingNode(node, logContext={}){
             scheduleSave();
         }
     }));
-    if(failures.length && !(node.images || []).length){
+    if(failures.length && (failures.length === tasks.length || !(node.images || []).length)){
         throw failures[0];
     }
 }
