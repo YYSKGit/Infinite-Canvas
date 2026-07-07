@@ -343,6 +343,7 @@ VENICE_DEFAULT_VIDEO_MODELS = [
 ]
 VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
+VENICE_OUTERFACE_IMAGE_URL = "https://outerface.venice.ai/api/inference/image"
 VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
@@ -8379,6 +8380,15 @@ def venice_pick_active_session_id(client_payload):
     selected = active or next((item for item in sessions if isinstance(item, dict) and item.get("id")), {})
     return str((selected or {}).get("id") or "").strip()
 
+def venice_pick_user_id(client_payload):
+    payload = client_payload.get("response") if isinstance(client_payload.get("response"), dict) else client_payload
+    sessions = payload.get("sessions") if isinstance(payload, dict) else []
+    if not isinstance(sessions, list) or not sessions:
+        return ""
+    active = next((item for item in sessions if str((item or {}).get("status") or "").strip().lower() == "active"), None)
+    selected = active or next((item for item in sessions if isinstance(item, dict)), {})
+    return str((selected or {}).get("user_id") or "").strip()
+
 def venice_video_reference_url(ref):
     text = str(getattr(ref, "url", "") or "").strip()
     if not text:
@@ -8573,7 +8583,8 @@ async def poll_call_with_retry(call, retry_state: Dict[str, Any], context: str):
         retry_state["error_delay"] = min(delay * backoff, max_delay)
         return None
 
-async def venice_web_auth_jwt(client, provider):
+async def venice_web_auth_info(client, provider):
+    """Fetch JWT token and user_id from Venice Clerk. Returns (jwt, user_id)."""
     client_cookie = validate_venice_client_cookie(venice_client_cookie_value((provider or {}).get("id") or "venice"))
     cookie_header = {"Cookie": f"__client={client_cookie}", "Accept": "application/json"}
     client_resp = await client.get(VENICE_CLERK_CLIENT_URL, headers=cookie_header)
@@ -8582,12 +8593,17 @@ async def venice_web_auth_jwt(client, provider):
     session_id = venice_pick_active_session_id(client_raw)
     if not session_id:
         raise HTTPException(status_code=502, detail=f"Venice Clerk 未返回可用 session：{client_raw}")
+    user_id = venice_pick_user_id(client_raw)
     token_resp = await client.post(f"{VENICE_CLERK_CLIENT_URL}/sessions/{urllib.parse.quote(session_id, safe='')}/tokens", headers=cookie_header)
     token_resp.raise_for_status()
     token_raw = token_resp.json()
     token = str(token_raw.get("jwt") or "").strip()
     if not token:
         raise HTTPException(status_code=502, detail=f"Venice Clerk 未返回 jwt：{token_raw}")
+    return token, user_id
+
+async def venice_web_auth_jwt(client, provider):
+    token, _ = await venice_web_auth_info(client, provider)
     return token
 
 async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw=None):
@@ -8710,6 +8726,81 @@ async def venice_binary_image_response_to_data_url(response):
     content_type = str(response.headers.get("content-type") or "image/png").split(";", 1)[0].strip().lower() or "image/png"
     encoded = base64.b64encode(response.content).decode("ascii")
     return {"type": "b64", "value": encoded, "mime_type": content_type}
+
+def venice_outerface_request_id():
+    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    return "".join(random.choices(chars, k=7))
+
+VENICE_OUTERFACE_MAX_EDGE = 1344
+VENICE_OUTERFACE_MAX_PIXELS = 1_500_000
+
+def venice_outerface_clamp_size(width: int, height: int) -> tuple:
+    """Scale down width/height to satisfy outerface limits while preserving ratio."""
+    w, h = float(width), float(height)
+    if h > VENICE_OUTERFACE_MAX_EDGE:
+        w = w * VENICE_OUTERFACE_MAX_EDGE / h
+        h = float(VENICE_OUTERFACE_MAX_EDGE)
+    if w > VENICE_OUTERFACE_MAX_EDGE:
+        h = h * VENICE_OUTERFACE_MAX_EDGE / w
+        w = float(VENICE_OUTERFACE_MAX_EDGE)
+    if w * h > VENICE_OUTERFACE_MAX_PIXELS:
+        scale = math.sqrt(VENICE_OUTERFACE_MAX_PIXELS / (w * h))
+        w, h = w * scale, h * scale
+    return max(1, round(w)), max(1, round(h))
+
+def venice_outerface_image_body(prompt, size, model, user_id):
+    width, height = parse_size_pair(size)
+    if not width or not height:
+        width, height = 1024, 1024
+    width, height = venice_outerface_clamp_size(int(width), int(height))
+    divisor = math.gcd(width, height) or 1
+    aspect_ratio = f"{max(1, width // divisor)}:{max(1, height // divisor)}"
+    long_edge = max(width, height)
+    pixels = width * height
+    if long_edge >= 3072 or pixels >= 7_500_000:
+        resolution = "4K"
+    elif long_edge >= 1800 or pixels >= 2_400_000:
+        resolution = "2K"
+    else:
+        resolution = "1K"
+    return {
+        "type": "image",
+        "format": "png",
+        "modelId": str(model or ""),
+        "prompt": str(prompt or ""),
+        "width": int(width),
+        "height": int(height),
+        "aspectRatio": aspect_ratio,
+        "resolution": resolution,
+        "stylePreset": "None",
+        "seed": random.randint(1, 999_999_999),
+        "steps": 0,
+        "userId": str(user_id or ""),
+        "requestId": venice_outerface_request_id(),
+        "hideWatermark": True,
+        "embedExifMetadata": True,
+        "matureFilter": False,
+        "apiRequest": False,
+        "clientProcessingTime": 1,
+        "variants": 1,
+    }
+
+async def generate_venice_web_image(client, prompt, size, model, provider):
+    jwt, user_id = await venice_web_auth_info(client, provider)
+    body = venice_outerface_image_body(prompt, size, model, user_id)
+    headers = {
+        "Accept": "image/*",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {jwt}",
+        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+    }
+    response = await client.post(VENICE_OUTERFACE_IMAGE_URL, headers=headers, json=body)
+    if response.status_code >= 400:
+        detail = venice_http_error_detail(response, f"Venice Web 图片生成请求失败(HTTP {response.status_code})")
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    venice_raise_for_blocked_response(response)
+    image_data = await venice_binary_image_response_to_data_url(response)
+    return image_data, {"model": model, "content_type": response.headers.get("content-type") or "image/png", "headers": dict(response.headers)}
 
 VOLCENGINE_MIN_PIXELS = 3_686_400
 VOLCENGINE_MIN_EDGE = 1536
@@ -10133,13 +10224,14 @@ async def generate_runninghub_video(payload, provider):
 
 async def generate_venice_provider_image(prompt, size, quality, model, reference_images=None, provider=None):
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
-    base_url = venice_api_root(provider)
-    if not base_url:
-        raise HTTPException(status_code=400, detail=f"{(provider or {}).get('name') or (provider or {}).get('id') or 'Venice'} 未配置 Base URL")
     timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        headers = api_headers(provider=provider, model=model)
         if refs:
+            # Image edit: keep using the official API endpoint
+            base_url = venice_api_root(provider)
+            if not base_url:
+                raise HTTPException(status_code=400, detail=f"{(provider or {}).get('name') or (provider or {}).get('id') or 'Venice'} 未配置 Base URL")
+            headers = api_headers(provider=provider, model=model)
             image_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() != "mask"]
             if len(image_refs) != 1 or len(refs) != len(image_refs):
                 raise HTTPException(status_code=400, detail="Venice 图片编辑当前只支持单张参考图，不支持 mask 或多图参考。")
@@ -10164,22 +10256,8 @@ async def generate_venice_provider_image(prompt, size, quality, model, reference
                 "headers": dict(response.headers),
             }
             return image_data, raw
-        body = venice_image_request_body(prompt, size, quality, model)
-        response = await client.post(
-            f"{base_url}/image/generate",
-            headers=headers,
-            json=body,
-        )
-        response.raise_for_status()
-        venice_raise_for_blocked_response(response)
-        raw = response.json()
-    images = raw.get("images") if isinstance(raw, dict) else []
-    if not isinstance(images, list) or not images:
-        raise HTTPException(status_code=502, detail=f"Venice 图片接口没有返回 images：{raw}")
-    first = images[0]
-    if not isinstance(first, str) or not first.strip():
-        raise HTTPException(status_code=502, detail=f"Venice 图片接口返回了不可识别的图片数据：{raw}")
-    return {"type": "b64", "value": first.strip(), "mime_type": "image/png"}, raw
+        # Text-to-image: use the web (outerface) interface for free model support
+        return await generate_venice_web_image(client, prompt, size, model, provider)
 
 async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly"):
     provider = get_api_provider(provider_id)
