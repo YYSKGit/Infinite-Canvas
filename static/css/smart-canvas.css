@@ -329,6 +329,10 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 .floating-node-actions { position:absolute; right:7px; top:7px; z-index:8; opacity:0; pointer-events:none; transition:opacity .14s ease; }
 .image-node:hover .floating-node-actions { opacity:1; pointer-events:auto; }
 .image-node.dragging .floating-node-actions { opacity:0 !important; pointer-events:none !important; }
+/* Bug fix: hide floating delete button whenever the loading overlay is present (node running with existing image) */
+.image-node:has(.node-loading-overlay):hover .floating-node-actions { opacity:0 !important; pointer-events:none !important; }
+/* Bug fix: when the done timer is visible, fade it out on hover so the delete button can appear at the same position without overlap */
+.image-node:has(.run-time-pill.done):hover .run-time-pill.done { opacity:0; transition:opacity .14s ease; }
 .smart-node-floating-menu { position:absolute; left:50%; top:-38px; z-index:18; display:inline-flex; align-items:center; gap:4px; height:30px; max-width:min(760px, calc(100vw - 48px)); padding:3px 5px; border-radius:12px; border:1px solid var(--line); background:color-mix(in srgb, var(--panel) 88%, transparent); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(18px); transform:translateX(-50%) translateY(3px); opacity:0; pointer-events:none; white-space:nowrap; cursor:default; transition:opacity .14s ease, transform .14s ease; }
 .image-node.selected .smart-node-floating-menu { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
 .world.smart-multi-selected .smart-node-floating-menu { opacity:0 !important; pointer-events:none !important; }
@@ -361,11 +365,17 @@ body.smart-node-resize .smart-node-floating-menu,
 .upload-node-sub { max-width:190px; color:var(--faint); font-size:10.5px; font-weight:700; line-height:1.35; }
 .image-node:not(.empty-node) .node-delete { background:transparent; color:var(--text); border:0; opacity:1; }
 .theme-dark .image-node:not(.empty-node) .node-delete { background:transparent; color:#f8fafc; text-shadow:0 1px 4px rgba(0,0,0,.85); }
+/* floating-node-actions delete button: override the transparent .node-delete rule with higher specificity placed after it */
+.image-node .floating-node-actions .mini-x.node-delete { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
+.image-node .floating-node-actions .mini-x.node-delete:hover { background:#fee2e2; color:#dc2626; border-color:#fecaca; }
+.theme-dark .image-node .floating-node-actions .mini-x.node-delete { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
+.theme-dark .image-node .floating-node-actions .mini-x.node-delete:hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
 .image-wrap { position:relative; width:100%; border-radius:13px; overflow:visible; }
 .image-wrap .mini-x, .thumb-item .mini-x { position:absolute; right:7px; top:7px; z-index:6; opacity:0; pointer-events:none; }
 .theme-dark .image-wrap .mini-x, .theme-dark .thumb-item .mini-x { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
-.theme-dark .image-wrap .mini-x:hover, .theme-dark .thumb-item .mini-x:hover { background:rgba(248,113,113,.22); color:#fecaca; border-color:rgba(248,113,113,.36); }
+.theme-dark .image-wrap .mini-x:hover, .theme-dark .thumb-item .mini-x:hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
 .thumb-item:hover .mini-x, .image-wrap:hover .mini-x { opacity:1; pointer-events:auto; }
+.image-wrap-loading:hover .mini-x { opacity:0 !important; pointer-events:none !important; }
 .image-node.dragging .mini-x { opacity:0 !important; pointer-events:none; }
 .image-name-badge { position:absolute; left:6px; top:5px; z-index:7; max-width:calc(100% - 12px); height:14px; display:inline-flex; align-items:center; color:rgba(100,116,139,.86); font-size:9.5px; font-weight:400; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:text; user-select:none; pointer-events:auto; }
 .thumb-item .image-name-badge { left:6px; top:5px; max-width:calc(100% - 12px); }
@@ -441,6 +451,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-resolution-badge { position:absolute; left:7px; top:7px; z-index:4; max-width:calc(100% - 14px); height:22px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(255,255,255,.88); color:#334155; border:1px solid rgba(148,163,184,.34); box-shadow:0 8px 18px rgba(15,23,42,.12); backdrop-filter:blur(12px); font-size:10px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; transform:translateY(-2px); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
 .theme-dark .image-resolution-badge { background:rgba(15,23,42,.82); color:#e2e8f0; border-color:rgba(148,163,184,.32); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .thumb-item:hover .image-resolution-badge, .image-wrap:hover .image-resolution-badge, .thumb-item.image-selected .image-resolution-badge, .image-wrap.image-selected .image-resolution-badge { opacity:1; transform:translateY(0); }
+.image-wrap-loading:hover .image-resolution-badge { opacity:0 !important; transform:translateY(-2px) !important; pointer-events:none !important; }
 .image-node.dragging .image-resolution-badge { opacity:0 !important; transform:translateY(-2px) !important; }
 .node-hint { padding:0 12px 10px; color:var(--faint); font-size:10.5px; line-height:1.35; font-weight:700; }
 .empty-node .node-hint { flex:0 0 auto; padding:0 12px 9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
