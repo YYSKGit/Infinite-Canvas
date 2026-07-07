@@ -5373,15 +5373,10 @@ function renderAssetLibrary(){
     assetGrid.innerHTML = items.length ? items.map(item => `
         <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="${workflowMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
             ${assetThumbHtml(item)}
-            <div class="asset-meta">
-                <span class="asset-name" ${localMode ? `data-rename-local-asset="${escapeHtml(item.id)}"` : ''} title="${escapeHtml(item.name || '')}">${escapeHtml(item.name || 'asset')}</span>
-                ${workflowMode
-                    ? `<button class="asset-mini-btn" type="button" data-rename-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
-                       <button class="asset-mini-btn" type="button" data-delete-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
-                    : localMode ? `<button class="asset-mini-btn" type="button" data-rename-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
-                       <button class="asset-mini-btn" type="button" data-delete-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>` : `<button class="asset-mini-btn" type="button" data-rename-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('smart.assetRename'))}"><i data-lucide="pencil"></i></button>
-                       <button class="asset-mini-btn" type="button" data-delete-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`}
-            </div>
+            ${workflowMode
+                ? `<button class="asset-card-delete" type="button" data-delete-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
+                : localMode ? `<button class="asset-card-delete" type="button" data-delete-local-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
+                : `<button class="asset-card-delete" type="button" data-delete-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`}
         </div>
     `).join('') : `<div class="asset-empty">${escapeHtml(localMode ? '暂无本地素材，拖入图片即可保存' : (smartClass ? '这个智能分类下暂无素材' : (workflowMode ? '暂无工作流资产' : tr('smart.assetEmpty'))))}</div>`;
     if(workflowMode) bindWorkflowAssetItemEvents();
@@ -5576,6 +5571,10 @@ function bindAssetItemEvents(){
         thumb?.addEventListener('mousemove', e => positionAssetHoverPreview(e));
         thumb?.addEventListener('mouseleave', () => { clearTimeout(assetHoverTimer); hideAssetHoverPreview(); });
         el.addEventListener('dragstart', e => {
+            if(e.target.closest('button')){
+                e.preventDefault();
+                return;
+            }
             hideAssetHoverPreview();
             e.dataTransfer.effectAllowed = 'copy';
             const item = (activeAssetCategory()?.items || []).find(x => x.id === el.dataset.assetId);
@@ -15826,10 +15825,11 @@ function closeSmartFloatingPanels(){
     closeSmartCanvasShortcuts();
     closeSmartWorkflowTransferModal();
 }
-shell.addEventListener('pointerdown', e => {
+shell.addEventListener('click', e => {
     if(e.button !== 0) return;
     if(!smartFloatingPanelIsOpen()) return;
     if(smartFloatingPanelContains(e.target)) return;
+    if(didPan || selectionJustFinished || Date.now() < suppressNodeClickUntil) return;
     closeSmartFloatingPanels();
 }, true);
 shell.addEventListener('mousedown', e => {
