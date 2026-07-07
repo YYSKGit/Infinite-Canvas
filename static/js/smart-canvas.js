@@ -14745,7 +14745,7 @@ async function runGeneration(){
         if(extracted) restoreFromExtraction(node, extracted);
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
-        notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
+        if(!e?.smartGenerationLogged) notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
         toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
     } finally {
         if(!apiConcurrentRun){
