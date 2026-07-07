@@ -12585,10 +12585,9 @@ function generationReferenceImagesForRun(node, consume=false, ctx=smartLoopConte
     const defaults = defaultReferenceImagesFor(node, consume, ctx);
     if(!isSmartImageNode(node) || isHistoryGroupNode(node) || smartImageUsesWorkflowInput(node, ctx)) return defaults;
     if(isGeneratedSmartOutputNode(node)){
-        const cleanOptions = {dropGeneratedOutputs:true};
         const rawSavedInputs = Array.isArray(node.runInputRefs) ? node.runInputRefs.filter(ref => ref?.url) : [];
-        const savedInputs = cleanSavedRunRefsForNode(node, rawSavedInputs, cleanOptions);
-        const filteredDefaults = cleanSavedRunRefsForNode(node, defaults, cleanOptions);
+        const savedInputs = cleanSavedRunRefsForNode(node, rawSavedInputs, {dropGeneratedOutputs:true});
+        const filteredDefaults = cleanSavedRunRefsForNode(node, defaults);
         return uniqueReferenceImages([...filteredDefaults, ...savedInputs]);
     }
     const self = selfReferenceImagesForNode(node, consume, ctx).filter(img => img?.url);
