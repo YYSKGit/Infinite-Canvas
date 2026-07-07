@@ -7207,12 +7207,15 @@ function nodeBodyHtml(node, layout){
         return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
     }
     const showImageNames = !isHistoryGroupNode(node);
+    const isRunning = Boolean(node.running || node.pending || node.jimengPending);
+    const loadingOverlay = isRunning && imgs.length > 0 ? `<div class="node-loading-overlay"><div class="loading-spinner"></div></div>` : '';
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${showImageNames ? imageNameBadgeHtml(img, {outside:true}) : ''}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${showImageNames ? imageNameBadgeHtml(img, {outside:true}) : ''}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        return isRunning ? `<div class="thumb-grid-wrapper">${gridContent}${loadingOverlay}</div>` : gridContent;
     }
-    if(imgs[0]) return `<div class="image-wrap ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showImageNames ? imageNameBadgeHtml(imgs[0], {outside:true}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`;
+    if(imgs[0]) return `<div class="image-wrap ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showImageNames ? imageNameBadgeHtml(imgs[0], {outside:true}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
     return `<div class="empty-upload-node">
         <div class="empty-upload-copy">
             <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
@@ -17323,6 +17326,17 @@ window.addEventListener('studio-lang-change', () => {
     if(promptTemplatePanel?.classList?.contains('open')) renderPromptTemplatePanel();
     render();
 });
+// 全局转圈动画循环 - 保持动画连续性，不受 DOM 重新渲染影响
+let spinnerRotation = 0;
+function animateSpinners() {
+    spinnerRotation = (spinnerRotation + 6) % 360;
+    document.querySelectorAll('.loading-spinner').forEach(el => {
+        el.style.setProperty('--spinner-rotation', spinnerRotation + 'deg');
+    });
+    requestAnimationFrame(animateSpinners);
+}
+requestAnimationFrame(animateSpinners);
+
 window.onload = async () => {
     applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light');
     loadPromptPresets();
