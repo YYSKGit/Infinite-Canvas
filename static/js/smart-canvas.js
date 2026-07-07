@@ -127,6 +127,7 @@ let promptPresetDeleteArmed = false;
 let createMenuPoint = {x:0, y:0};
 let createMenuGroupId = '';
 let nodeClipboard = null;
+const SMART_NODE_CLIPBOARD_TEXT = '当前复制的内容只能在智能画布中识别，请回到智能画布中粘贴。';
 let imageClickTimer = null;
 let suppressImageClickUntil = 0;
 let lastMouseWorld = null;
@@ -5891,6 +5892,19 @@ function cloneSmartNode(node, dx=0, dy=0){
     if(copy.type === 'smart-group') copy.title = copy.title || '智能分组';
     return copy;
 }
+function pasteEventMatchesNodeClipboard(event){
+    if(!nodeClipboard?.nodes?.length) return false;
+    try {
+        return event.clipboardData?.getData('text/plain') === SMART_NODE_CLIPBOARD_TEXT;
+    } catch(_) {
+        return false;
+    }
+}
+async function copyNodeClipboardMarkerIfNeeded(){
+    const matched = await clipboardMatchesText(SMART_NODE_CLIPBOARD_TEXT);
+    if(matched === true) return true;
+    return copyTextToClipboard(SMART_NODE_CLIPBOARD_TEXT);
+}
 function copySelectedNodes(){
     if(!canvas || isEditableTarget(document.activeElement)) return;
     const ids = selectedNodeIds();
@@ -5902,6 +5916,7 @@ function copySelectedNodes(){
         nodes:JSON.parse(JSON.stringify(copiedNodes)),
         connections:JSON.parse(JSON.stringify(copiedConnections))
     };
+    void copyNodeClipboardMarkerIfNeeded();
     toast(`已复制 ${copiedNodes.length} 个节点`);
 }
 function pasteNodes(){
@@ -16308,6 +16323,11 @@ shell.ondrop = async e => {
     await handleSmartImageDropPayload(payload, '', {point:p, forceNew:true});
 };
 window.addEventListener('paste', e => {
+    if(!isEditableTarget(e.target) && pasteEventMatchesNodeClipboard(e)){
+        e.preventDefault();
+        pasteNodes();
+        return;
+    }
     const files = [...(e.clipboardData?.files || [])].filter(isSupportedUploadFile);
     if(files.length){
         lastImagePasteAt = Date.now();
