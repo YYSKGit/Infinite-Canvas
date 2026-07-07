@@ -5324,7 +5324,7 @@ function assetThumbHtml(item){
     const thumb = item.thumbnail || item.thumb || item.preview || item.url || '';
     const kind = assetMediaKind(item);
     if(kind === 'video'){
-        return `<div class="asset-thumb-wrap">${smartVideoPreviewHtml(item, 256, 'class="asset-thumb" loading="lazy" decoding="async" alt=""')}<span class="asset-video-badge"><i data-lucide="film"></i>VIDEO</span></div>`;
+        return `<div class="asset-thumb-wrap">${smartVideoPreviewHtml(item, 256, 'class="asset-thumb" loading="lazy" decoding="async" alt=""')}<span class="asset-video-badge"><i data-lucide="film"></i>VID</span></div>`;
     }
     if(kind === 'audio'){
         return `<div class="asset-thumb-wrap media-thumb audio-thumb asset-thumb"><i data-lucide="file-audio"></i><span>${escapeHtml(item.name || 'Audio')}</span></div>`;

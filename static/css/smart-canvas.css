@@ -1159,7 +1159,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-card-delete i,.asset-card-delete svg { width:13px; height:13px; stroke-width:2.35; }
 .asset-item:hover .asset-card-delete,.asset-card-delete:focus-visible { opacity:1; pointer-events:auto; }
 .asset-card-delete:hover { transform:translateY(-1px); color:#fecaca; background:rgba(220,38,38,.72); border-color:rgba(254,202,202,.44); }
-.asset-video-badge { position:absolute; left:7px; bottom:7px; height:22px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; gap:4px; background:rgba(15,23,42,.78); color:#fff; font-size:9px; font-weight:900; letter-spacing:.06em; pointer-events:none; }
+.asset-video-badge { position:absolute; left:7px; bottom:7px; height:22px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; gap:4px; background:rgba(15,23,42,.46); color:rgba(248,250,252,.92); border:1px solid rgba(255,255,255,.18); box-shadow:0 6px 14px rgba(15,23,42,.16); backdrop-filter:blur(10px); font-size:9px; font-weight:900; letter-spacing:.06em; pointer-events:none; }
 .asset-video-badge i,.asset-video-badge svg { width:10px; height:10px; }
 .workflow-thumb { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; padding:10px; color:var(--muted); text-align:center; font-size:10px; font-weight:850; }
 .workflow-thumb i,.workflow-thumb svg { width:24px; height:24px; color:var(--text); }
