@@ -156,6 +156,7 @@ let suppressNodeClickUntil = 0;
 let textSelectionGuard = null;
 const UNDO_LIMIT = 40;
 const undoStack = [];
+const redoStack = [];
 let undoSuppressed = false;
 let pendingUndoSnapshot = null;
 let runningHubWorkflowCache = {};
@@ -186,6 +187,7 @@ function smartCascadePathForCtx(ctx=null){
 function capturePendingUndo(){ pendingUndoSnapshot = snapshotForUndo(); }
 function commitPendingUndo(){
     if(pendingUndoSnapshot){
+        redoStack.length = 0;
         undoStack.push(pendingUndoSnapshot);
         if(undoStack.length > UNDO_LIMIT) undoStack.shift();
         pendingUndoSnapshot = null;
@@ -204,24 +206,46 @@ function snapshotForUndo(){
 function pushUndo(){
     if(undoSuppressed) return;
     if(!canvas) return;
+    redoStack.length = 0;
     undoStack.push(snapshotForUndo());
     if(undoStack.length > UNDO_LIMIT) undoStack.shift();
 }
+function restoreUndoSnapshot(snap){
+    if(!snap) return;
+    undoSuppressed = true;
+    try {
+        nodes = snap.nodes;
+        if(canvas) canvas.connections = snap.connections;
+        selectedId = snap.selectedId;
+        selectedIds = snap.selectedIds;
+        selectedImage = snap.selectedImage;
+        activeComposerSubject = null;
+        lastComposerNodeId = '';
+        render();
+        scheduleSave();
+    } finally {
+        undoSuppressed = false;
+    }
+}
 function performUndo(){
     if(!undoStack.length){ toast(tr('smart.toastNoUndo')); return; }
+    discardPendingUndo();
+    const current = snapshotForUndo();
     const snap = undoStack.pop();
-    undoSuppressed = true;
-    nodes = snap.nodes;
-    if(canvas) canvas.connections = snap.connections;
-    selectedId = snap.selectedId;
-    selectedIds = snap.selectedIds;
-    selectedImage = snap.selectedImage;
-    activeComposerSubject = null;
-    lastComposerNodeId = '';
-    render();
-    scheduleSave();
-    undoSuppressed = false;
+    redoStack.push(current);
+    if(redoStack.length > UNDO_LIMIT) redoStack.shift();
+    restoreUndoSnapshot(snap);
     toast(tr('smart.toastUndone'));
+}
+function performRedo(){
+    if(!redoStack.length){ toast(tr('smart.toastNoRedo')); return; }
+    discardPendingUndo();
+    const current = snapshotForUndo();
+    const snap = redoStack.pop();
+    undoStack.push(current);
+    if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+    restoreUndoSnapshot(snap);
+    toast(tr('smart.toastRedone'));
 }
 let comfyWorkflowCache = {};
 let cropState = null;
@@ -16445,6 +16469,11 @@ window.addEventListener('keydown', e => {
         return;
     }
     if((e.ctrlKey || e.metaKey) && key === 'z' && !isEditableTarget(e.target)){
+        if(e.shiftKey){
+            e.preventDefault();
+            performRedo();
+            return;
+        }
         e.preventDefault();
         performUndo();
         return;
