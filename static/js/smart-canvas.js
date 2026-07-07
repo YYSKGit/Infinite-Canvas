@@ -26,6 +26,7 @@ const imageEditModal = document.getElementById('imageEditModal');
 const smartLogModal = document.getElementById('smartLogModal');
 const smartLogList = document.getElementById('smartLogList');
 const smartShortcutModal = document.getElementById('smartShortcutModal');
+const smartShortcutToggle = document.getElementById('smartShortcutToggle');
 const smartWorkflowToggle = document.getElementById('smartWorkflowToggle');
 const smartWorkflowTransferModal = document.getElementById('smartWorkflowTransferModal');
 const smartWorkflowTransferSub = document.getElementById('smartWorkflowTransferSub');
@@ -788,6 +789,7 @@ function normalizeImportedSmartWorkflow(data){
 function openSmartWorkflowTransferModal(){
     if(!canvas){ toast('请先打开画布'); return; }
     toggleAssetLibrary(false);
+    closeSmartCanvasShortcuts();
     updateSmartWorkflowTransferMeta();
     smartWorkflowTransferModal?.classList.add('open');
     smartWorkflowToggle?.classList.add('active');
@@ -1276,8 +1278,8 @@ const MEDIA_GROUP_THUMB_BASE = 224;
 const MEDIA_GROUP_MAX_VISIBLE_ROWS = 3;
 // 智能分组卡片内的图片网格：超过这么多排就出现纵向滚动（区别于多图节点的 3 排）。
 const SMART_GROUP_MAX_VISIBLE_ROWS = 4;
-const EMPTY_UPLOAD_NODE_WIDTH = 316;
-const EMPTY_UPLOAD_NODE_HEIGHT = 194;
+const EMPTY_UPLOAD_NODE_WIDTH = 260;
+const EMPTY_UPLOAD_NODE_HEIGHT = 178;
 const SMART_GROUP_DEFAULT_WIDTH = 340;
 const SMART_GROUP_DEFAULT_HEIGHT = 286;
 const SMART_GROUP_LEGACY_HEIGHT = 220;
@@ -1913,6 +1915,15 @@ function fitSmartLoopNode(node){
 function nodeRect(node){
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     return {x:node.x || 0, y:node.y || 0, width:layout.width, height:layout.height};
+}
+function nodeConnectionRect(node){
+    const rect = nodeRect(node);
+    const isEmptyUpload = (node?.type === 'smart-image' || !node?.type)
+        && !(node?.images || []).length
+        && !node?.pending
+        && !node?.queued
+        && !node?.jimengPending;
+    return isEmptyUpload ? {...rect, height:Math.max(rect.height, EMPTY_UPLOAD_NODE_HEIGHT)} : rect;
 }
 function connectedSmartClusterIds(seedId){
     const ids = new Set(nodes.map(n => n.id));
@@ -5245,6 +5256,10 @@ function setAssetLibraryFromResponse(data, options={}){
 function toggleAssetLibrary(open=!assetLibraryOpen){
     if(!assetPanel || !assetToggle) return;
     assetLibraryOpen = !!open;
+    if(assetLibraryOpen){
+        closeSmartCanvasShortcuts();
+        closeSmartWorkflowTransferModal();
+    }
     assetPanel.classList.toggle('open', assetLibraryOpen);
     assetToggle?.classList.toggle('active', assetLibraryOpen);
     if(assetLibraryOpen) loadAssetLibrary();
@@ -6077,7 +6092,7 @@ function renderConnections(){
         const fromNode = nodes.find(n => n.id === item.from);
         const toNode = nodes.find(n => n.id === item.toId);
         if(!fromNode || !toNode) return '';
-        const fr = nodeRect(fromNode), tr = nodeRect(toNode);
+        const fr = nodeConnectionRect(fromNode), tr = nodeConnectionRect(toNode);
         const kind = item.kind;
         const isHistory = kind === 'history';
         const dataIndex = item.indices.join(',');
@@ -6908,11 +6923,15 @@ function closeSmartCanvasLog(){
     smartLogModal.classList.remove('open');
 }
 function openSmartCanvasShortcuts(){
+    toggleAssetLibrary(false);
+    closeSmartWorkflowTransferModal();
     smartShortcutModal?.classList.add('open');
+    smartShortcutToggle?.classList.add('active');
     refreshIcons();
 }
 function closeSmartCanvasShortcuts(){
     smartShortcutModal?.classList.remove('open');
+    smartShortcutToggle?.classList.remove('active');
 }
 function promptNodeBodyHtml(node){
     node.llmProvider = resolveChatProviderId(node.llmProvider || '');
@@ -7171,10 +7190,15 @@ function nodeBodyHtml(node, layout){
         return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${showImageNames ? imageNameBadgeHtml(img, {outside:true}) : ''}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
     }
     if(imgs[0]) return `<div class="image-wrap ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showImageNames ? imageNameBadgeHtml(imgs[0], {outside:true}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`;
-    return `<div class="node-drop" data-upload-action="files">
-        <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
-        <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
-        <span class="upload-node-sub">拖拽 / 粘贴 / 点击上传</span>
+    return `<div class="empty-upload-node">
+        <div class="empty-upload-copy">
+            <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
+            <span class="upload-node-sub">${escapeHtml(tr('smart.uploadNodeRefHint'))}</span>
+        </div>
+        <button class="node-drop" type="button" data-upload-action="files" title="${escapeAttr(tr('smart.uploadButtonHint'))}">
+            <i data-lucide="upload-cloud"></i>
+            <span>${escapeHtml(tr('smart.uploadButton'))}</span>
+        </button>
     </div>`;
 }
 function jimengPendingBodyHtml(node, layout){
@@ -7425,7 +7449,7 @@ function render(){
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -7433,7 +7457,7 @@ function render(){
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
-            <div class="node-hint">${hint}</div>
+            ${hint ? `<div class="node-hint">${hint}</div>` : ''}
             ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
             <div class="node-port port-out" data-port="out" title="output"></div>
@@ -7951,7 +7975,7 @@ function updatePortDragVisual(){
     if(!portDragState) return;
     const fromNode = nodes.find(n => n.id === portDragState.fromId);
     if(!fromNode) return;
-    const fr = nodeRect(fromNode);
+    const fr = nodeConnectionRect(fromNode);
     const isOut = portDragState.fromPort === 'out';
     const fx = isOut ? fr.x + fr.width : fr.x;
     const fy = fr.y + fr.height / 2;
@@ -8318,7 +8342,7 @@ function bindNodeEvents(){
             if(document.activeElement?.blur) document.activeElement.blur();
             let node = nodes.find(n => n.id === id);
             if(!node) return;
-            if(e.altKey) node = duplicateForAltDrag(node, e.shiftKey);
+            if(e.altKey) node = duplicateForAltDrag(node, true);
             let dragIds = selectedIds.includes(node.id) ? selectedIds.slice() : [node.id];
             if(isSmartGroupNode(node)){
                 const memberIds = smartGroupMembers(node).map(member => member.id);
@@ -8503,7 +8527,7 @@ function connectionMidpoint(conn){
     const fromNode = nodes.find(n => n.id === conn?.from);
     const toNode = nodes.find(n => n.id === conn?.to);
     if(!fromNode || !toNode) return null;
-    const fr = nodeRect(fromNode), tr = nodeRect(toNode);
+    const fr = nodeConnectionRect(fromNode), tr = nodeConnectionRect(toNode);
     if((conn.kind || 'flow') === 'history'){
         return {x:(fr.x + fr.width / 2 + tr.x + tr.width / 2) / 2, y:(fr.y + fr.height + tr.y) / 2};
     }
@@ -15753,6 +15777,37 @@ function createNodeFromMenu(type){
     createMenuGroupId = '';
     return created;
 }
+function smartFloatingPanelIsOpen(){
+    return assetLibraryOpen
+        || smartShortcutModal?.classList.contains('open')
+        || smartWorkflowTransferModal?.classList.contains('open');
+}
+function smartFloatingPanelContains(target){
+    return Boolean(target?.closest?.([
+        '.asset-panel',
+        '.asset-toggle',
+        '.asset-dialog-backdrop',
+        '.shortcut-modal',
+        '.smart-shortcut-toggle',
+        '.workflow-transfer-panel',
+        '.smart-workflow-toggle'
+    ].join(',')));
+}
+function closeSmartFloatingPanels(){
+    if(assetLibraryOpen){
+        assetLibraryOpen = false;
+        assetPanel?.classList.remove('open');
+        assetToggle?.classList.remove('active');
+    }
+    closeSmartCanvasShortcuts();
+    closeSmartWorkflowTransferModal();
+}
+shell.addEventListener('pointerdown', e => {
+    if(e.button !== 0) return;
+    if(!smartFloatingPanelIsOpen()) return;
+    if(smartFloatingPanelContains(e.target)) return;
+    closeSmartFloatingPanels();
+}, true);
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
