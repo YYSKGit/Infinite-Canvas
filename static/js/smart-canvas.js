@@ -2724,6 +2724,10 @@ function dynamicParamsScrollSnapshot(){
         sizePickers:[...dynamicParams.querySelectorAll('.size-picker-control')].map(ctrl => ({
             key:controlTypeKey(ctrl),
             lists:[...ctrl.querySelectorAll('.size-picker-list')].map(list => ({top:list.scrollTop || 0, left:list.scrollLeft || 0}))
+        })),
+        modelLists:[...dynamicParams.querySelectorAll('.smart-control')].map(ctrl => ({
+            key:controlTypeKey(ctrl),
+            lists:[...ctrl.querySelectorAll('.model-list, .direct-picker-col')].map(list => ({top:list.scrollTop || 0}))
         }))
     };
 }
@@ -2746,9 +2750,35 @@ function restoreDynamicParamsScroll(snapshot){
                 list.scrollLeft = pos.left || 0;
             });
         });
+        const usedModel = new Set();
+        (snapshot.modelLists || []).forEach(item => {
+            const ctrls = [...dynamicParams.querySelectorAll('.smart-control')];
+            const index = ctrls.findIndex((ctrl, i) => !usedModel.has(i) && controlTypeKey(ctrl) === item.key);
+            if(index < 0) return;
+            usedModel.add(index);
+            const lists = [...ctrls[index].querySelectorAll('.model-list, .direct-picker-col')];
+            item.lists.forEach((pos, listIndex) => {
+                if(lists[listIndex]) lists[listIndex].scrollTop = pos.top || 0;
+            });
+        });
     };
     apply();
     requestAnimationFrame(apply);
+}
+function syncEngineSelectUI(){
+    if(!engineSelect) return;
+    const engineLabels = {
+        api: tr('smart.engineApi'),
+        volcengine: tr('smart.engineVolcengine'),
+        modelscope: tr('smart.engineMs'),
+        comfy: tr('smart.engineComfy'),
+        runninghub: tr('smart.engineRh')
+    };
+    const labelEl = engineSelect.querySelector('.engine-select-label');
+    if(labelEl) labelEl.textContent = engineLabels[settings.engine] || settings.engine;
+    engineSelect.querySelectorAll('[data-engine-value]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.engineValue === settings.engine);
+    });
 }
 function renderDynamicParams(){
     if(!dynamicParams) return;
@@ -2757,7 +2787,7 @@ function renderDynamicParams(){
     settings.engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(settings.engine) ? settings.engine : 'api';
     settings.apiKind = settings.apiKind === 'video' ? 'video' : 'image';
     clearVolcengineSelectionOutsideVolcengine(settings);
-    engineSelect.value = settings.engine;
+    syncEngineSelectUI();
     syncApiKindToggleVisibility();
     if(settings.engine === 'api'){
         if(settings.apiKind === 'video') renderApiVideoParams();
@@ -3960,13 +3990,21 @@ function bindDynamicParams(){
             if(!wasPinned) ctrl.classList.add('pinned');
         };
     });
-    dynamicParams.querySelectorAll('[data-smart-param]').forEach(btn => {
+    dynamicParams.querySelectorAll('[data-smart-param]:not(.size-picker-control [data-smart-param])').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeAllSmartPopovers();
+            setDynamicSetting(btn.dataset.smartParam, btn.dataset.smartValue);
+            if(btn.dataset.smartParam === 'videoDuration') renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('.size-picker-control [data-smart-param]').forEach(btn => {
         btn.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
             markControlInteracting(btn);
             setDynamicSetting(btn.dataset.smartParam, btn.dataset.smartValue);
-            if(btn.dataset.smartParam === 'videoDuration') renderDynamicParams();
         };
     });
     dynamicParams.querySelectorAll('[data-size-scope]').forEach(btn => {
@@ -4151,6 +4189,13 @@ function bindDynamicParams(){
             event.preventDefault();
             event.stopPropagation();
             toggleSmartRhRandom(btn.dataset.rhRandom);
+        };
+    });
+    // 记住 model-list / direct-picker-col 的滚动位置，供下次重渲染后恢复。
+    dynamicParams.querySelectorAll('.model-list, .direct-picker-col').forEach(list => {
+        list.onscroll = () => {
+            const ctrl = list.closest('.smart-control');
+            if(ctrl) ctrl._modelListScrollTop = list.scrollTop;
         };
     });
 }
@@ -16591,16 +16636,37 @@ window.addEventListener('keyup', e => {
 window.addEventListener('blur', () => {
     isRKeyDown = false;
 });
-engineSelect.onchange = () => {
-    settings.engine = engineSelect.value;
-    applyRecentSmartSettingsForCurrentMode();
-    const ph = Math.max(60, Math.min(380, Number(settings.promptH) || 124));
-    promptInput.style.setProperty('--prompt-h', `${ph}px`);
-    syncApiKindToggleVisibility();
-    renderDynamicParams();
-    persistActiveSmartSettings();
-    scheduleSave();
-};
+if(engineSelect){
+    const pill = engineSelect.querySelector('.engine-select-pill');
+    if(pill){
+        pill.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const wasPinned = engineSelect.classList.contains('pinned');
+            closeAllSmartPopovers();
+            if(!wasPinned) engineSelect.classList.add('pinned');
+        };
+    }
+    engineSelect.addEventListener('mouseleave', () => engineSelect.classList.remove('interacting', 'pinned', 'closing'));
+    engineSelect.querySelectorAll('[data-engine-value]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const newEngine = btn.dataset.engineValue;
+            if(!newEngine) return;
+            settings.engine = newEngine;
+            engineSelect.classList.add('closing');
+            closeAllSmartPopovers();
+            applyRecentSmartSettingsForCurrentMode();
+            const ph = Math.max(60, Math.min(380, Number(settings.promptH) || 124));
+            promptInput.style.setProperty('--prompt-h', `${ph}px`);
+            syncApiKindToggleVisibility();
+            renderDynamicParams();
+            persistActiveSmartSettings();
+            scheduleSave();
+        };
+    });
+}
 function syncApiKindToggleVisibility(){
     if(!apiKindToggle) return;
     apiKindToggle.style.display = isApiLikeEngine(settings.engine) ? 'inline-flex' : 'none';
