@@ -710,6 +710,7 @@ function canvasForStorage(){
     (clean.nodes || []).forEach(node => {
         if(Array.isArray(node.images)) node.images = node.images.map(mediaItemForStorage);
         if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
+        if(node.runSnapshotSettings) node.runSnapshotSettings = settingsForStorage(node.runSnapshotSettings);
     });
     return clean;
 }
@@ -784,6 +785,7 @@ function serializableSmartNode(node){
     const copy = normalizeLegacySmartNode(base) || {};
     if(Array.isArray(copy.images)) copy.images = copy.images.map(img => mediaItemForStorage(stripImageGenerationMeta(img))).filter(Boolean);
     if(copy.runSettings) copy.runSettings = settingsForStorage(copy.runSettings);
+    if(copy.runSnapshotSettings) copy.runSnapshotSettings = settingsForStorage(copy.runSnapshotSettings);
     clearSmartNodeTransientRunState(copy);
     delete copy._dom;
     return copy;
@@ -5971,39 +5973,68 @@ async function saveCanvas(){
 function imageMetaFromNode(node){
     return {};
 }
+function cloneGenPromptSnapshot(snapshot){
+    if(!snapshot) return null;
+    return {
+        runPrompt: snapshot.runPrompt || '',
+        runModelPrompt: snapshot.runModelPrompt || '',
+        runSettings: snapshot.runSettings ? cloneSmartSettings(snapshot.runSettings) : undefined,
+        runPromptRefs: Array.isArray(snapshot.runPromptRefs) ? snapshot.runPromptRefs.map(ref => ({...ref})) : [],
+        promptDraftHtml: snapshot.promptDraftHtml != null ? String(snapshot.promptDraftHtml) : undefined,
+        promptDraftText: snapshot.promptDraftText != null ? String(snapshot.promptDraftText) : undefined,
+    };
+}
+function applyGenPromptSnapshotToNode(node, snapshot){
+    const snap = cloneGenPromptSnapshot(snapshot);
+    if(!node || !snap) return;
+    if(snap.runPrompt != null) node.runPrompt = snap.runPrompt;
+    if(snap.runModelPrompt != null) node.runModelPrompt = snap.runModelPrompt;
+    if(snap.runSettings) node.runSettings = snap.runSettings;
+    if(Array.isArray(snap.runPromptRefs)) node.runPromptRefs = snap.runPromptRefs;
+    node.runSnapshotSettings = snap.runSettings ? cloneSmartSettings(snap.runSettings) : undefined;
+    node.runSnapshotPromptDraftHtml = snap.promptDraftHtml != null ? String(snap.promptDraftHtml) : undefined;
+    node.runSnapshotPromptDraftText = snap.promptDraftText != null ? String(snap.promptDraftText) : undefined;
+    if(snap.promptDraftHtml != null) node.promptDraftHtml = snap.promptDraftHtml;
+    else delete node.promptDraftHtml;
+    if(snap.promptDraftText != null) node.promptDraftText = snap.promptDraftText;
+    else delete node.promptDraftText;
+}
 function applyNodeMetaToImage(image, node){
     if(image && node && !image._genPrompt) {
         // 只在图片尚无自带快照时才从节点补充；
         // 历史节点图片已各自携带 _genPrompt，节点的"代表提示词"不应覆盖它们各自的精确快照。
         const snapshot = genPromptSnapshotFromNode(node);
-        if(snapshot) image._genPrompt = snapshot;
+        if(snapshot) image._genPrompt = cloneGenPromptSnapshot(snapshot);
     }
     return stripImageGenerationMeta(image);
 }
 // 将历史节点图片中保存的提示词快照同步到历史节点自身，使其 UI 能显示对应的提示词。
-// 取最新归档的图片（数组首位）的快照作为代表，仅当存在快照时才覆盖。
+// 仅对单图历史节点回填；多图历史分组中每张图的提示词/配置可能不同，不能用单一值代表。
 function syncHistoryNodePromptFromImages(historyNode){
     if(!historyNode) return;
-    const snap = (historyNode.images || []).map(img => img?._genPrompt).find(Boolean);
+    const images = (historyNode.images || []).filter(img => img?.url);
+    if(images.length !== 1){
+        delete historyNode.runPrompt;
+        delete historyNode.runModelPrompt;
+        delete historyNode.runSettings;
+        delete historyNode.runPromptRefs;
+        delete historyNode.runSnapshotSettings;
+        delete historyNode.runSnapshotPromptDraftHtml;
+        delete historyNode.runSnapshotPromptDraftText;
+        delete historyNode.promptDraftHtml;
+        delete historyNode.promptDraftText;
+        return;
+    }
+    const snap = cloneGenPromptSnapshot(images[0]?._genPrompt);
     if(!snap) return;
-    if(snap.runPrompt != null) historyNode.runPrompt = snap.runPrompt;
-    if(snap.runModelPrompt != null) historyNode.runModelPrompt = snap.runModelPrompt;
-    if(snap.runSettings) historyNode.runSettings = snap.runSettings;
-    if(Array.isArray(snap.runPromptRefs)) historyNode.runPromptRefs = snap.runPromptRefs;
-    delete historyNode.promptDraftHtml;
-    delete historyNode.promptDraftText;
+    applyGenPromptSnapshotToNode(historyNode, snap);
 }
 function inheritNodeMetaFromImage(node){
     if(!node) return;
-    const genPrompt = (node.images || []).map(img => img?._genPrompt).find(Boolean);
+    const images = (node.images || []).filter(img => img?.url);
+    const genPrompt = images.length === 1 ? cloneGenPromptSnapshot(images[0]?._genPrompt) : null;
     if(genPrompt){
-        if(genPrompt.runPrompt != null) node.runPrompt = genPrompt.runPrompt;
-        if(genPrompt.runModelPrompt != null) node.runModelPrompt = genPrompt.runModelPrompt;
-        if(genPrompt.runSettings) node.runSettings = genPrompt.runSettings;
-        if(Array.isArray(genPrompt.runPromptRefs)) node.runPromptRefs = genPrompt.runPromptRefs;
-        // 不设 promptDraftHtml/promptDraftText：composer 会从 runPrompt+runPromptRefs 自动重建
-        delete node.promptDraftHtml;
-        delete node.promptDraftText;
+        applyGenPromptSnapshotToNode(node, genPrompt);
     }
     node.images = (node.images || []).map(img => {
         if(!img) return img;
@@ -12420,6 +12451,7 @@ function attachRunMeta(targetNode, meta){
         kind:ref.kind || ''
     })).filter(ref => ref.url);
     targetNode.runSettings = meta.settings;
+    targetNode.runSnapshotSettings = meta.settings ? cloneSmartSettings(meta.settings) : undefined;
     if(meta.sourceNodeId) targetNode.sourceNodeId = meta.sourceNodeId;
     else delete targetNode.sourceNodeId;
     targetNode.runAt = meta.createdAt;
@@ -12430,6 +12462,13 @@ function attachRunMeta(targetNode, meta){
         const rebuiltHtml = htmlHasToken ? '' : promptHtmlWithMentionTokens(meta.displayPrompt || meta.promptText || '', cleanPromptRefs);
         targetNode.promptDraftHtml = htmlHasToken ? cleanPromptHtml : (rebuiltHtml || cleanPromptHtml);
         targetNode.promptDraftText = meta.promptText || '';
+        targetNode.runSnapshotPromptDraftHtml = targetNode.promptDraftHtml;
+        targetNode.runSnapshotPromptDraftText = targetNode.promptDraftText;
+    } else {
+        delete targetNode.promptDraftHtml;
+        delete targetNode.promptDraftText;
+        delete targetNode.runSnapshotPromptDraftHtml;
+        targetNode.runSnapshotPromptDraftText = meta.promptText || meta.displayPrompt || '';
     }
     targetNode.images = (targetNode.images || []).map(img => stripImageGenerationMeta(img));
 }
@@ -12456,25 +12495,28 @@ function stripImageGenerationMeta(img){
     delete img.promptDraftText;
     return img;
 }
-// 从节点抓取"生成时提示词快照"，用于嵌入图片对象随图漂流。
-// 只保存 runPrompt / runSettings / runPromptRefs，不保存 promptDraftHtml，
-// 因为后者在用户再次编辑后会指向新草稿而不是该次生成的实际提示词。
+// 从节点抓取"上次实际运行"的提示词快照，用于嵌入图片对象随图漂流。
+// 注意 runSettings / promptDraftHtml / promptDraftText 在编辑器里会继续被用户改动，
+// 因此这里优先读取 attachRunMeta 固化的 runSnapshot* 字段，而不是读当前草稿态。
 function genPromptSnapshotFromNode(node){
     if(!node) return null;
-    // 只在有实际运行记录的提示词时才创建快照；promptDraftText 是用户当前草稿，
-    // 不代表该批图片实际生成时的提示词，不应作为快照来源。
     if(!node.runPrompt) return null;
+    const snapshotSettings = node.runSnapshotSettings ? cloneSmartSettings(node.runSnapshotSettings) : (node.runSettings ? cloneSmartSettings(node.runSettings) : undefined);
+    const snapshotPromptHtml = node.runSnapshotPromptDraftHtml != null ? String(node.runSnapshotPromptDraftHtml) : undefined;
+    const snapshotPromptText = node.runSnapshotPromptDraftText != null ? String(node.runSnapshotPromptDraftText) : undefined;
     return {
         runPrompt: node.runPrompt,
         runModelPrompt: node.runModelPrompt || '',
-        runSettings: node.runSettings ? cloneSmartSettings(node.runSettings) : undefined,
+        runSettings: snapshotSettings,
         runPromptRefs: Array.isArray(node.runPromptRefs) ? node.runPromptRefs.map(r => ({...r})) : [],
+        promptDraftHtml: snapshotPromptHtml,
+        promptDraftText: snapshotPromptText,
     };
 }
 function embedGenPromptIntoImages(images, node){
     const snapshot = genPromptSnapshotFromNode(node);
     if(!snapshot || !images?.length) return images;
-    return images.map(img => img ? {...img, _genPrompt: snapshot} : img);
+    return images.map(img => img ? {...img, _genPrompt: cloneGenPromptSnapshot(snapshot)} : img);
 }
 function addConnection(fromId, toId, kind='flow'){
     if(!fromId || !toId || fromId === toId) return;
