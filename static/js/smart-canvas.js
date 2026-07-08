@@ -5971,11 +5971,31 @@ function imageMetaFromNode(node){
     return {};
 }
 function applyNodeMetaToImage(image, node){
+    if(image && node) {
+        const snapshot = genPromptSnapshotFromNode(node);
+        // 若节点有提示词则覆盖；若节点无提示词（如历史分组本身），保留图片已有快照。
+        if(snapshot) image._genPrompt = snapshot;
+    }
     return stripImageGenerationMeta(image);
 }
 function inheritNodeMetaFromImage(node){
     if(!node) return;
-    node.images = (node.images || []).map(img => stripImageGenerationMeta(img));
+    const genPrompt = (node.images || []).map(img => img?._genPrompt).find(Boolean);
+    if(genPrompt){
+        if(genPrompt.runPrompt != null) node.runPrompt = genPrompt.runPrompt;
+        if(genPrompt.runModelPrompt != null) node.runModelPrompt = genPrompt.runModelPrompt;
+        if(genPrompt.runSettings) node.runSettings = genPrompt.runSettings;
+        if(Array.isArray(genPrompt.runPromptRefs)) node.runPromptRefs = genPrompt.runPromptRefs;
+        // 不设 promptDraftHtml/promptDraftText：composer 会从 runPrompt+runPromptRefs 自动重建
+        delete node.promptDraftHtml;
+        delete node.promptDraftText;
+    }
+    node.images = (node.images || []).map(img => {
+        if(!img) return img;
+        const cleaned = stripImageGenerationMeta({...img});
+        delete cleaned._genPrompt;
+        return cleaned;
+    });
 }
 function createNode(x, y, images=[], options={}){
     if(!options.skipUndo) pushUndo();
@@ -12405,6 +12425,24 @@ function stripImageGenerationMeta(img){
     delete img.promptDraftText;
     return img;
 }
+// 从节点抓取"生成时提示词快照"，用于嵌入图片对象随图漂流。
+// 只保存 runPrompt / runSettings / runPromptRefs，不保存 promptDraftHtml，
+// 因为后者在用户再次编辑后会指向新草稿而不是该次生成的实际提示词。
+function genPromptSnapshotFromNode(node){
+    if(!node) return null;
+    if(!node.runPrompt && !node.promptDraftText) return null;
+    return {
+        runPrompt: node.runPrompt || '',
+        runModelPrompt: node.runModelPrompt || '',
+        runSettings: node.runSettings ? cloneSmartSettings(node.runSettings) : undefined,
+        runPromptRefs: Array.isArray(node.runPromptRefs) ? node.runPromptRefs.map(r => ({...r})) : [],
+    };
+}
+function embedGenPromptIntoImages(images, node){
+    const snapshot = genPromptSnapshotFromNode(node);
+    if(!snapshot || !images?.length) return images;
+    return images.map(img => img ? {...img, _genPrompt: snapshot} : img);
+}
 function addConnection(fromId, toId, kind='flow'){
     if(!fromId || !toId || fromId === toId) return;
     canvas.connections = canvas.connections || [];
@@ -13993,7 +14031,6 @@ function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=nul
     const beforeRight = (Number(node.x) || 0) + nodeRect(node).width;
     const existing = cleanHistoryImages(node.images || []);
     const next = cleanHistoryImages(additions);
-    if(!next.length) return [];
     const history = existing.length ? ensureHistoryGroupForNode(node) : historyGroupForNode(node);
     if(history){
         const archived = cleanHistoryImages([...existing, ...(history.images || [])]);
@@ -14802,6 +14839,11 @@ async function runGeneration(){
             const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs});
             pendingNode.w = pendingBox.w;
             pendingNode.h = pendingBox.h;
+        }
+        // 在覆盖节点提示词之前，把当前提示词快照嵌入已有图片，
+        // 这样图片归档到历史分组时携带的就是它实际生成时的提示词。
+        if(cleanHistoryImages(pendingNode.images || []).length){
+            pendingNode.images = embedGenPromptIntoImages(pendingNode.images, pendingNode);
         }
         attachRunMeta(pendingNode, pendingMeta);
     }
