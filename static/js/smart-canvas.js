@@ -2522,12 +2522,17 @@ function renderVideoProviderControl(providers){
     </div>`;
 }
 function renderVideoModelControl(models){
+    const aliases = (apiProviders || []).find(p => p.id === settings.videoProvider)?.model_aliases || {};
+    const currentLabel = (settings.videoModel && aliases[settings.videoModel]) ? aliases[settings.videoModel] : (settings.videoModel || tr('smart.model'));
     return `<div class="smart-control model-control">
-        <button class="smart-pill" type="button"><i data-lucide="film"></i><span class="sub">${escapeHtml(settings.videoModel || tr('smart.model'))}</span></button>
+        <button class="smart-pill" type="button"><i data-lucide="film"></i><span class="sub">${escapeHtml(currentLabel)}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.videoModel'))}</div>
             <div class="model-list">
-                ${models.map(m => `<button type="button" class="direct-option ${m === settings.videoModel ? 'active' : ''}" data-smart-param="videoModel" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(m)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noVideoModel'))}</div>`}
+                ${models.map(m => {
+                    const label = aliases[m] || m;
+                    return `<button type="button" class="direct-option ${m === settings.videoModel ? 'active' : ''}" data-smart-param="videoModel" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(label)}</span></button>`;
+                }).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noVideoModel'))}</div>`}
             </div>
         </div>
     </div>`;
@@ -3134,13 +3139,26 @@ function renderProviderControl(providers){
         </div>
     </div>`;
 }
+function modelDisplayName(providerId, modelId){
+    const id = String(modelId || '').trim();
+    if(!id) return id;
+    const p = (apiProviders || []).find(x => x.id === providerId);
+    const aliases = p?.model_aliases;
+    if(aliases && typeof aliases === 'object' && aliases[id]) return aliases[id];
+    return id;
+}
 function renderModelControl(models){
+    const aliases = (apiProviders || []).find(p => p.id === settings.provider_id)?.model_aliases || {};
+    const currentLabel = (settings.model && aliases[settings.model]) ? aliases[settings.model] : (settings.model || tr('smart.model'));
     return `<div class="smart-control model-control">
-        <button class="smart-pill" type="button"><i data-lucide="sparkles"></i><span class="sub">${escapeHtml(settings.model || tr('smart.model'))}</span></button>
+        <button class="smart-pill" type="button"><i data-lucide="sparkles"></i><span class="sub">${escapeHtml(currentLabel)}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.imageModel'))}</div>
             <div class="model-list">
-                ${models.map(m => `<button type="button" class="direct-option ${m === settings.model ? 'active' : ''}" data-smart-param="model" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(m)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noImageModel'))}</div>`}
+                ${models.map(m => {
+                    const label = aliases[m] || m;
+                    return `<button type="button" class="direct-option ${m === settings.model ? 'active' : ''}" data-smart-param="model" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(label)}</span></button>`;
+                }).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noImageModel'))}</div>`}
             </div>
         </div>
     </div>`;
@@ -3163,13 +3181,18 @@ function renderMsFunctionControl(){
 function renderMsCustomModelPill(){
     if(settings.msgenModel !== 'custom') return '';
     const models = modelscopeImageModels();
-    const label = settings.msCustomModel || tr('smart.customModel');
+    const msAliases = (apiProviders || []).find(p => p.id === 'modelscope')?.model_aliases || {};
+    const rawLabel = settings.msCustomModel || '';
+    const label = (rawLabel && msAliases[rawLabel]) ? msAliases[rawLabel] : (rawLabel || tr('smart.customModel'));
     return `<div class="smart-control model-control">
         <button class="smart-pill" type="button"><i data-lucide="boxes"></i><span class="sub">${escapeHtml(label)}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.msCustomModel'))}</div>
             <div class="model-list">
-                ${models.map(m => `<button type="button" class="direct-option ${m === settings.msCustomModel ? 'active' : ''}" data-smart-param="msCustomModel" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(m)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noMsModel'))}</div>`}
+                ${models.map(m => {
+                    const ml = msAliases[m] || m;
+                    return `<button type="button" class="direct-option ${m === settings.msCustomModel ? 'active' : ''}" data-smart-param="msCustomModel" data-smart-value="${escapeHtml(m)}"><span>${escapeHtml(ml)}</span></button>`;
+                }).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noMsModel'))}</div>`}
             </div>
         </div>
     </div>`;

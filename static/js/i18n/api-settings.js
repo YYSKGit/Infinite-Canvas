@@ -37,6 +37,7 @@
         "api.videoHint": { zh: "无限画布视频生成节点使用。", en: "Used by Infinite Canvas video generation nodes." },
         "api.model": { zh: "模型", en: "Model" },
         "api.noModels": { zh: "暂无模型", en: "No models" },
+        "api.modelAliasPlaceholder": { zh: "显示名称（可选）", en: "Display name (optional)" },
         "api.modelsTitle": { zh: "模型列表", en: "Model List" },
         "api.modelsDesc": { zh: "从上游 API 自动拉取所有可用模型并按类型分类（image / chat / video）", en: "Fetch all available upstream models and classify them by type (image / chat / video)." },
         "api.volcengineEndpointTip": { zh: "火山聊天模型建议填写方舟控制台中的推理接入点 ID（ep-...）。", en: "For Volcengine chat, prefer the Ark inference endpoint ID (ep-...)." },

@@ -1250,6 +1250,7 @@ def normalize_provider(item):
         "chat_models": model_list_from_values(item.get("chat_models") or []),
         "video_models": model_list_from_values(item.get("video_models") or []),
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
+        "model_aliases": normalize_model_aliases(item.get("model_aliases")),
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
         "ms_defaults_version": int(item.get("ms_defaults_version") or 0),
         "rh_apps": normalize_runninghub_entries(item.get("rh_apps") or [], "app"),
@@ -2562,6 +2563,7 @@ class ApiProviderPayload(BaseModel):
     chat_models: List[str] = []
     video_models: List[str] = []
     model_protocols: Dict[str, str] = {}
+    model_aliases: Dict[str, str] = {}
     ms_loras: List[Dict[str, Any]] = []
     ms_defaults_version: int = 0
     rh_apps: List[Dict[str, Any]] = []
@@ -4155,6 +4157,17 @@ def normalize_model_protocols(value):
             proto = str(raw_proto or "").strip().lower()
             if name and proto in PER_MODEL_PROTOCOL_OPTIONS:
                 out[name] = proto
+    return out
+
+def normalize_model_aliases(value):
+    """规整 {模型ID: 显示名称} 别名表，过滤空键。"""
+    out = {}
+    if isinstance(value, dict):
+        for raw_name, raw_alias in value.items():
+            name = str(raw_name or "").strip()
+            alias = str(raw_alias or "").strip()
+            if name and alias:
+                out[name] = alias
     return out
 
 def effective_protocol(provider, model=""):

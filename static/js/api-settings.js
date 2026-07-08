@@ -2255,6 +2255,7 @@ function recommendedProviderForApi(api){
         chat_models:api.empty_models_on_save ? [] : (Array.isArray(api.chat_models) ? [...api.chat_models] : []),
         video_models:api.empty_models_on_save ? [] : (Array.isArray(api.video_models) ? [...api.video_models] : []),
         model_protocols:api.empty_models_on_save ? {} : ((api.model_protocols && typeof api.model_protocols === 'object') ? {...api.model_protocols} : {}),
+        model_aliases:api.empty_models_on_save ? {} : ((api.model_aliases && typeof api.model_aliases === 'object') ? {...api.model_aliases} : {}),
         has_key:false,
         key_preview:''
     };
@@ -3286,13 +3287,19 @@ function renderModels(kind){
         return;
     }
     const showProtocol = kind !== 'video' && providerSupportsModelProtocol(item);
-    list.innerHTML = models.map((model, index) => `
+    const aliases = (item?.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
+    list.innerHTML = models.map((model, index) => {
+        const alias = String(aliases[String(model || '').trim()] || '');
+        return `
         <div class="model-row${showProtocol ? ' has-protocol' : ''}">
-            <input value="${escapeAttr(model)}" oninput="updateModel('${kind}', ${index}, this.value)">
+            <div class="model-inputs">
+                <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
+                <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
+            </div>
             ${modelProtocolSelectHtml(kind, index, model, item)}
             <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
         </div>
-    `).join('');
+    `}).join('');
     refreshIcons();
 }
 function msLoraTargetOptions(selected){
@@ -3412,6 +3419,7 @@ async function addCliProvider(kind){
             chat_models:[],
             video_models:[],
             model_protocols:{},
+            model_aliases:{},
             has_key:false,
             key_preview:''
         };
@@ -3528,7 +3536,32 @@ function updateModel(kind, index, value){
             if(newName) item.model_protocols[newName] = proto;
         }
     }
+    // 重命名时迁移该模型的显示名称别名
+    if(item.model_aliases && typeof item.model_aliases === 'object' && oldName && oldName !== newName){
+        if(Object.prototype.hasOwnProperty.call(item.model_aliases, oldName)){
+            const alias = item.model_aliases[oldName];
+            const stillUsedElsewhere = (() => {
+                const lists = ['image_models', 'chat_models', 'video_models'];
+                return lists.some(k => Array.isArray(item[k]) && item[k].some((m, i) => !(k === key && i === index) && String(m || '').trim() === oldName));
+            })();
+            if(!stillUsedElsewhere) delete item.model_aliases[oldName];
+            if(newName) item.model_aliases[newName] = alias;
+        }
+    }
     if(kind === 'image') renderMsLoras();
+}
+function updateModelAlias(kind, index, value){
+    const item = provider();
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
+    const name = String(item[key]?.[index] || '').trim();
+    if(!name) return;
+    if(!item.model_aliases || typeof item.model_aliases !== 'object') item.model_aliases = {};
+    const alias = String(value || '').trim();
+    if(alias){
+        item.model_aliases[name] = alias;
+    } else {
+        delete item.model_aliases[name];
+    }
 }
 function updateModelProtocol(kind, index, value){
     const item = provider();
@@ -3551,6 +3584,10 @@ function removeModel(kind, index){
     // 清理不再使用的协议覆盖
     if(removed && item.model_protocols && typeof item.model_protocols === 'object' && !modelProtocolStillUsed(item, removed)){
         delete item.model_protocols[removed];
+    }
+    // 清理不再使用的显示名称别名
+    if(removed && item.model_aliases && typeof item.model_aliases === 'object' && !modelProtocolStillUsed(item, removed)){
+        delete item.model_aliases[removed];
     }
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
@@ -3636,6 +3673,7 @@ async function saveProviders(){
                 chat_models:item.chat_models || [],
                 video_models:item.video_models || [],
                 model_protocols:(item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {},
+                model_aliases:(item.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {},
                 ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
                 ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
                 rh_apps:item.id === 'runninghub' ? (item.rh_apps || []) : [],
