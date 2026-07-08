@@ -9,6 +9,7 @@ const createMenu = document.getElementById('createMenu');
 const promptInput = document.getElementById('promptInput');
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
+const composerHeadQuickActions = document.getElementById('composerHeadQuickActions');
 const engineSelect = document.getElementById('engineSelect');
 const dynamicParams = document.getElementById('dynamicParams');
 const runBtn = document.getElementById('runBtn');
@@ -2593,6 +2594,12 @@ function renderVideoToggleControl(key, label){
     const on = !!settings[key];
     return `<button type="button" class="setting-check ${on ? 'active' : ''}" data-toggle-param="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
 }
+function renderVideoToggleGroup(content){
+    return `<div class="video-toggle-group">${content}</div>`;
+}
+function renderParamRowBreak(){
+    return `<span class="param-row-break" aria-hidden="true"></span>`;
+}
 function renderTempShUploadControl(){
     return `<button type="button" class="smart-pill cloud-upload-pill" data-temp-sh-upload-video title="上传当前输入图片或视频到云端直链"><i data-lucide="upload-cloud"></i><span>上传云端</span></button>`;
 }
@@ -2842,14 +2849,17 @@ function renderApiVideoParams(){
         ${renderVideoResolutionControl()}
         ${renderVideoAspectControl()}
         ${renderVideoDurationControl()}
-        ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-        ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-        ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-        ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-        ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-        ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-        ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-        ${settings.videoProvider === 'jimeng' ? '' : renderVideoTrustedAssetControl()}
+        ${renderParamRowBreak()}
+        ${renderVideoToggleGroup(`
+            ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
+            ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
+            ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
+            ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
+            ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
+            ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
+            ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
+            ${settings.videoProvider === 'jimeng' ? '' : renderVideoTrustedAssetControl()}
+        `)}
     `;
 }
 function renderVolcengineParams(){
@@ -2879,14 +2889,17 @@ function renderVolcengineVideoParams(){
         ${renderVideoResolutionControl()}
         ${renderVideoAspectControl()}
         ${renderVideoDurationControl()}
-        ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-        ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-        ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-        ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-        ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-        ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-        ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-        ${renderVideoTrustedAssetControl()}
+        ${renderParamRowBreak()}
+        ${renderVideoToggleGroup(`
+            ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
+            ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
+            ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
+            ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
+            ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
+            ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
+            ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
+            ${renderVideoTrustedAssetControl()}
+        `)}
     `;
 }
 function renderRunningHubParams(){
@@ -2907,7 +2920,7 @@ function renderRunningHubParams(){
         ${renderRhMachineControl()}
         ${renderCountVisualControl()}
         <div class="rh-fields-break"></div>
-        ${fields.length ? fields.filter(f => !['image','video','audio','prompt'].includes(rhFieldRole(f))).map(renderRhSettingField).join('') : `<div class="muted-note">${escapeHtml(tr('smart.rhNeedFields'))}</div>`}
+        ${fields.length ? `<div class="rh-secondary-row">${fields.filter(f => !['image','video','audio','prompt'].includes(rhFieldRole(f))).map(renderRhSettingField).join('')}</div>` : `<div class="muted-note">${escapeHtml(tr('smart.rhNeedFields'))}</div>`}
     `;
 }
 function renderRhConfigControl(ref){
@@ -5231,6 +5244,9 @@ function completeSmartNodeWithImages(node, images){
 }
 function syncRunButtonState(node=selectedNode()){
     if(!runBtn) return;
+    const runLabel = tr('smart.run');
+    runBtn.title = runLabel;
+    runBtn.setAttribute('aria-label', runLabel);
     // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
     runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id);
@@ -11539,7 +11555,7 @@ function positionComposerForNode(node){
     if(!node) return;
     const rect = nodeRect(node);
     const gap = 14;
-    const cardW = 540;
+    const cardW = 510;
     composer.style.width = `${cardW}px`;
     composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;
@@ -11617,20 +11633,24 @@ function renderInputThumbsRow(node){
         return;
     }
     inputThumbsRow.dataset.thumbsSig = thumbsSignature;
-    inputThumbsRow.classList.toggle('has-items', Boolean(node));
+    if(composerHeadQuickActions) composerHeadQuickActions.innerHTML = '';
     if(!node){
+        inputThumbsRow.classList.remove('has-items');
         inputThumbsRow.innerHTML = '';
         refreshPromptMentionTokenLabels();
         return;
     }
     const addButton = `<button class="input-thumb-add ${addActive ? 'active' : ''}" type="button" data-input-add-reference title="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}" aria-label="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}"><i data-lucide="image-plus"></i></button>`;
+    if(composerHeadQuickActions) composerHeadQuickActions.innerHTML = addButton;
     if(!dedup.length){
-        inputThumbsRow.innerHTML = `<div class="input-thumb-list empty"></div><div class="input-thumb-actions">${addButton}</div>`;
+        inputThumbsRow.classList.remove('has-items');
+        inputThumbsRow.innerHTML = '';
         bindInputThumbReferenceActions();
         refreshIcons();
         refreshPromptMentionTokenLabels();
         return;
     }
+    inputThumbsRow.classList.add('has-items');
     const mediaCounters = {image:0, video:0, audio:0, text:0, file:0};
     const thumbsHtml = dedup.map((img, i) => {
         const isVid = isVideoMediaItem(img);
@@ -11652,26 +11672,33 @@ function renderInputThumbsRow(node){
         const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
         return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
     }).join('');
-    inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div><div class="input-thumb-actions">${addButton}</div>`;
+    inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div>`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
     bindInputThumbsDrag(node, dedup, manualRefKeys);
     bindInputThumbReferenceActions();
     refreshIcons();
     refreshPromptMentionTokenLabels();
 }
+function currentInputAddReferenceButton(){
+    return composerHeadQuickActions?.querySelector('[data-input-add-reference]')
+        || inputThumbsRow?.querySelector('[data-input-add-reference]')
+        || null;
+}
 function bindInputThumbReferenceActions(){
-    inputThumbsRow?.querySelectorAll('[data-input-add-reference]').forEach(btn => {
-        btn.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            toggleAssetMentionPickerFromThumbs();
+    [composerHeadQuickActions, inputThumbsRow].filter(Boolean).forEach(root => {
+        root.querySelectorAll('[data-input-add-reference]').forEach(btn => {
+            btn.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleAssetMentionPickerFromThumbs();
+            });
         });
-    });
-    inputThumbsRow?.querySelectorAll('[data-input-remove-reference]').forEach(btn => {
-        btn.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            removeManualReferenceFromSelectedNode(btn.dataset.inputRemoveReference || '');
+        root.querySelectorAll('[data-input-remove-reference]').forEach(btn => {
+            btn.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeManualReferenceFromSelectedNode(btn.dataset.inputRemoveReference || '');
+            });
         });
     });
 }
@@ -13076,7 +13103,7 @@ function renderMentionPicker(source){
     if(mentionInsertMode === 'manual-ref'){
         placeMentionPickerInComposerCard();
         renderInputThumbsRow(selectedNode());
-        mentionAnchorEl = inputThumbsRow?.querySelector('[data-input-add-reference]') || inputThumbsRow;
+        mentionAnchorEl = currentInputAddReferenceButton() || composerHeadQuickActions || inputThumbsRow;
     } else {
         placeMentionPickerInPromptRow();
     }
@@ -13173,7 +13200,7 @@ function toggleAssetMentionPickerFromThumbs(){
     }
     mentionInsertMode = 'manual-ref';
     renderInputThumbsRow(selectedNode());
-    mentionAnchorEl = inputThumbsRow?.querySelector('[data-input-add-reference]') || inputThumbsRow;
+    mentionAnchorEl = currentInputAddReferenceButton() || composerHeadQuickActions || inputThumbsRow;
     renderMentionPicker('asset');
 }
 function addManualReferenceToSelectedNode(img){
@@ -14186,11 +14213,14 @@ function syncCascadeRunButton(node=selectedNode()){
     const nodeLoopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
     const loopRunState = smartCascadeRunForLoop(nodeLoopId);
     const runningForNode = Boolean(loopRunState);
+    const label = runningForNode ? smartCascadeStopText(Boolean(loopRunState?.stopRequested)) : tr('smart.loopRunAll');
     cascadeRunBtn.disabled = !visible || (!runningForNode && Boolean(node?.running)) || Boolean(loopRunState?.stopRequested);
     cascadeRunBtn.classList.toggle('is-stop', runningForNode);
+    cascadeRunBtn.title = label;
+    cascadeRunBtn.setAttribute('aria-label', label);
     cascadeRunBtn.innerHTML = runningForNode
-        ? `<i data-lucide="square"></i><span>${escapeHtml(smartCascadeStopText(Boolean(loopRunState?.stopRequested)))}</span>`
-        : `<i data-lucide="workflow"></i><span>${escapeHtml(tr('smart.loopRunAll'))}</span>`;
+        ? `<i data-lucide="square"></i><span>${escapeHtml(label)}</span>`
+        : `<i data-lucide="workflow"></i><span>${escapeHtml(label)}</span>`;
     refreshIcons();
 }
 function loadNodePromptDraftToInput(node){
