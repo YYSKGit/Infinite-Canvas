@@ -5971,9 +5971,10 @@ function imageMetaFromNode(node){
     return {};
 }
 function applyNodeMetaToImage(image, node){
-    if(image && node) {
+    if(image && node && !image._genPrompt) {
+        // 只在图片尚无自带快照时才从节点补充；
+        // 历史节点图片已各自携带 _genPrompt，节点的"代表提示词"不应覆盖它们各自的精确快照。
         const snapshot = genPromptSnapshotFromNode(node);
-        // 若节点有提示词则覆盖；若节点无提示词（如历史分组本身），保留图片已有快照。
         if(snapshot) image._genPrompt = snapshot;
     }
     return stripImageGenerationMeta(image);
