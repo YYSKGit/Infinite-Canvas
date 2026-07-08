@@ -885,7 +885,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .count-cell.active { background:var(--strong); color:var(--strong-text); }
 .dynamic-params .muted-note { height:var(--ctrl-height); display:flex; align-items:center; padding:0 var(--ctrl-xpad); border-radius:999px; background:transparent; color:var(--faint); border:1px solid transparent; font-size:var(--ctrl-font); line-height:1; font-weight:400; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .smart-control { position:relative; flex:0 0 auto; min-width:0; }
-.model-control .smart-pill { max-width:120px; }
+.model-control .smart-pill { max-width:140px; }
 .rh-config-control .smart-pill { max-width:168px; }
 .rh-dropdown-control .smart-pill { max-width:136px; border-color:var(--line); background:var(--card); padding-right:7px; }
 .rh-dropdown-control:hover .smart-pill,.rh-dropdown-control.pinned .smart-pill { border-color:var(--strong); }
