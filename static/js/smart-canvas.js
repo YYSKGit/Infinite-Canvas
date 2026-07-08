@@ -16373,11 +16373,7 @@ window.onmousemove = e => {
         const dy = e.clientY - thumbDragState.startY;
         const source = nodes.find(n => n.id === thumbDragState.nodeId);
         if(!thumbDragState.detached && Math.abs(dx) + Math.abs(dy) > 6){
-            const canDetachThumb = source && (
-                isSmartGroupNode(source) || isHistoryGroupNode(source)
-                    ? (source.images || []).length >= 1
-                    : (source.images || []).length > 1
-            );
+            const canDetachThumb = source && (isSmartGroupNode(source) ? (source.images || []).length >= 1 : (source.images || []).length > 1);
             if(canDetachThumb){
                 const img = source.images[thumbDragState.imgIndex];
                 if(img){
@@ -16387,14 +16383,6 @@ window.onmousemove = e => {
                     source.images.splice(thumbDragState.imgIndex, 1);
                     if(isSmartGroupNode(source)){
                         arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
-                    } else if(isHistoryGroupNode(source)){
-                        if(source.images.length === 0){
-                            // 历史节点已空，移除节点和关联连线
-                            const histId = source.id;
-                            nodes = nodes.filter(n => n.id !== histId);
-                            if(canvas) canvas.connections = (canvas.connections || []).filter(c => c.from !== histId && c.to !== histId);
-                        }
-                        // 历史节点不继承 runPrompt，不做 inheritNodeMetaFromImage
                     } else if(source.images.length <= 1){
                         source.title = 'Image';
                         delete source.w; delete source.h;
