@@ -344,6 +344,7 @@ VENICE_DEFAULT_VIDEO_MODELS = [
 VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
 VENICE_OUTERFACE_IMAGE_URL = "https://outerface.venice.ai/api/inference/image"
+VENICE_OUTERFACE_IMAGE_EDIT_URL = "https://outerface.venice.ai/api/inference/multi-edit"
 VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
@@ -8802,6 +8803,51 @@ async def generate_venice_web_image(client, prompt, size, model, provider):
     image_data = await venice_binary_image_response_to_data_url(response)
     return image_data, {"model": model, "content_type": response.headers.get("content-type") or "image/png", "headers": dict(response.headers)}
 
+def venice_reference_image_bytes(ref) -> tuple:
+    """Return (bytes, mime_type, filename) for a reference image dict."""
+    path = output_file_from_url(str(ref.get("url") or ""))
+    if path and os.path.isfile(path):
+        mime = content_type_for_path(path).split(";")[0].strip() or "image/jpeg"
+        filename = os.path.basename(path)
+        with open(path, "rb") as f:
+            return f.read(), mime, filename
+    # Fallback: decode data URL or base64 stored in the ref
+    data_url = str(ref.get("url") or "")
+    if data_url.startswith("data:") and ";base64," in data_url:
+        header, b64 = data_url.split(";base64,", 1)
+        mime = header[len("data:"):].strip() or "image/jpeg"
+        ext = ".jpg" if "jpeg" in mime else f".{mime.split('/')[-1]}"
+        return base64.b64decode(b64), mime, f"image{ext}"
+    return b"", "image/jpeg", "image.jpg"
+
+async def generate_venice_web_image_edit(client, prompt, model, ref, provider):
+    """Post to the outerface multi-edit endpoint as multipart/form-data."""
+    jwt, _ = await venice_web_auth_info(client, provider)
+    edit_model = venice_image_edit_model(model)
+    if not edit_model:
+        raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {model} 没有对应的编辑模型，无法执行图片编辑。")
+    img_bytes, mime, filename = venice_reference_image_bytes(ref)
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="Venice 图片编辑：无法读取参考图片内容。")
+    headers = {
+        "Authorization": f"Bearer {jwt}",
+        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+    }
+    files = {"files": (filename, img_bytes, mime)}
+    data = {
+        "acceptCreditFallback": "true",
+        "modelId": edit_model,
+        "prompt": str(prompt or ""),
+        "requestId": venice_outerface_request_id(),
+    }
+    response = await client.post(VENICE_OUTERFACE_IMAGE_EDIT_URL, headers=headers, data=data, files=files)
+    if response.status_code >= 400:
+        detail = venice_http_error_detail(response, f"Venice Web 图片编辑请求失败(HTTP {response.status_code})")
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    venice_raise_for_blocked_response(response)
+    image_data = await venice_binary_image_response_to_data_url(response)
+    return image_data, {"model": edit_model, "content_type": response.headers.get("content-type") or "image/png", "headers": dict(response.headers)}
+
 VOLCENGINE_MIN_PIXELS = 3_686_400
 VOLCENGINE_MIN_EDGE = 1536
 VOLCENGINE_MAX_EDGE = 4096
@@ -10227,35 +10273,10 @@ async def generate_venice_provider_image(prompt, size, quality, model, reference
     timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         if refs:
-            # Image edit: keep using the official API endpoint
-            base_url = venice_api_root(provider)
-            if not base_url:
-                raise HTTPException(status_code=400, detail=f"{(provider or {}).get('name') or (provider or {}).get('id') or 'Venice'} 未配置 Base URL")
-            headers = api_headers(provider=provider, model=model)
             image_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() != "mask"]
             if len(image_refs) != 1 or len(refs) != len(image_refs):
                 raise HTTPException(status_code=400, detail="Venice 图片编辑当前只支持单张参考图，不支持 mask 或多图参考。")
-            edit_model = venice_image_edit_model(model)
-            if not edit_model:
-                raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {model} 没有对应的编辑模型，无法执行图片编辑。")
-            edit_body = {
-                "model": edit_model,
-                "image": venice_reference_image_input(image_refs[0], max_size=4096),
-                "prompt": str(prompt or ""),
-                "safe_mode": False,
-            }
-            if quality in {"low", "medium", "high"}:
-                edit_body["quality"] = quality
-            response = await client.post(f"{base_url}/image/edit", headers=headers, json=edit_body)
-            response.raise_for_status()
-            venice_raise_for_blocked_response(response)
-            image_data = await venice_binary_image_response_to_data_url(response)
-            raw = {
-                "model": edit_model,
-                "content_type": response.headers.get("content-type") or "image/png",
-                "headers": dict(response.headers),
-            }
-            return image_data, raw
+            return await generate_venice_web_image_edit(client, prompt, model, image_refs[0], provider)
         # Text-to-image: use the web (outerface) interface for free model support
         return await generate_venice_web_image(client, prompt, size, model, provider)
 
