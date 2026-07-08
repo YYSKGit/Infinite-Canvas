@@ -5978,6 +5978,19 @@ function applyNodeMetaToImage(image, node){
     }
     return stripImageGenerationMeta(image);
 }
+// 将历史节点图片中保存的提示词快照同步到历史节点自身，使其 UI 能显示对应的提示词。
+// 取最新归档的图片（数组首位）的快照作为代表，仅当存在快照时才覆盖。
+function syncHistoryNodePromptFromImages(historyNode){
+    if(!historyNode) return;
+    const snap = (historyNode.images || []).map(img => img?._genPrompt).find(Boolean);
+    if(!snap) return;
+    if(snap.runPrompt != null) historyNode.runPrompt = snap.runPrompt;
+    if(snap.runModelPrompt != null) historyNode.runModelPrompt = snap.runModelPrompt;
+    if(snap.runSettings) historyNode.runSettings = snap.runSettings;
+    if(Array.isArray(snap.runPromptRefs)) historyNode.runPromptRefs = snap.runPromptRefs;
+    delete historyNode.promptDraftHtml;
+    delete historyNode.promptDraftText;
+}
 function inheritNodeMetaFromImage(node){
     if(!node) return;
     const genPrompt = (node.images || []).map(img => img?._genPrompt).find(Boolean);
@@ -5993,7 +6006,7 @@ function inheritNodeMetaFromImage(node){
     node.images = (node.images || []).map(img => {
         if(!img) return img;
         const cleaned = stripImageGenerationMeta({...img});
-        delete cleaned._genPrompt;
+        // 保留 _genPrompt：允许图片在多次移出/重新分组后仍能还原提示词
         return cleaned;
     });
 }
@@ -12430,9 +12443,11 @@ function stripImageGenerationMeta(img){
 // 因为后者在用户再次编辑后会指向新草稿而不是该次生成的实际提示词。
 function genPromptSnapshotFromNode(node){
     if(!node) return null;
-    if(!node.runPrompt && !node.promptDraftText) return null;
+    // 只在有实际运行记录的提示词时才创建快照；promptDraftText 是用户当前草稿，
+    // 不代表该批图片实际生成时的提示词，不应作为快照来源。
+    if(!node.runPrompt) return null;
     return {
-        runPrompt: node.runPrompt || '',
+        runPrompt: node.runPrompt,
         runModelPrompt: node.runModelPrompt || '',
         runSettings: node.runSettings ? cloneSmartSettings(node.runSettings) : undefined,
         runPromptRefs: Array.isArray(node.runPromptRefs) ? node.runPromptRefs.map(r => ({...r})) : [],
@@ -13438,6 +13453,7 @@ function archiveCurrentOutputsToHistory(node, kind='image'){
     history.scale = MEDIA_GROUP_DEFAULT_SCALE;
     delete history.w;
     delete history.h;
+    syncHistoryNodePromptFromImages(history);
     node.images = [];
     return true;
 }
@@ -14040,6 +14056,7 @@ function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=nul
         history.scale = MEDIA_GROUP_DEFAULT_SCALE;
         delete history.w;
         delete history.h;
+        syncHistoryNodePromptFromImages(history);
     }
     node.images = next;
     markSmartNodeComplete(node, meta);
@@ -16356,7 +16373,11 @@ window.onmousemove = e => {
         const dy = e.clientY - thumbDragState.startY;
         const source = nodes.find(n => n.id === thumbDragState.nodeId);
         if(!thumbDragState.detached && Math.abs(dx) + Math.abs(dy) > 6){
-            const canDetachThumb = source && (isSmartGroupNode(source) ? (source.images || []).length >= 1 : (source.images || []).length > 1);
+            const canDetachThumb = source && (
+                isSmartGroupNode(source) || isHistoryGroupNode(source)
+                    ? (source.images || []).length >= 1
+                    : (source.images || []).length > 1
+            );
             if(canDetachThumb){
                 const img = source.images[thumbDragState.imgIndex];
                 if(img){
@@ -16366,6 +16387,14 @@ window.onmousemove = e => {
                     source.images.splice(thumbDragState.imgIndex, 1);
                     if(isSmartGroupNode(source)){
                         arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
+                    } else if(isHistoryGroupNode(source)){
+                        if(source.images.length === 0){
+                            // 历史节点已空，移除节点和关联连线
+                            const histId = source.id;
+                            nodes = nodes.filter(n => n.id !== histId);
+                            if(canvas) canvas.connections = (canvas.connections || []).filter(c => c.from !== histId && c.to !== histId);
+                        }
+                        // 历史节点不继承 runPrompt，不做 inheritNodeMetaFromImage
                     } else if(source.images.length <= 1){
                         source.title = 'Image';
                         delete source.w; delete source.h;
