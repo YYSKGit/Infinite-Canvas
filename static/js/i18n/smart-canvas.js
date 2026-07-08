@@ -125,7 +125,7 @@
         "smart.rhConfig": { zh: "RunningHub 配置", en: "RunningHub Config" },
         "smart.rhNoConfig": { zh: "暂无 RunningHub 配置", en: "No RunningHub config" },
         "smart.rhKey": { zh: "Key", en: "Key" },
-        "smart.rhFreeKey": { zh: "RunningHub币", en: "RunningHub Coins" },
+        "smart.rhFreeKey": { zh: "RH币", en: "RunningHub Coins" },
         "smart.rhWalletKey": { zh: "账户余额", en: "Wallet" },
         "smart.rhMachine": { zh: "显存", en: "VRAM" },
         "smart.rhParams": { zh: "RunningHub 参数", en: "RunningHub Params" },

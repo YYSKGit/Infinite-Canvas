@@ -2789,7 +2789,6 @@ function renderApiParams(){
         ${renderProviderControl(providers)}
         ${renderModelControl(models)}
         ${renderSizePickerControl('', true)}
-        ${renderQualityControl()}
         ${renderCountVisualControl()}
     `;
 }
@@ -2826,7 +2825,6 @@ function renderVolcengineParams(){
         ${renderProviderControl(providers)}
         ${renderModelControl(models)}
         ${renderSizePickerControl('', true)}
-        ${renderQualityControl()}
         ${renderCountVisualControl()}
     `;
 }
@@ -2868,7 +2866,8 @@ function renderRunningHubParams(){
         ${renderRhConfigControl(ref)}
         ${renderRhPaymentControl()}
         ${renderRhMachineControl()}
-        <div class="rh-mini-summary">${escapeHtml(mediaFields)} 素材 · ${escapeHtml(promptFields)} 提示词</div>
+        ${renderCountVisualControl()}
+        <div class="rh-fields-break"></div>
         ${fields.length ? fields.filter(f => !['image','video','audio','prompt'].includes(rhFieldRole(f))).map(renderRhSettingField).join('') : `<div class="muted-note">${escapeHtml(tr('smart.rhNeedFields'))}</div>`}
     `;
 }
@@ -14023,7 +14022,7 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     const urls = activeSettings.engine === 'runninghub'
-        ? await runRunningHubGeneration(prompt, refs, activeSettings)
+        ? (await Promise.all(Array.from({length:Math.max(1, Math.min(8, Number(activeSettings.count || 1)))}, () => runRunningHubGeneration(prompt, refs, activeSettings)))).flat()
         : activeSettings.engine === 'modelscope'
             ? await runModelscopeGeneration(prompt, refs, activeSettings, requestMeta)
             : [];
@@ -14626,7 +14625,7 @@ async function runGeneration(){
     rememberRecentSmartSettings(settings, node);
     const runLogStart = nowMs();
     const expectedCount = settings.engine === 'runninghub'
-        ? 1
+        ? Math.max(1, Math.min(8, Number(settings.count || 1)))
         : settings.engine === 'comfy'
         ? (settings.comfyMode === 'text' || settings.comfyMode === 'enhance' || settings.comfyMode === 'edit' || settings.comfyMode === 'custom' ? 1 : 1)
         : Math.max(1, Math.min(8, Number(settings.count || 1)));
@@ -14683,7 +14682,7 @@ async function runGeneration(){
             return;
         }
         const outImages = settings.engine === 'runninghub'
-            ? await runRunningHubGeneration(prompt, refs)
+            ? (await Promise.all(Array.from({length:expectedCount}, () => runRunningHubGeneration(prompt, refs)))).flat()
             : settings.engine === 'modelscope'
                 ? await runModelscopeGeneration(prompt, refs, settings, request)
                 : await runApiGeneration(prompt, refs, settings, request);
@@ -16551,6 +16550,8 @@ window.addEventListener('blur', () => {
 engineSelect.onchange = () => {
     settings.engine = engineSelect.value;
     applyRecentSmartSettingsForCurrentMode();
+    const ph = Math.max(60, Math.min(380, Number(settings.promptH) || 124));
+    promptInput.style.setProperty('--prompt-h', `${ph}px`);
     syncApiKindToggleVisibility();
     renderDynamicParams();
     persistActiveSmartSettings();
@@ -16570,6 +16571,8 @@ if(apiKindToggle){
             if(kind === settings.apiKind) return;
             settings.apiKind = kind;
             applyRecentSmartSettingsForCurrentMode();
+            const ph = Math.max(60, Math.min(380, Number(settings.promptH) || 124));
+            promptInput.style.setProperty('--prompt-h', `${ph}px`);
             syncApiKindToggleVisibility();
             renderDynamicParams();
             persistActiveSmartSettings();
