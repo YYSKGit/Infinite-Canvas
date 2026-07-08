@@ -6601,6 +6601,26 @@ function restoreMediaPlaybackStates(states){
         restoreMediaPlaybackState(media, states.get(`${tag}:${url}`));
     });
 }
+function captureThumbScrollStates(){
+    const states = new Map();
+    world.querySelectorAll('.image-node').forEach(nodeEl => {
+        const id = nodeEl.dataset.id;
+        if(!id) return;
+        const scroller = nodeEl.querySelector('[data-thumb-scroll]');
+        if(scroller && scroller.scrollTop > 0) states.set(id, scroller.scrollTop);
+    });
+    return states;
+}
+function restoreThumbScrollStates(states){
+    if(!states?.size) return;
+    world.querySelectorAll('.image-node').forEach(nodeEl => {
+        const id = nodeEl.dataset.id;
+        const scrollTop = states.get(id);
+        if(!scrollTop) return;
+        const scroller = nodeEl.querySelector('[data-thumb-scroll]');
+        if(scroller) scroller.scrollTop = scrollTop;
+    });
+}
 function smartRunTaskLabel(run){
     const s = run?.settings || {};
     if(run?.kind === 'video') return s.videoModel || 'Video';
@@ -7238,16 +7258,16 @@ function nodeBodyHtml(node, layout){
         const rows = Math.ceil(count / cols);
         return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
     }
-    const showImageNames = !isHistoryGroupNode(node);
+    const showSingleImageName = !isHistoryGroupNode(node);
     const isRunning = Boolean(node.running || node.pending || node.jimengPending);
     const loadingOverlay = isRunning && imgs.length > 0 ? `<div class="node-loading-overlay"><div class="loading-spinner"></div></div>` : '';
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${showImageNames ? imageNameBadgeHtml(img, {outside:true}) : ''}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
         return isRunning ? `<div class="thumb-grid-wrapper">${gridContent}${loadingOverlay}</div>` : gridContent;
     }
-    if(imgs[0]) return `<div class="image-wrap ${showImageNames ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showImageNames ? imageNameBadgeHtml(imgs[0], {outside:true}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
+    if(imgs[0]) return `<div class="image-wrap ${showSingleImageName ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showSingleImageName ? imageNameBadgeHtml(imgs[0], {outside:true}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
     return `<div class="empty-upload-node">
         <div class="empty-upload-copy">
             <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
@@ -7475,6 +7495,7 @@ function render(){
     world.classList.toggle('smart-multi-selected', selectedNodeIds().length > 1);
     const composerEl = composer;
     const mediaStates = captureMediaPlaybackStates();
+    const thumbScrollStates = captureThumbScrollStates();
     // 用户正在提示词框(contenteditable)输入时,本次重渲染不要移动 composer:
     // 移动 DOM 节点会打断输入法合成会话,导致输入中断(即使保留焦点描边也接不上)。
     const promptHadFocus = document.activeElement === promptInput;
@@ -7550,6 +7571,7 @@ function render(){
         }
     });
     restoreMediaPlaybackStates(mediaStates);
+    restoreThumbScrollStates(thumbScrollStates);
     bindNodeEvents();
     bindConnectionEvents();
     updateComposer();
