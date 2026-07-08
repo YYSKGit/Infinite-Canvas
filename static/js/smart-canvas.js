@@ -107,6 +107,7 @@ let localAssetLibrary = {items:[], tree:null};
 let activeLocalAssetFolderId = '__root__';
 let mentionSource = 'input';
 let mentionAssetCategoryId = '';
+let mentionFocusIndex = -1;
 let assetLibraryUpdatedAt = 0;
 let assetLibraryRefreshTimer = null;
 let activeAssetSmartClassId = '';
@@ -12882,6 +12883,7 @@ function closeMentionPicker(){
     mentionPicker.innerHTML = '';
     mentionAnchorEl = null;
     mentionInsertMode = 'token';
+    mentionFocusIndex = -1;
     if(selectedNode()) renderInputThumbsRow(selectedNode());
 }
 function saveMentionRange(){
@@ -12978,6 +12980,7 @@ function renderMentionPicker(source){
             activeAssetLibraryId = e.target.value || '';
             activeAssetCategoryId = '';
             mentionAssetCategoryId = '';
+            mentionFocusIndex = -1;
             renderAssetLibrary();
             renderMentionPicker('asset');
         });
@@ -12986,6 +12989,7 @@ function renderMentionPicker(source){
         btn.addEventListener('mousedown', e => {
             e.preventDefault(); e.stopPropagation();
             mentionAssetCategoryId = btn.dataset.mentionFolder || '';
+            mentionFocusIndex = -1;
             renderMentionPicker('asset');
         });
     });
@@ -12997,7 +13001,34 @@ function renderMentionPicker(source){
             else insertMentionToken(item);
         });
     });
+    // Always default to first item on render; restore position only when re-rendering same tab
+    setMentionFocusIndex(mentionFocusIndex >= 0 ? mentionFocusIndex : 0, false);
     refreshIcons();
+}
+function getMentionGridColCount(){
+    const grid = mentionPicker.querySelector('.mention-option-grid');
+    if(!grid) return 1;
+    const cols = window.getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+    return cols > 0 ? cols : 1;
+}
+function setMentionFocusIndex(idx, scroll=true){
+    const btns = [...mentionPicker.querySelectorAll('[data-mention-index]')];
+    if(!btns.length) return;
+    mentionFocusIndex = Math.max(0, Math.min(idx, btns.length - 1));
+    btns.forEach((b, i) => b.classList.toggle('focused', i === mentionFocusIndex));
+    if(scroll){
+        const btn = btns[mentionFocusIndex];
+        if(btn){
+            // Scroll only within the picker container — never propagate to the window/canvas
+            const pickerRect = mentionPicker.getBoundingClientRect();
+            const btnRect = btn.getBoundingClientRect();
+            if(btnRect.bottom > pickerRect.bottom - 4){
+                mentionPicker.scrollTop += btnRect.bottom - pickerRect.bottom + 8;
+            } else if(btnRect.top < pickerRect.top + 4){
+                mentionPicker.scrollTop -= pickerRect.top - btnRect.top + 8;
+            }
+        }
+    }
 }
 function showMentionPicker(){
     const node = selectedNode();
@@ -13121,8 +13152,13 @@ function positionMentionPickerAtCaret(){
 function maybeOpenMentionPicker(){
     saveMentionRange();
     const before = textBeforeCaret();
-    if(/@$/.test(before)) showMentionPicker();
-    else closeMentionPicker();
+    if(/@$/.test(before)){
+        // Picker already open: just refresh the caret position, don't re-render
+        if(mentionPicker?.classList?.contains('open')){ positionMentionPickerAtCaret(); return; }
+        showMentionPicker();
+    } else {
+        closeMentionPicker();
+    }
 }
 function insertMentionToken(img){
     if(!img?.url) return;
@@ -17159,12 +17195,52 @@ promptInput.addEventListener('cut', event => {
         promptInput.dispatchEvent(new Event('input', {bubbles:true}));
     }
 });
-promptInput.addEventListener('keyup', maybeOpenMentionPicker);
+promptInput.addEventListener('keyup', event => {
+    // When the picker is open, navigation keys must not re-trigger maybeOpenMentionPicker
+    // (Tab would call showMentionPicker and reset the active tab back to default)
+    const navKeys = new Set(['Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter','Escape']);
+    if(mentionPicker?.classList?.contains('open') && navKeys.has(event.key)) return;
+    maybeOpenMentionPicker();
+});
 promptInput.addEventListener('mouseup', saveMentionRange);
 promptInput.addEventListener('focus', saveMentionRange);
-promptInput.addEventListener('keydown', event => {
-    if(event.key === 'Escape') closeMentionPicker();
-});
+function handleMentionPickerKeydown(event){
+    if(event.key === 'Escape'){ closeMentionPicker(); return; }
+    if(!mentionPicker?.classList?.contains('open')) return;
+    const btns = [...mentionPicker.querySelectorAll('[data-mention-index]')];
+    if(event.key === 'Tab'){
+        event.preventDefault(); event.stopPropagation();
+        const tabs = [...mentionPicker.querySelectorAll('[data-mention-source]:not(:disabled)')];
+        if(tabs.length < 2) return;
+        const nextSource = mentionSource === 'input' ? 'asset' : 'input';
+        const target = tabs.find(t => t.dataset.mentionSource === nextSource);
+        if(target) { mentionFocusIndex = -1; renderMentionPicker(nextSource); }
+        return;
+    }
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)){
+        event.preventDefault(); event.stopPropagation();
+        if(!btns.length) return;
+        const cols = getMentionGridColCount();
+        let next = mentionFocusIndex;
+        if(next < 0) next = 0;
+        else if(event.key === 'ArrowRight') next = Math.min(next + 1, btns.length - 1);
+        else if(event.key === 'ArrowLeft')  next = Math.max(next - 1, 0);
+        else if(event.key === 'ArrowDown')  next = Math.min(next + cols, btns.length - 1);
+        else if(event.key === 'ArrowUp')    next = Math.max(next - cols, 0);
+        setMentionFocusIndex(next);
+        return;
+    }
+    if(event.key === 'Enter'){
+        if(mentionFocusIndex >= 0 && btns[mentionFocusIndex]){
+            event.preventDefault(); event.stopPropagation();
+            const item = mentionPicker._items[mentionFocusIndex];
+            if(mentionInsertMode === 'manual-ref') addManualReferenceToSelectedNode(item);
+            else insertMentionToken(item);
+        }
+        return;
+    }
+}
+promptInput.addEventListener('keydown', handleMentionPickerKeydown);
 promptInput.addEventListener('mouseover', event => {
     const token = event.target.closest?.('.mention-image-token');
     if(!token) return;
@@ -17214,7 +17290,22 @@ document.addEventListener('click', event => {
     if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
     if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
 });
+// Capture-phase listener so stopPropagation on inner elements can't block it.
+// Closes the button-triggered picker when clicking anywhere inside the composer card
+// that isn't the picker itself or the toggle button.
+document.addEventListener('click', event => {
+    if(!mentionPicker?.classList?.contains('open')) return;
+    if(mentionInsertMode !== 'manual-ref') return;
+    if(event.target.closest('.mention-picker')) return;
+    if(event.target.closest('[data-input-add-reference]')) return;
+    closeMentionPicker();
+}, true);
 document.addEventListener('keydown', event => {
+    // Route picker navigation keys when focus is outside promptInput (e.g. button-triggered picker)
+    if(mentionPicker?.classList?.contains('open') && !event.target.closest('#promptInput')){
+        handleMentionPickerKeydown(event);
+        if(event.defaultPrevented) return;
+    }
     if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); closePromptPresetPanel(); closePromptTemplatePanel(); }
 });
 function cropDragModeFromPointer(event){
