@@ -12324,11 +12324,13 @@ function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
 }
 function shouldDropRunRefForNode(targetNode, ref, options={}){
     if(!ref?.url) return true;
-    if(ref.nodeId && targetNode?.id && ref.nodeId === targetNode.id) return true;
+    // Only drop self-references that are generated outputs (not uploaded input images)
+    if(ref.nodeId && targetNode?.id && ref.nodeId === targetNode.id && isGeneratedOutputRef(ref)) return true;
     const currentUrls = currentOutputUrlSetForRun(targetNode);
     const url = canonicalSmartMediaUrl(ref);
     if(!url || currentUrls.has(url)) return true;
-    return options.dropGeneratedOutputs === true && isGeneratedOutputRef(ref);
+    // Only drop generated output refs belonging to the same node, not other nodes' generated outputs
+    return options.dropGeneratedOutputs === true && isGeneratedOutputRef(ref) && (!ref.nodeId || ref.nodeId === targetNode.id);
 }
 function cleanSavedRunRefsForNode(targetNode, refs=[], options={}){
     return uniqueReferenceImages((refs || []).filter(ref => !shouldDropRunRefForNode(targetNode, ref, options)));
