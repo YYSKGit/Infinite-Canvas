@@ -3781,12 +3781,34 @@ async function rhBuildNodeInfoList(media, sourceSettings=settings, randomValues=
     }
     return result;
 }
+function rhFieldIcon(label){
+    const s = String(label || '').toLowerCase();
+    if(/seed|随机种|噪声/.test(s)) return 'dice-5';
+    if(/step|批次|batch|iter/.test(s)) return 'repeat-2';
+    if(/color|颜色|色彩|colour/.test(s)) return 'palette';
+    if(/strength|强度|weight|权重|force|力度/.test(s)) return 'zap';
+    if(/scale|缩放|尺寸|size|zoom/.test(s)) return 'maximize-2';
+    if(/style|风格|style/.test(s)) return 'wand-2';
+    if(/denoise|去噪|noise|降噪/.test(s)) return 'wind';
+    if(/cfg|guidance|引导/.test(s)) return 'compass';
+    if(/width|宽/.test(s)) return 'arrow-left-right';
+    if(/height|高/.test(s)) return 'arrow-up-down';
+    if(/prompt|提示|文本|text/.test(s)) return 'type';
+    if(/lora|adapter/.test(s)) return 'layers';
+    if(/sample|采样/.test(s)) return 'activity';
+    if(/clip|skip/.test(s)) return 'scissors';
+    if(/contrast|对比/.test(s)) return 'sun';
+    if(/bright|亮度/.test(s)) return 'sun-medium';
+    if(/sharp|锐化/.test(s)) return 'focus';
+    return 'settings-2';
+}
 function renderRhSettingField(field){
     const key = rhParamKey(field.nodeId, field.fieldName);
     const kind = rhFieldRole(field);
     const label = field.label || field.fieldName || 'Field';
     const value = rhParamValue(field, null);
     const options = rhExtractFieldOptions(field);
+    const icon = rhFieldIcon(label);
     if(kind === 'boolean'){
         const active = String(value).toLowerCase() === 'true';
         return `<button type="button" class="setting-check ${active ? 'active' : ''}" data-rh-bool="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
@@ -3797,7 +3819,7 @@ function renderRhSettingField(field){
         const step = Number.isFinite(Number(field.step)) && Number(field.step) > 0 ? Number(field.step) : 0.01;
         const numericValue = Number.isFinite(Number(value)) ? Number(value) : min;
         return `<div class="smart-control rh-slider-control" title="${escapeHtml(label)}">
-            <button class="smart-pill" type="button"><span class="sub">${escapeHtml(label)}</span><span class="rh-slider-pill-value">${escapeHtml(numericValue)}</span></button>
+            <button class="smart-pill" type="button"><i data-lucide="${escapeHtml(icon)}"></i><span class="sub">${escapeHtml(label)}</span><span class="rh-slider-pill-value">${escapeHtml(numericValue)}</span></button>
             <div class="smart-popover compact-popover rh-picker-popover rh-param-popover rh-slider-popover">
                 <div class="smart-popover-title"><span>${escapeHtml(label)}</span><span class="rh-slider-value">${escapeHtml(numericValue)}</span></div>
                 <input type="range" class="smart-range rh-slider-input" data-rh-param="${escapeHtml(key)}" data-rh-type="slider" min="${escapeHtml(min)}" max="${escapeHtml(max)}" step="${escapeHtml(step)}" value="${escapeHtml(numericValue)}">
@@ -3807,7 +3829,7 @@ function renderRhSettingField(field){
     if(options?.length){
         const curLabel = String(value || options[0] || label);
         return `<div class="smart-control rh-dropdown-control" title="${escapeHtml(label)}">
-            <button class="smart-pill" type="button"><span class="sub">${escapeHtml(curLabel)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+            <button class="smart-pill" type="button"><i data-lucide="${escapeHtml(icon)}"></i><span class="sub">${escapeHtml(curLabel)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
             <div class="smart-popover compact-popover rh-picker-popover rh-param-popover">
                 <div class="smart-popover-title">${escapeHtml(label)}</div>
                 <div class="model-list rh-param-list">
@@ -3821,12 +3843,12 @@ function renderRhSettingField(field){
     if(kind === 'number' && rhRandomEnabled(field)){
         const active = smartRhRandomActive(key);
         return `<div class="num-with-dice" title="${escapeHtml(label)}">
-            <span class="num-label">${escapeHtml(label)}</span>
+            <i data-lucide="${escapeHtml(icon)}" class="num-field-icon"></i><span class="num-label">${escapeHtml(label)}</span>
             ${inputHtml}
             <button type="button" class="dice-btn ${active ? 'active' : ''}" data-rh-random="${escapeHtml(key)}" title="${escapeHtml(active ? tr('smart.diceOn') : tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>
         </div>`;
     }
-    return `<div class="num-compact ${type === 'text' ? 'rh-text-param' : ''}" title="${escapeHtml(label)}"><span class="num-label">${escapeHtml(label)}</span>${inputHtml}</div>`;
+    return `<div class="num-compact ${type === 'text' ? 'rh-text-param' : ''}" title="${escapeHtml(label)}"><i data-lucide="${escapeHtml(icon)}" class="num-field-icon"></i><span class="num-label">${escapeHtml(label)}</span>${inputHtml}</div>`;
 }
 function comfyRandomEnabledField(field){ return field?.type === 'number' && field.random_enabled === true; }
 function smartComfyRandomActive(fieldId){

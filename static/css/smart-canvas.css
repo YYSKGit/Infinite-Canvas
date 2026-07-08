@@ -861,6 +861,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .num-compact .num-label { color:var(--faint); font-size:9.5px; font-weight:600; letter-spacing:.05em; padding-right:2px; max-width:60px; overflow:hidden; text-overflow:ellipsis; }
 .num-compact input { background:transparent !important; border:none !important; height:calc(var(--ctrl-height) - 4px) !important; padding:0 !important; width:58px !important; text-align:right; font-variant-numeric:tabular-nums; font-size:var(--ctrl-font); color:var(--text); }
 .num-compact.is-slider input { width:46px !important; }
+.num-field-icon { width:11px !important; height:11px !important; flex:0 0 auto; stroke-width:2; opacity:.55; }
 .dynamic-params input[type="number"]::-webkit-outer-spin-button,
 .dynamic-params input[type="number"]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
 .dynamic-params input[type="number"] { -moz-appearance:textfield; }
