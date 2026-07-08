@@ -12941,13 +12941,15 @@ function visibleReferenceImagesFor(node){
     return uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]);
 }
 function inputMentionCandidateImages(node){
-    const current = node ? [...lineImagesFor(node), ...manualReferenceImagesFor(node)] : [];
+    const current = node ? cleanSavedRunRefsForNode(node, [...lineImagesFor(node), ...manualReferenceImagesFor(node)]) : [];
     const seen = new Set();
     return current.filter(img => {
         if(!img?.url || seen.has(img.url)) return false;
         seen.add(img.url);
         return true;
-    }).map((img, index) => ({
+    })
+    .reverse()
+    .map((img, index) => ({
         ...img,
         mentionId:`mention_${index}_${Math.random().toString(36).slice(2, 7)}`,
         alias:img.name || `图片${index + 1}`
