@@ -504,20 +504,38 @@ function syncDetailPreviewMuteUI(scope=document){
 }
 function initializeDetailPreviewMedia(scope=document){
     scope.querySelectorAll?.('.detail-preview-video').forEach(video => {
-        if(video.dataset.previewInit === '1') return;
-        video.dataset.previewInit = '1';
-        video.classList.remove('ready');
+        const initialized = video.dataset.previewInit === '1';
+        if(!initialized){
+            video.dataset.previewInit = '1';
+            video.classList.remove('ready');
+            video.addEventListener('loadeddata', () => {
+                video.classList.add('ready');
+            });
+        }
         video.muted = !!previewMuted;
         video.defaultMuted = !!previewMuted;
         video.volume = previewMuted ? 0 : 1;
-        video.addEventListener('loadeddata', () => {
-            video.classList.add('ready');
-        });
         if(video.readyState >= 2) video.classList.add('ready');
-        const playPromise = video.play?.();
-        if(playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+        if(video.paused){
+            const playPromise = video.play?.();
+            if(playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+        }
     });
     syncDetailPreviewMuteUI(scope);
+}
+function stopActivePreviewPlayback(resetPosition=false){
+    document.querySelectorAll('.detail-preview-video,.asset-lightbox-video').forEach(video => {
+        try { video.pause?.(); } catch(_) {}
+        if(resetPosition){
+            try { video.currentTime = 0; } catch(_) {}
+        }
+    });
+}
+function isAssetManagerVisible(){
+    if(!root || !root.isConnected) return false;
+    const style = window.getComputedStyle(root);
+    if(style.display === 'none' || style.visibility === 'hidden') return false;
+    return root.getClientRects().length > 0;
 }
 function togglePreviewMuted(){
     previewMuted = !previewMuted;
@@ -970,6 +988,111 @@ function toggleSelectionSet(set, id){
 }
 function managedDetailSelectionId(currentId, id, selected){
     return selected ? id : currentId;
+}
+function keyboardSelectionContext(){
+    if(!root) return null;
+    if(activeTab === 'assets'){
+        return {
+            selector:'[data-asset-card]',
+            dataKey:'assetCard',
+            columns:true,
+            getSelected:() => selectedAssetId,
+            setSelected:(id) => {
+                selectedAssetId = id;
+                assetEditMode = false;
+                pendingDeleteAssetId = '';
+            }
+        };
+    }
+    if(activeTab === 'canvas-assets'){
+        return {
+            selector:'[data-canvas-asset-card]',
+            dataKey:'canvasAssetCard',
+            columns:true,
+            getSelected:() => selectedCanvasAssetId,
+            setSelected:(id) => {
+                selectedCanvasAssetId = id;
+            }
+        };
+    }
+    if(activeTab === 'workflows'){
+        return {
+            selector:'[data-workflow-card]',
+            dataKey:'workflowCard',
+            columns:true,
+            getSelected:() => selectedWorkflowId,
+            setSelected:(id) => {
+                selectedWorkflowId = id;
+                pendingDeleteAssetId = '';
+            }
+        };
+    }
+    if(activeTab === 'local'){
+        if(root.querySelector('[data-localup-card]')){
+            return {
+                selector:'[data-localup-card]',
+                dataKey:'localupCard',
+                columns:true,
+                getSelected:() => selectedLocalUploadId,
+                setSelected:(id) => { selectedLocalUploadId = id; }
+            };
+        }
+        if(root.querySelector('[data-local-card]')){
+            return {
+                selector:'[data-local-card]',
+                dataKey:'localCard',
+                columns:true,
+                getSelected:() => selectedLocalId,
+                setSelected:(id) => { selectedLocalId = id; }
+            };
+        }
+    }
+    return null;
+}
+function inferGridColumns(elements){
+    if(!elements.length) return 1;
+    const firstTop = elements[0].offsetTop;
+    let cols = 0;
+    for(const el of elements){
+        if(Math.abs(el.offsetTop - firstTop) > 4) break;
+        cols += 1;
+    }
+    return Math.max(1, cols || 1);
+}
+function shouldIgnoreKeyboardSelection(event){
+    const target = event.target;
+    if(!target) return true;
+    if(target.closest?.('input,textarea,select,[contenteditable="true"]')) return true;
+    if(target.isContentEditable) return true;
+    if(document.querySelector('.asset-lightbox')) return true;
+    return false;
+}
+function moveSelectionByArrowKey(key){
+    const ctx = keyboardSelectionContext();
+    if(!ctx) return false;
+    const elements = [...root.querySelectorAll(ctx.selector)].filter(el => el && el.offsetParent !== null);
+    if(!elements.length) return false;
+    const currentId = String(ctx.getSelected() || '');
+    const currentIndex = Math.max(0, elements.findIndex(el => (el.dataset?.[ctx.dataKey] || '') === currentId));
+    const cols = ctx.columns ? inferGridColumns(elements) : 1;
+    let delta = 0;
+    if(key === 'ArrowLeft') delta = -1;
+    else if(key === 'ArrowRight') delta = 1;
+    else if(key === 'ArrowUp') delta = -cols;
+    else if(key === 'ArrowDown') delta = cols;
+    else return false;
+    const nextIndex = Math.max(0, Math.min(elements.length - 1, currentIndex + delta));
+    if(nextIndex === currentIndex) return false;
+    const nextId = elements[nextIndex].dataset?.[ctx.dataKey] || '';
+    if(!nextId) return false;
+    ctx.setSelected(nextId);
+    pendingBatchDelete = '';
+    render();
+    requestAnimationFrame(() => {
+        const nextEl = [...root.querySelectorAll(ctx.selector)].find(el => (el.dataset?.[ctx.dataKey] || '') === nextId);
+        nextEl?.scrollIntoView({block:'nearest', inline:'nearest'});
+    });
+    return true;
 }
 function managedSelectionTarget(target){
     if(activeTab === 'assets' && assetManageMode){
@@ -4366,8 +4489,30 @@ root.addEventListener('click', event => {
 });
 document.addEventListener('click', event => {
     if(event.target.closest?.('.asset-lightbox') && !event.target.closest?.('.asset-lightbox-image,.asset-lightbox-video')) closeDetailPreview();
+    requestAnimationFrame(() => {
+        if(!isAssetManagerVisible()) stopActivePreviewPlayback(true);
+    });
+});
+document.addEventListener('visibilitychange', () => {
+    if(document.hidden) stopActivePreviewPlayback(true);
+});
+window.addEventListener('pagehide', () => {
+    stopActivePreviewPlayback(true);
 });
 document.addEventListener('keydown', event => {
+    if(
+        !event.repeat
+        && !event.altKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)
+        && !shouldIgnoreKeyboardSelection(event)
+        && moveSelectionByArrowKey(event.key)
+    ){
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+    }
     if(event.key === 'Escape') closeDetailPreview();
     if(event.target?.id === 'assetTreeEditInput'){
         if(event.key === 'Enter'){ event.preventDefault(); saveAssetTreeEdit().catch(err => setStatus(err.message || '保存失败')); }
@@ -4515,6 +4660,17 @@ document.querySelectorAll('[data-tab]').forEach(btn => {
 });
 refreshBtn?.addEventListener('click', () => loadAll().catch(err => setStatus(err.message || '加载失败')));
 window.addEventListener('message', event => {
-    if(event.data?.type === 'studio-theme') window.StudioTheme?.apply?.(event.data.theme);
+    if(event.data?.type === 'studio-theme') {
+        window.StudioTheme?.apply?.(event.data.theme);
+        return;
+    }
+    if(event.data?.type === 'studio-page-visibility'){
+        if(event.data.visible){
+            initializeDetailPreviewMedia(root || document);
+        } else {
+            stopActivePreviewPlayback(true);
+            closeDetailPreview();
+        }
+    }
 });
 document.addEventListener('DOMContentLoaded', () => loadAll().catch(err => setStatus(err.message || '加载失败')));

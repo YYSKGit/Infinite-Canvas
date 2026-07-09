@@ -1678,7 +1678,7 @@
             <iframe id="frame-angle" data-src="/static/angle.html?v=2027.01.1.1.1783387682" scrolling="yes"></iframe>
             <iframe id="frame-online" data-src="/static/online.html?v=2027.01.1.1.1783387682" scrolling="yes"></iframe>
             <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2027.01.1.1.1783387682" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1783596100" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1783603780" scrolling="yes"></iframe>
             <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1783577971" scrolling="yes"></iframe>
             <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2027.01.1.1.1783387682" scrolling="yes"></iframe>
             <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1783387682" scrolling="yes"></iframe>
@@ -1882,12 +1882,31 @@
         function switchUI(el, id, options = {}) {
             resetStudioRootScroll();
             if(!PAGE_IDS.includes(id)) id = DEFAULT_PAGE_ID;
+            const previous = document.querySelector('iframe.active');
+            if(previous && previous.contentWindow){
+                try {
+                    previous.contentWindow.postMessage({
+                        type: 'studio-page-visibility',
+                        visible: false,
+                        page: previous.id?.replace('frame-', '') || ''
+                    }, '*');
+                } catch(e) {}
+            }
             document.querySelectorAll('.nav-item,.side-pill').forEach(n => n.classList.remove('active'));
             if(el) el.classList.add('active');
             document.querySelectorAll('iframe').forEach(f => f.classList.remove('active'));
             const target = document.getElementById('frame-' + id);
             target.classList.add('active');
             if (!target.src) target.src = target.dataset.src;
+            if(target && target.contentWindow){
+                try {
+                    target.contentWindow.postMessage({
+                        type: 'studio-page-visibility',
+                        visible: true,
+                        page: id
+                    }, '*');
+                } catch(e) {}
+            }
             if(!options.skipRemember) localStorage.setItem(ACTIVE_PAGE_KEY, id);
             // sync theme to newly activated iframe
             syncThemeToFrame(target);
