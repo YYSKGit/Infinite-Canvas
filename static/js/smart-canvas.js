@@ -83,6 +83,7 @@ let isRKeyDown = false;
 let selectionJustFinished = false;
 let resizeState = null;
 let llmInstructionResizeState = null;
+let llmSystemResizeState = null;
 let promptSplitResizeState = null;
 let thumbDragState = null;
 let uploadTargetId = '';
@@ -1798,6 +1799,12 @@ function smartNodeInputThumbsHtml(images, opts={}){
 const PROMPT_LLM_INSTRUCTION_DEFAULT_H = 58;
 const PROMPT_LLM_INSTRUCTION_MIN_H = 40;
 const PROMPT_LLM_INSTRUCTION_MAX_H = 400;
+const PROMPT_LLM_SYSTEM_DEFAULT_H = 52;
+const PROMPT_LLM_SYSTEM_MIN_H = 40;
+const PROMPT_LLM_SYSTEM_MAX_H = 260;
+const PROMPT_LLM_SYSTEM_BLOCK_BASE_H = 69;
+const PROMPT_NODE_DEFAULT_W = 316;
+const PROMPT_NODE_MIN_W = 260;
 const PROMPT_SPLIT_PREVIEW_DEFAULT_H = 70;
 const PROMPT_SPLIT_PREVIEW_MIN_H = 40;
 const PROMPT_SPLIT_PREVIEW_MAX_H = 220;
@@ -1806,6 +1813,11 @@ function promptLlmInstructionHeight(node){
     const h = Number(node?.llmInstructionHeight);
     if(!Number.isFinite(h)) return PROMPT_LLM_INSTRUCTION_DEFAULT_H;
     return Math.max(PROMPT_LLM_INSTRUCTION_MIN_H, Math.min(PROMPT_LLM_INSTRUCTION_MAX_H, Math.round(h)));
+}
+function promptLlmSystemHeight(node){
+    const h = Number(node?.llmSystemHeight);
+    if(!Number.isFinite(h)) return PROMPT_LLM_SYSTEM_DEFAULT_H;
+    return Math.max(PROMPT_LLM_SYSTEM_MIN_H, Math.min(PROMPT_LLM_SYSTEM_MAX_H, Math.round(h)));
 }
 function promptNodeSeparator(node){
     const raw = String(node?.promptSeparator ?? ';');
@@ -1836,7 +1848,7 @@ function syncPromptNodeHeightForSplit(node, prevExtra=0){
     const currentH = Number.isFinite(explicitH) ? explicitH : 0;
     const fallbackH = promptNodeMinHeight(node);
     node.h = Math.max(fallbackH, currentH ? currentH - Math.max(0, prevExtra) + nextExtra : fallbackH);
-    node.w = Math.max(Number(node.w) || 0, 316);
+    node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
 }
 function promptNodeMinHeight(node){
     return node?.llmEnabled ? promptNodeExpandedHeight(node) : 240 + promptNodeSplitExtraHeight(node);
@@ -1870,8 +1882,9 @@ function promptNodeLLMInputText(node, ctx=smartLoopContext){
 function promptNodeExpandedHeight(node){
     // 指令文本框（发送给 LLM 的内容）可拖动加高，超出默认高度的部分要叠加进节点高度。
     const extra = Math.max(0, promptLlmInstructionHeight(node) - PROMPT_LLM_INSTRUCTION_DEFAULT_H);
+    const systemExtra = node?.llmSystemEnabled ? Math.max(0, promptLlmSystemHeight(node) - PROMPT_LLM_SYSTEM_DEFAULT_H) : 0;
     const upstreamExtra = node?.llmEnabled && promptNodeUpstreamPromptItems(node).length ? 74 : 0;
-    return (node?.llmSystemEnabled ? 420 : 360) + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + extra + upstreamExtra + promptNodeSplitExtraHeight(node);
+    return 360 + (node?.llmSystemEnabled ? PROMPT_LLM_SYSTEM_BLOCK_BASE_H : 0) + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + extra + systemExtra + upstreamExtra + promptNodeSplitExtraHeight(node);
 }
 function promptNodeLayoutSize(node){
     const oldCollapsedH = 230;
@@ -1881,7 +1894,7 @@ function promptNodeLayoutSize(node){
     if(isSmartGroupCompactMember(node) && Number.isFinite(explicitW) && explicitW > 24 && Number.isFinite(explicitH) && explicitH > 24){
         return {width:Math.round(explicitW), height:Math.round(explicitH)};
     }
-    const width = !Number.isFinite(explicitW) || explicitW === 360 ? 316 : explicitW;
+    const width = !Number.isFinite(explicitW) || explicitW === 360 ? PROMPT_NODE_DEFAULT_W : explicitW;
     const fallbackH = promptNodeMinHeight(node);
     const legacyExpandedH = node?.llmSystemEnabled ? 344 : 292;
     const height = !Number.isFinite(explicitH) || explicitH === 194 || explicitH === oldCollapsedH || explicitH === oldExpandedH || explicitH === legacyExpandedH
@@ -6157,7 +6170,7 @@ function createPromptNode(x, y, options={}){
         type:'smart-prompt',
         x,
         y,
-        w:316,
+        w:PROMPT_NODE_DEFAULT_W,
         h:240,
         title:'Prompt',
         text:'',
@@ -7287,11 +7300,16 @@ function promptNodeBodyHtml(node){
                 <div class="prompt-llm-instruction-resize prompt-node-control" data-llm-instruction-resize="1" title="拖动调整高度"><span></span></div>
             </div>
             ${upstreamPromptHtml}
+            ${node.llmSystemEnabled ? `<div class="prompt-llm-system-wrap">
+                <textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}" style="height:${promptLlmSystemHeight(node)}px">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>
+                <div class="prompt-llm-system-resize prompt-node-control" data-llm-system-resize="1" title="拖动调整高度"><span></span></div>
+            </div>` : ''}
             <div class="prompt-node-llm-actions">
-                <button class="prompt-node-run prompt-node-control" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
-                <button class="prompt-node-pill prompt-node-control prompt-system-toggle ${node.llmSystemEnabled ? 'active' : ''}" type="button"><i data-lucide="${node.llmSystemEnabled ? 'toggle-right' : 'toggle-left'}"></i><span>${escapeHtml(node.llmSystemEnabled ? tr('smart.promptLlmDisableSystem') : tr('smart.promptLlmEnableSystem'))}</span></button>
+                <div class="prompt-node-llm-actions-inner">
+                    <button class="prompt-node-pill prompt-node-control prompt-system-toggle ${node.llmSystemEnabled ? 'active' : ''}" type="button"><i data-lucide="${node.llmSystemEnabled ? 'toggle-right' : 'toggle-left'}"></i><span>${escapeHtml(node.llmSystemEnabled ? tr('smart.promptLlmDisableSystem') : tr('smart.promptLlmEnableSystem'))}</span></button>
+                    <button class="prompt-node-run prompt-node-control" type="button" ${node.running ? 'disabled' : ''} title="${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}" aria-label="${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}"><i data-lucide="${node.running ? 'loader-2' : 'sparkles'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
+                </div>
             </div>
-            ${node.llmSystemEnabled ? `<textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>` : ''}
         </div>` : '';
     return `<div class="prompt-node-card">
         <textarea class="prompt-node-text prompt-node-control" ${readonly} placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>
@@ -8069,10 +8087,10 @@ function bindPromptNodeControls(el, node){
             node.llmProvider = resolveChatProviderId(node.llmProvider || '');
             node.llmModel = resolveChatModel(node.llmModel || '', node.llmProvider);
             node.h = Math.max(Number(node.h) || 0, promptNodeExpandedHeight(node));
-            node.w = Math.max(Number(node.w) || 0, 316);
+            node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
         } else {
             node.h = promptNodeMinHeight(node);
-            node.w = Math.max(Number(node.w) || 0, 316);
+            node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
         }
         render();
         scheduleSave();
@@ -8090,6 +8108,14 @@ function bindPromptNodeControls(el, node){
     };
     const systemEl = el.querySelector('.prompt-llm-system');
     if(systemEl) { bindScrollableText(systemEl); systemEl.oninput = e => { node.llmSystemPrompt = e.target.value; scheduleSave(); }; }
+    const systemResizeEl = el.querySelector('[data-llm-system-resize]');
+    if(systemResizeEl) systemResizeEl.addEventListener('mousedown', e => {
+        if(e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        llmSystemResizeState = {id:node.id, startY:e.clientY, startH:promptLlmSystemHeight(node), startNodeH:promptNodeLayoutSize(node).height};
+        document.body.classList.add('smart-node-resize', 'smart-llm-system-resize');
+        capturePendingUndo();
+    });
     const instructionEl = el.querySelector('.prompt-llm-instruction');
     if(instructionEl) { bindScrollableText(instructionEl); instructionEl.oninput = e => { node.llmInstruction = e.target.value; scheduleSave(); }; }
     const instructionResizeEl = el.querySelector('[data-llm-instruction-resize]');
@@ -16564,11 +16590,25 @@ window.onmousemove = e => {
         node.llmInstructionHeight = newInstrH;
         // 只把“指令框的高度变化量”叠加到节点总高度上，保留用户手动拉大的上方区域，避免上方被重置变小。
         node.h = Math.max(promptNodeExpandedHeight(node), Math.round(llmInstructionResizeState.startNodeH + (newInstrH - llmInstructionResizeState.startH)));
-        node.w = Math.max(Number(node.w) || 0, 316);
+        node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
         node.scale = 1;
         updateNodeElementDuringResize(node);
         const ta = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"] .prompt-llm-instruction`);
         if(ta) ta.style.height = `${promptLlmInstructionHeight(node)}px`;
+        return;
+    }
+    if(llmSystemResizeState){
+        const node = nodes.find(n => n.id === llmSystemResizeState.id);
+        if(!node) return;
+        const dy = (e.clientY - llmSystemResizeState.startY) / viewport.scale;
+        const newSystemH = Math.max(PROMPT_LLM_SYSTEM_MIN_H, Math.min(PROMPT_LLM_SYSTEM_MAX_H, Math.round(llmSystemResizeState.startH + dy)));
+        node.llmSystemHeight = newSystemH;
+        node.h = Math.max(promptNodeExpandedHeight(node), Math.round(llmSystemResizeState.startNodeH + (newSystemH - llmSystemResizeState.startH)));
+        node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
+        node.scale = 1;
+        updateNodeElementDuringResize(node);
+        const ta = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"] .prompt-llm-system`);
+        if(ta) ta.style.height = `${promptLlmSystemHeight(node)}px`;
         return;
     }
     if(promptSplitResizeState){
@@ -16578,7 +16618,7 @@ window.onmousemove = e => {
         const newPreviewH = Math.max(PROMPT_SPLIT_PREVIEW_MIN_H, Math.min(PROMPT_SPLIT_PREVIEW_MAX_H, Math.round(promptSplitResizeState.startH + dy)));
         node.promptSplitPreviewHeight = newPreviewH;
         node.h = Math.max(promptNodeMinHeight(node), Math.round(promptSplitResizeState.startNodeH + (newPreviewH - promptSplitResizeState.startH)));
-        node.w = Math.max(Number(node.w) || 0, 316);
+        node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
         node.scale = 1;
         updateNodeElementDuringResize(node);
         const list = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"] .prompt-node-segments`);
@@ -16705,6 +16745,15 @@ window.onmouseup = e => {
         document.body.classList.remove('smart-node-resize', 'smart-llm-instr-resize');
         if(changed) commitPendingUndo(); else discardPendingUndo();
         llmInstructionResizeState = null;
+        render();
+        scheduleSave();
+    }
+    if(llmSystemResizeState){
+        const node = nodes.find(n => n.id === llmSystemResizeState.id);
+        const changed = node && promptLlmSystemHeight(node) !== llmSystemResizeState.startH;
+        document.body.classList.remove('smart-node-resize', 'smart-llm-system-resize');
+        if(changed) commitPendingUndo(); else discardPendingUndo();
+        llmSystemResizeState = null;
         render();
         scheduleSave();
     }
