@@ -11560,21 +11560,28 @@ function positionComposerForNode(node){
     composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;
 }
+function setComposerOpen(open){
+    if(!composer) return;
+    const isOpen = Boolean(open);
+    composer.classList.toggle('open', isOpen);
+    composer.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    if('inert' in composer) composer.inert = !isOpen;
+}
 function updateComposer(){
     const node = selectedNode();
     syncRunButtonState(node);
     if(smartCascadeSilentSelection && !activeComposerSubject){
-        composer.classList.remove('open');
+        setComposerOpen(false);
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         activeComposerSubject = null;
         lastComposerNodeId = '';
         return;
     }
-    composer.classList.toggle('open', !!node);
+    setComposerOpen(!!node);
     if(!isSmartRunnableNode(node)){
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         savePromptDraftForCurrent();
-        composer.classList.remove('open');
+        setComposerOpen(false);
         activeComposerSubject = null;
         lastComposerNodeId = '';
         setPromptInputLocked(false);
@@ -14853,7 +14860,7 @@ async function runSmartCascade(targetNode=null){
         selectedImage = {nodeId:'', index:-1};
         activeComposerSubject = null;
         lastComposerNodeId = '';
-        composer.classList.remove('open');
+        setComposerOpen(false);
         settings = originalSettings;
         promptInput.innerHTML = originalPromptHtml;
         scheduleSave();
