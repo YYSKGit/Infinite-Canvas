@@ -4,6 +4,7 @@ const refreshBtn = document.getElementById('refreshBtn');
 const uploadInput = document.getElementById('assetUploadInput');
 
 const LOCAL_CAPTION_SETTINGS_KEY = 'asset_manager_local_caption_settings_v1';
+const PREVIEW_SETTINGS_KEY = 'asset_manager_preview_settings_v1';
 function readLocalCaptionSettings(){
     try {
         const data = JSON.parse(localStorage.getItem(LOCAL_CAPTION_SETTINGS_KEY) || '{}');
@@ -22,7 +23,23 @@ function writeLocalCaptionSettings(){
         }));
     } catch(_) {}
 }
+function readPreviewSettings(){
+    try {
+        const data = JSON.parse(localStorage.getItem(PREVIEW_SETTINGS_KEY) || '{}');
+        return data && typeof data === 'object' ? data : {};
+    } catch(_) {
+        return {};
+    }
+}
+function writePreviewSettings(){
+    try {
+        localStorage.setItem(PREVIEW_SETTINGS_KEY, JSON.stringify({
+            muted:previewMuted
+        }));
+    } catch(_) {}
+}
 const savedLocalCaptionSettings = readLocalCaptionSettings();
+const savedPreviewSettings = readPreviewSettings();
 
 let activeTab = 'assets';
 let assetLibrary = {libraries:[], categories:[]};
@@ -106,6 +123,7 @@ let selectedCanvasAssetIds = new Set();
 let canvasAssetQuery = '';
 let canvasAssetSort = 'canvas_asc';
 let canvasAssetManageMode = false;
+let previewMuted = savedPreviewSettings.muted !== false;
 let searchCompositionActive = false;
 let searchRenderTimer = null;
 let lastSearchCompositionEndAt = 0;
@@ -421,6 +439,19 @@ function assetKindLabel(item){
     if(kind === 'text') return '文本';
     return '图片';
 }
+function assetKindBadgeMeta(item, title=''){
+    const kind = assetKind(item);
+    return {
+        kind,
+        label:kind === 'video' ? '视频' : kind === 'audio' ? '音频' : kind === 'text' ? '文本' : '图片',
+        icon:kind === 'video' ? 'play' : kind === 'audio' ? 'file-audio' : kind === 'text' ? 'file-text' : 'image',
+        title:title || assetKindLabel(item)
+    };
+}
+function renderAssetKindBadge(item, title=''){
+    const meta = assetKindBadgeMeta(item, title);
+    return `<span class="asset-kind-badge ${escapeAttr(meta.kind)}" title="${escapeAttr(meta.title)}"><i data-lucide="${meta.icon}"></i><em>${escapeHtml(meta.label)}</em></span>`;
+}
 // 缩略图走服务端缩放代理（/api/media-preview），把大原图降到 ~256px 再传给浏览器。素材多时滚动只解码小图，
 // 不再因为加载/解码整张原图而卡。仅对本地 /output、/assets 的图片/视频生效，其它地址原样返回。
 function assetPreviewUrl(url, w=256){
@@ -442,6 +473,56 @@ function assetThumb(item){
     if(kind === 'audio') return `<div class="asset-file-icon"><i data-lucide="file-audio"></i><span>音频</span></div>`;
     if(kind === 'text') return `<div class="asset-file-icon"><i data-lucide="file-text"></i><span>文本</span></div>`;
     return `<img src="${escapeAttr(assetPreviewUrl(item.url, 256))}" alt="${escapeAttr(item.name || 'asset')}" loading="lazy" decoding="async">`;
+}
+function renderDetailMedia(item, options={}){
+    const kind = assetKind(item);
+    if(kind === 'video'){
+        return `<div class="detail-media-frame detail-media-video-frame">
+            <video class="detail-preview-video" src="${escapeAttr(item.url)}" autoplay loop ${previewMuted ? 'muted' : ''} playsinline preload="auto"></video>
+            <button class="asset-icon-btn detail-media-toggle" type="button" data-preview-mute-toggle title="${escapeAttr(previewMuted ? '开启声音' : '静音')}"><i data-lucide="${previewMuted ? 'volume-x' : 'volume-2'}"></i></button>
+        </div>`;
+    }
+    const thumb = options.thumbHtml || assetThumb(item);
+    if(kind === 'image' && options.previewAttr){
+        return `<button class="detail-media-frame detail-media-zoomable" type="button" ${options.previewAttr} title="${escapeAttr(options.previewTitle || '点击放大预览')}">${thumb}</button>`;
+    }
+    return `<div class="detail-media-frame">${thumb}</div>`;
+}
+function syncDetailPreviewMuteUI(scope=document){
+    const muted = !!previewMuted;
+    scope.querySelectorAll?.('[data-preview-mute-toggle]').forEach(btn => {
+        btn.setAttribute('title', muted ? '开启声音' : '静音');
+        btn.setAttribute('aria-label', muted ? '开启声音' : '静音');
+        btn.setAttribute('aria-pressed', String(!muted));
+        btn.innerHTML = `<i data-lucide="${muted ? 'volume-x' : 'volume-2'}"></i>`;
+    });
+    scope.querySelectorAll?.('.detail-preview-video').forEach(video => {
+        video.muted = muted;
+        video.volume = muted ? 0 : 1;
+    });
+    refreshIcons();
+}
+function initializeDetailPreviewMedia(scope=document){
+    scope.querySelectorAll?.('.detail-preview-video').forEach(video => {
+        if(video.dataset.previewInit === '1') return;
+        video.dataset.previewInit = '1';
+        video.classList.remove('ready');
+        video.muted = !!previewMuted;
+        video.defaultMuted = !!previewMuted;
+        video.volume = previewMuted ? 0 : 1;
+        video.addEventListener('loadeddata', () => {
+            video.classList.add('ready');
+        });
+        if(video.readyState >= 2) video.classList.add('ready');
+        const playPromise = video.play?.();
+        if(playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+    });
+    syncDetailPreviewMuteUI(scope);
+}
+function togglePreviewMuted(){
+    previewMuted = !previewMuted;
+    writePreviewSettings();
+    syncDetailPreviewMuteUI(root || document);
 }
 function workflowThumb(item){
     return `<div class="asset-file-icon workflow-file-icon"><i data-lucide="workflow"></i><span>${escapeHtml(workflowKindLabel(item))}</span></div>`;
@@ -887,6 +968,9 @@ function toggleSelectionSet(set, id){
     set.add(id);
     return true;
 }
+function managedDetailSelectionId(currentId, id, selected){
+    return selected ? id : currentId;
+}
 function managedSelectionTarget(target){
     if(activeTab === 'assets' && assetManageMode){
         const check = target.closest?.('[data-asset-check]');
@@ -929,7 +1013,7 @@ function managedSelectionTarget(target){
 function applyManagedSelection(kind, id){
     if(kind === 'asset'){
         const selected = toggleSelectionSet(selectedAssetIds, id);
-        selectedAssetId = selected ? id : (selectedAssetId === id ? '' : selectedAssetId);
+        selectedAssetId = managedDetailSelectionId(selectedAssetId, id, selected);
     } else if(kind === 'localup'){
         const selected = toggleSelectionSet(selectedLocalUploadIds, id);
         selectedLocalUploadId = selected ? id : (selectedLocalUploadId === id ? '' : selectedLocalUploadId);
@@ -946,7 +1030,7 @@ function applyManagedSelection(kind, id){
         promptCreateMode = false;
     } else if(kind === 'canvasAsset'){
         const selected = toggleSelectionSet(selectedCanvasAssetIds, id);
-        selectedCanvasAssetId = selected ? id : (selectedCanvasAssetId === id ? '' : selectedCanvasAssetId);
+        selectedCanvasAssetId = managedDetailSelectionId(selectedCanvasAssetId, id, selected);
     }
     pendingBatchDelete = '';
 }
@@ -1072,6 +1156,7 @@ function render(){
     else if(activeTab === 'canvas-assets') renderCanvasAssetsManager();
     else renderAssetManager();
     refreshIcons();
+    initializeDetailPreviewMedia(root || document);
     if(scrollState.length){
         requestAnimationFrame(() => {
             document.querySelectorAll('.nav-scroll,.content-scroll,.detail-scroll').forEach((el, index) => {
@@ -1216,9 +1301,7 @@ function renderCanvasAssetCard(item){
     </article>`;
 }
 function renderCanvasAssetKindBadge(item){
-    const kind = assetKind(item);
-    const icon = kind === 'video' ? 'play' : kind === 'audio' ? 'file-audio' : kind === 'text' ? 'file-text' : 'image';
-    return `<span class="asset-kind-badge ${escapeAttr(kind)}" title="${escapeAttr(canvasAssetKindLabel(item))}"><i data-lucide="${icon}"></i></span>`;
+    return renderAssetKindBadge(item, canvasAssetKindLabel(item));
 }
 function renderCanvasAssetDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>画布资产详情</strong><span>选择一个画布资产查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="layout-dashboard"></i><span>暂无画布资产</span></div></div>`;
@@ -1236,9 +1319,10 @@ function renderCanvasAssetDetail(item){
         </div>
         <div class="detail-scroll">
             <div class="detail-media">
-                ${canPreview
-                    ? `<button class="detail-media-frame detail-media-zoomable" type="button" data-canvas-asset-preview="${escapeAttr(item.id)}" title="${kind === 'video' ? '点击预览视频' : '点击放大预览'}">${assetThumb(item)}</button>`
-                    : `<div class="detail-media-frame">${assetThumb(item)}</div>`}
+                ${renderDetailMedia(item, {
+                    previewAttr:`data-canvas-asset-preview="${escapeAttr(item.id)}"`,
+                    previewTitle:kind === 'video' ? '点击预览视频' : '点击放大预览'
+                })}
             </div>
             <div class="detail-body">
                 <div class="detail-name">${escapeHtml(item.name || '画布资产')}</div>
@@ -1266,6 +1350,7 @@ function refreshCanvasAssetSelectionOnly(){
     if(detail){
         detail.innerHTML = renderCanvasAssetDetail(selectedCanvasAsset());
         refreshIcons();
+        initializeDetailPreviewMedia(detail);
     }
 }
 function renderHeadTreeInlineEdit(edit, inputId, saveAttr, cancelAttr){
@@ -1478,7 +1563,7 @@ function renderLocalUploadCard(item){
     const hasCaption = assetKind(item) === 'image' && String(item.caption || '').trim();
     return `<article class="asset-card ${item.id === selectedLocalUploadId ? 'active' : ''}" data-localup-card="${escapeAttr(item.id)}">
         <input class="asset-card-check" type="checkbox" data-localup-check="${escapeAttr(item.id)}" ${selectedLocalUploadIds.has(item.id) ? 'checked' : ''}>
-        <div class="asset-thumb">${assetThumb(item)}</div>
+        <div class="asset-thumb">${assetThumb(item)}${renderAssetKindBadge(item)}</div>
         <div class="asset-card-body">
             <div class="asset-card-name" data-localup-rename="${escapeAttr(item.id)}" title="${escapeAttr(item.name || '')}">${escapeHtml(item.name || '本地素材')}</div>
             <div class="asset-card-meta">${escapeHtml(assetKindLabel(item))} · ${escapeHtml(formatFileSize(item.size))}${hasCaption ? ' · 有提示词' : ''}</div>
@@ -1542,6 +1627,7 @@ function refreshLocalUploadSelectionOnly(){
     if(detail){
         detail.innerHTML = renderLocalUploadDetail(findLocalUpload(selectedLocalUploadId));
         refreshIcons();
+        initializeDetailPreviewMedia(detail);
     }
 }
 function renderLocalFolderBranch(folder, depth=0){
@@ -1566,7 +1652,7 @@ function renderLocalCard(item){
     const hasCaption = localItemKind(item) === 'image' && String(item.caption || '').trim();
     return `<article class="asset-card ${item.id === selectedLocalId ? 'active' : ''}" data-local-card="${escapeAttr(item.id)}">
         <input class="asset-card-check" type="checkbox" data-local-check="${escapeAttr(item.id)}" ${selectedLocalIds.has(item.id) ? 'checked' : ''}>
-        <div class="asset-thumb">${localAssetThumb(item)}</div>
+        <div class="asset-thumb">${localAssetThumb(item)}${renderAssetKindBadge(item)}</div>
         <div class="asset-card-body">
             <div class="asset-card-name" title="${escapeAttr(item.relativePath || item.name || '')}">${escapeHtml(item.name || 'local')}</div>
             <div class="asset-card-meta">${escapeHtml(assetKindLabel(item))} · ${escapeHtml(formatFileSize(item.size))}${hasCaption ? ' · 有提示词' : ''}</div>
@@ -1912,7 +1998,7 @@ function renderAssetTreeInlineEdit(kind){
 function renderAssetCard(item){
     return `<article class="asset-card ${item.id === selectedAssetId ? 'active' : ''}" data-asset-card="${escapeAttr(item.id)}">
         <input class="asset-card-check" type="checkbox" data-asset-check="${escapeAttr(item.id)}" ${selectedAssetIds.has(item.id) ? 'checked' : ''}>
-        <div class="asset-thumb">${assetThumb(item)}</div>
+        <div class="asset-thumb">${assetThumb(item)}${renderAssetKindBadge(item)}</div>
         <div class="asset-card-body">
             <div class="asset-card-name" title="${escapeAttr(item.name || '')}">${escapeHtml(item.name || 'asset')}</div>
             <div class="asset-card-meta">${escapeHtml(assetKindLabel(item))} · ${escapeHtml(formatDate(item.created_at))}</div>
@@ -2002,7 +2088,10 @@ function renderAssetDetail(item){
                 </div>
             </div>
             <div class="detail-scroll">
-                <div class="detail-media"><button class="detail-media-frame detail-media-zoomable" type="button" data-asset-preview="${escapeAttr(item.id)}" title="点击放大预览">${assetThumb(item)}</button></div>
+                <div class="detail-media">${renderDetailMedia(item, {
+                    previewAttr:`data-asset-preview="${escapeAttr(item.id)}"`,
+                    previewTitle:'点击放大预览'
+                })}</div>
                 <div class="inline-edit-form">
                     <label class="inline-edit-field"><span>素材名称</span><input id="assetEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="素材名称"></label>
                     <div class="detail-meta-grid">
@@ -2024,7 +2113,10 @@ function renderAssetDetail(item){
             </div>
         </div>
         <div class="detail-scroll">
-            <div class="detail-media"><button class="detail-media-frame detail-media-zoomable" type="button" data-asset-preview="${escapeAttr(item.id)}" title="点击放大预览">${assetThumb(item)}</button></div>
+            <div class="detail-media">${renderDetailMedia(item, {
+                previewAttr:`data-asset-preview="${escapeAttr(item.id)}"`,
+                previewTitle:'点击放大预览'
+            })}</div>
             <div class="detail-body">
                 <input class="detail-name-input" data-asset-inline-name="${escapeAttr(item.id)}" type="text" value="${escapeAttr(item.name || 'asset')}" title="直接修改名称">
                 <div class="detail-meta-grid">
@@ -2035,10 +2127,14 @@ function renderAssetDetail(item){
                 </div>
                 <div class="detail-url">${escapeHtml(item.url || '')}</div>
                 ${isImage ? `<div class="detail-caption-card">
-                    <div class="detail-caption-head"><strong>智能分类</strong></div>
-                    <div class="detail-classification-body">${renderClassificationChips(item, 32, {kind:'asset', libraryId:activeAssetLibraryId}) || '<span class="classification-empty">暂无智能分类，可以选中图片后点击“智能分类”。</span>'}</div>
+                    <div class="detail-caption-head">
+                        <strong>智能分类</strong>
+                        <div class="detail-caption-actions">
+                            <button class="asset-btn" type="button" data-asset-classify-current="${escapeAttr(item.id)}" ${assetClassifyBusy ? 'disabled' : ''}><i data-lucide="${assetClassifyBusy ? 'loader-2' : 'tags'}"></i><span>${assetClassifyBusy ? '分类中' : '智能分类'}</span></button>
+                        </div>
+                    </div>
+                    <div class="detail-classification-body">${renderClassificationChips(item, 32, {kind:'asset', libraryId:activeAssetLibraryId}) || '<span class="classification-empty">暂无智能分类，可直接点击右上角“智能分类”，也可进入“批量管理”后对多张图片批量分类。</span>'}</div>
                 </div>` : ''}
-                ${renderAvatarSection(item)}
             </div>
         </div>
     `;
@@ -2803,7 +2899,16 @@ async function runLocalUploadClassifySelected(){
     }
 }
 async function runAssetClassifySelected(){
-    const images = selectedAssetImageItems();
+    await runAssetClassifyItems(selectedAssetImageItems());
+}
+async function runAssetClassifyOne(id){
+    const item = findAssetItem(id);
+    if(!item) return;
+    selectedAssetId = item.id;
+    await runAssetClassifyItems([item]);
+}
+async function runAssetClassifyItems(items){
+    const images = (items || []).filter(item => item && assetKind(item) === 'image');
     if(!images.length || assetClassifyBusy) return;
     normalizeLocalCaptionSettings();
     if(!localCaptionProvider || !localCaptionModel){
@@ -2871,7 +2976,7 @@ async function handleClick(event){
             event.stopPropagation();
             const id = assetCheck?.dataset.assetCheck || assetCard?.dataset.assetCard || '';
             const selected = toggleSelectionSet(selectedAssetIds, id);
-            selectedAssetId = selected ? id : (selectedAssetId === id ? '' : selectedAssetId);
+            selectedAssetId = managedDetailSelectionId(selectedAssetId, id, selected);
             pendingBatchDelete = '';
             render();
             return;
@@ -2943,7 +3048,7 @@ async function handleClick(event){
             event.stopPropagation();
             const id = canvasCheck?.dataset.canvasAssetCheck || canvasCard?.dataset.canvasAssetCard || '';
             const selected = toggleSelectionSet(selectedCanvasAssetIds, id);
-            selectedCanvasAssetId = selected ? id : (selectedCanvasAssetId === id ? '' : selectedCanvasAssetId);
+            selectedCanvasAssetId = managedDetailSelectionId(selectedCanvasAssetId, id, selected);
             refreshCanvasAssetSelectionOnly();
             return;
         }
@@ -2951,6 +3056,12 @@ async function handleClick(event){
     const tabBtn = target.closest?.('[data-tab]');
     if(tabBtn){ activeTab = tabBtn.dataset.tab || 'assets'; selectedAssetIds.clear(); selectedWorkflowIds.clear(); selectedPromptIds.clear(); selectedLocalIds.clear(); selectedLocalUploadIds.clear(); selectedCanvasAssetIds.clear(); render(); return; }
     if(target.closest?.('#refreshBtn')){ await loadAll(); return; }
+    if(target.closest?.('[data-preview-mute-toggle]')){
+        event.preventDefault();
+        event.stopPropagation();
+        togglePreviewMuted();
+        return;
+    }
     const assetPreview = target.closest?.('[data-asset-preview]');
     if(assetPreview){ showDetailPreview('asset', assetPreview.dataset.assetPreview || ''); return; }
     const canvasAssetPreview = target.closest?.('[data-canvas-asset-preview]');
@@ -3093,7 +3204,7 @@ async function handleClick(event){
         if(canvasAssetManageMode){
             const id = canvasAssetCheck.dataset.canvasAssetCheck || '';
             const selected = toggleSelectionSet(selectedCanvasAssetIds, id);
-            selectedCanvasAssetId = selected ? id : (selectedCanvasAssetId === id ? '' : selectedCanvasAssetId);
+            selectedCanvasAssetId = managedDetailSelectionId(selectedCanvasAssetId, id, selected);
             refreshCanvasAssetSelectionOnly();
         }
         return;
@@ -3103,7 +3214,7 @@ async function handleClick(event){
         const id = canvasAssetCard.dataset.canvasAssetCard || '';
         if(canvasAssetManageMode){
             const selected = toggleSelectionSet(selectedCanvasAssetIds, id);
-            selectedCanvasAssetId = selected ? id : (selectedCanvasAssetId === id ? '' : selectedCanvasAssetId);
+            selectedCanvasAssetId = managedDetailSelectionId(selectedCanvasAssetId, id, selected);
         } else {
             selectedCanvasAssetId = id;
         }
@@ -3246,6 +3357,8 @@ async function handleClick(event){
     if(assetDownload){ downloadAssetItem(assetDownload.dataset.assetDownload || ''); return; }
     const assetOpen = target.closest?.('[data-asset-open]');
     if(assetOpen){ openAssetItem(assetOpen.dataset.assetOpen || ''); return; }
+    const assetClassifyCurrent = target.closest?.('[data-asset-classify-current]');
+    if(assetClassifyCurrent){ await runAssetClassifyOne(assetClassifyCurrent.dataset.assetClassifyCurrent || ''); return; }
     const avatarCopy = target.closest?.('[data-avatar-copy]');
     if(avatarCopy){
         const uri = avatarCopy.dataset.avatarCopy || '';
@@ -3341,7 +3454,7 @@ async function handleClick(event){
         if(assetManageMode){
             const id = assetCheck.dataset.assetCheck || '';
             const selected = toggleSelectionSet(selectedAssetIds, id);
-            selectedAssetId = selected ? id : (selectedAssetId === id ? '' : selectedAssetId);
+            selectedAssetId = managedDetailSelectionId(selectedAssetId, id, selected);
             pendingBatchDelete = '';
             render();
         }
@@ -3352,7 +3465,7 @@ async function handleClick(event){
         const id = assetCard.dataset.assetCard || '';
         if(assetManageMode){
             const selected = toggleSelectionSet(selectedAssetIds, id);
-            selectedAssetId = selected ? id : (selectedAssetId === id ? '' : selectedAssetId);
+            selectedAssetId = managedDetailSelectionId(selectedAssetId, id, selected);
         } else {
             selectedAssetId = id;
         }
