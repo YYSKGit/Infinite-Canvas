@@ -2375,7 +2375,7 @@ function chatModelOptions(selectedModel='', providerId=''){
     const selectedProvider = resolveChatProviderId(providerId);
     const models = providerChatModels(selectedProvider);
     const selected = resolveChatModel(selectedModel, selectedProvider);
-    return [...new Set([selected, ...models].filter(Boolean))].map(model => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('');
+    return [...new Set([selected, ...models].filter(Boolean))].map(model => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(modelDisplayName(selectedProvider, model) || model)}</option>`).join('');
 }
 function apiProviderById(providerId){
     if(providerId === 'volcengine') return volcengineProvider();
@@ -6796,7 +6796,8 @@ function restoreThumbScrollStates(states){
 }
 function smartRunTaskLabel(run){
     const s = run?.settings || {};
-    if(run?.kind === 'video') return s.videoModel || 'Video';
+    if(run?.kind === 'text') return modelDisplayName(s.provider_id || '', s.model || '') || 'LLM';
+    if(run?.kind === 'video') return modelDisplayName(s.videoProvider || '', s.videoModel || '') || 'Video';
     if(s.engine === 'comfy'){
         if(s.comfyMode === 'custom') return s.comfyWorkflow || 'ComfyUI';
         const labels = {text:tr('canvas.comfyModeText') || '文生图', enhance:tr('canvas.comfyModeEnhance') || '图片增强', edit:tr('canvas.comfyModeEdit') || '图片编辑'};
@@ -6805,7 +6806,7 @@ function smartRunTaskLabel(run){
     if(s.engine === 'modelscope'){
         return s.msgenModel === 'custom' ? (s.msCustomModel || 'Modelscope') : (MS_GEN_MODELS[s.msgenModel]?.label || s.msgenModel || 'Modelscope');
     }
-    return s.model || 'API Image';
+    return modelDisplayName(s.provider_id || '', s.model || '') || 'API Image';
 }
 function outputUrlLooksVideo(url){
     return /\.(mp4|webm|mov|m4v|avi|mkv)(\?|$)/.test(smartOriginalMediaUrl(url).toLowerCase());
@@ -6953,6 +6954,7 @@ function smartRunRequestMeta(run){
     const s = run?.settings || {};
     if(s.engine === 'comfy') return {workflow_json:s.comfyWorkflow || '', mode:s.comfyMode || 'text'};
     if(s.engine === 'modelscope') return {backend:'Modelscope', model:s.msgenModel || '', custom_model:s.msCustomModel || ''};
+    if(run?.kind === 'text') return {provider_id:s.provider_id || '', model:s.model || '', mode:'llm'};
     if(run?.kind === 'video') return {provider_id:s.videoProvider || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
     return {provider_id:s.provider_id || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
 }
@@ -15068,13 +15070,23 @@ async function runPromptLLMNode(nodeId){
     const message = promptNodeLLMInputText(node).trim();
     if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
     const systemPrompt = (node.llmSystemPrompt || '').trim();
+    const provider = resolveChatProviderId(node.llmProvider || '');
+    const model = resolveChatModel(node.llmModel || '', provider);
+    const mediaRefs = promptNodeInputMediaForLLM(node);
+    const runLog = {
+        nodeId:node.id,
+        nodeType:node.type,
+        kind:'text',
+        settings:{provider_id:provider, model},
+        prompt:message,
+        requestPrompt:message,
+        refs:(mediaRefs || []).map(ref => ({url:ref.url || '', name:ref.name || 'media', kind:ref.kind || ''})).filter(ref => ref.url)
+    };
+    const runLogStart = nowMs();
     node.llmEnabled = true;
     node.running = true;
     render();
     try {
-        const provider = resolveChatProviderId(node.llmProvider || '');
-        const model = resolveChatModel(node.llmModel || '', provider);
-        const mediaRefs = promptNodeInputMediaForLLM(node);
         const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
         const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
         const result = await fetch('/api/canvas-llm', {
@@ -15091,7 +15103,7 @@ async function runPromptLLMNode(nodeId){
                 system_prompt:node.llmSystemEnabled ? (systemPrompt || 'You are a helpful prompt assistant.') : ''
             })
         }).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
+            if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.promptLlmFailed')));
             return r.json();
         });
         node.text = (result.text || '').trim();
@@ -15099,6 +15111,9 @@ async function runPromptLLMNode(nodeId){
         node.llmModel = model;
         scheduleSave();
     } catch(e) {
+        if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart), error:e.message || tr('smart.promptLlmFailed')});
+        if(e && typeof e === 'object') e.smartGenerationLogged = true;
+        notifySmartTaskFailure(e.message || tr('smart.promptLlmFailed'));
         toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
     } finally {
         node.running = false;
