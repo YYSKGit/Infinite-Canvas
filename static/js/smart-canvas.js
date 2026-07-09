@@ -6875,6 +6875,31 @@ function captureThumbScrollStates(){
     });
     return states;
 }
+function promptNodeTextareaScrollKey(el){
+    if(!el) return '';
+    if(el.classList.contains('prompt-node-text')) return 'text';
+    if(el.classList.contains('prompt-llm-instruction')) return 'llmInstruction';
+    if(el.classList.contains('prompt-llm-system')) return 'llmSystem';
+    return '';
+}
+function capturePromptNodeTextareaScrollStates(){
+    const states = new Map();
+    world.querySelectorAll('.image-node').forEach(nodeEl => {
+        const id = nodeEl.dataset.id;
+        if(!id) return;
+        const nodeStates = {};
+        nodeEl.querySelectorAll('.prompt-node-text, .prompt-llm-instruction, .prompt-llm-system').forEach(el => {
+            const key = promptNodeTextareaScrollKey(el);
+            if(!key) return;
+            const top = el.scrollTop || 0;
+            const left = el.scrollLeft || 0;
+            if(top <= 0 && left <= 0) return;
+            nodeStates[key] = {top, left};
+        });
+        if(Object.keys(nodeStates).length) states.set(id, nodeStates);
+    });
+    return states;
+}
 function restoreThumbScrollStates(states){
     if(!states?.size) return;
     world.querySelectorAll('.image-node').forEach(nodeEl => {
@@ -6883,6 +6908,21 @@ function restoreThumbScrollStates(states){
         if(!scrollTop) return;
         const scroller = nodeEl.querySelector('[data-thumb-scroll]');
         if(scroller) scroller.scrollTop = scrollTop;
+    });
+}
+function restorePromptNodeTextareaScrollStates(states){
+    if(!states?.size) return;
+    world.querySelectorAll('.image-node').forEach(nodeEl => {
+        const id = nodeEl.dataset.id;
+        const nodeStates = states.get(id);
+        if(!nodeStates) return;
+        nodeEl.querySelectorAll('.prompt-node-text, .prompt-llm-instruction, .prompt-llm-system').forEach(el => {
+            const key = promptNodeTextareaScrollKey(el);
+            const pos = key ? nodeStates[key] : null;
+            if(!pos) return;
+            el.scrollTop = pos.top || 0;
+            el.scrollLeft = pos.left || 0;
+        });
     });
 }
 function smartRunTaskLabel(run){
@@ -7767,6 +7807,7 @@ function render(){
     const composerEl = composer;
     const mediaStates = captureMediaPlaybackStates();
     const thumbScrollStates = captureThumbScrollStates();
+    const promptTextareaScrollStates = capturePromptNodeTextareaScrollStates();
     // 用户正在提示词框(contenteditable)输入时,本次重渲染不要移动 composer:
     // 移动 DOM 节点会打断输入法合成会话,导致输入中断(即使保留焦点描边也接不上)。
     const promptHadFocus = document.activeElement === promptInput;
@@ -7843,6 +7884,7 @@ function render(){
     });
     restoreMediaPlaybackStates(mediaStates);
     restoreThumbScrollStates(thumbScrollStates);
+    restorePromptNodeTextareaScrollStates(promptTextareaScrollStates);
     bindNodeEvents();
     bindConnectionEvents();
     updateComposer();

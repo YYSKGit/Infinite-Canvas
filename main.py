@@ -4211,6 +4211,15 @@ def is_volcengine_provider(provider):
 def is_venice_provider(provider):
     return provider_protocol(provider) == "venice"
 
+def apply_venice_chat_completion_parameters(body, provider):
+    if not isinstance(body, dict) or not is_venice_provider(provider):
+        return body
+    req_body = dict(body)
+    venice_parameters = dict(req_body.get("venice_parameters") or {})
+    venice_parameters["include_venice_system_prompt"] = False
+    req_body["venice_parameters"] = venice_parameters
+    return req_body
+
 def is_runninghub_provider(provider):
     return provider_protocol(provider) == "runninghub" or str((provider or {}).get("id") or "").strip().lower() == "runninghub"
 
@@ -10673,6 +10682,7 @@ async def decide_chat_agent_action(payload, conversation, refs):
             req_body = {"model": model, "messages": upstream_messages}
             if is_apimart_provider(provider_cfg):
                 req_body["stream"] = False
+            req_body = apply_venice_chat_completion_parameters(req_body, provider_cfg)
             response = await client.post(
                 f"{chat_base}/chat/completions",
                 headers=chat_hdrs,
@@ -10728,6 +10738,7 @@ async def build_chat_text_reply(payload, conversation):
             req_body = {"model": model, "messages": upstream_messages}
             if is_apimart:
                 req_body["stream"] = False
+            req_body = apply_venice_chat_completion_parameters(req_body, provider_cfg)
             response = await client.post(f"{chat_base}/chat/completions", headers=chat_hdrs, json=req_body)
             response.raise_for_status()
             raw = response.json()
@@ -14209,6 +14220,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
             req_body = {"model": model, "messages": upstream_messages}
             if _is_apimart:
                 req_body["stream"] = False   # APIMart 默认流式，强制关闭
+            req_body = apply_venice_chat_completion_parameters(req_body, _llm_provider)
             response = await client.post(
                 f"{chat_base}/chat/completions",
                 headers=chat_hdrs,
@@ -15175,6 +15187,7 @@ async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_m
             req_body = {"model": resolved_model, "messages": messages}
             if is_apimart:
                 req_body["stream"] = False
+            req_body = apply_venice_chat_completion_parameters(req_body, llm_provider)
             response = await client.post(
                 f"{chat_base}/chat/completions",
                 headers=chat_hdrs,
@@ -15621,6 +15634,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
                 conv_req_body = {"model": model, "messages": upstream_messages}
                 if _conv_is_apimart:
                     conv_req_body["stream"] = False
+                conv_req_body = apply_venice_chat_completion_parameters(conv_req_body, _conv_provider)
                 response = await client.post(
                     f"{chat_base}/chat/completions",
                     headers=chat_hdrs,
@@ -15834,11 +15848,12 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
         yield sse_event({"type": "meta", "conversation": conversation})
         try:
             async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+                req_body = apply_venice_chat_completion_parameters({"model": model, "messages": upstream_messages, "stream": True}, _stream_provider)
                 async with client.stream(
                     "POST",
                     f"{chat_base}/chat/completions",
                     headers=chat_hdrs,
-                    json={"model": model, "messages": upstream_messages, "stream": True},
+                    json=req_body,
                 ) as response:
                     if response.status_code >= 400:
                         detail = await response.aread()
