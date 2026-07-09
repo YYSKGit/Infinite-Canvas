@@ -153,6 +153,8 @@ let runBtnCooldownToken = 0;
 let smartRunStateToken = 0;
 const activeSmartTaskPolls = new Map();
 const smartNodeRunTokens = new Map();
+const activePromptNodeStreams = new Map();
+const PROMPT_NODE_STREAM_FLUSH_MS = 48;
 let smartRhRandomValues = {};
 let lastImagePasteAt = 0;
 let lastNodePasteAt = 0;
@@ -7347,7 +7349,7 @@ function promptNodeBodyHtml(node){
             <div class="prompt-node-llm-actions">
                 <div class="prompt-node-llm-actions-inner">
                     <button class="prompt-node-pill prompt-node-control prompt-system-toggle ${node.llmSystemEnabled ? 'active' : ''}" type="button"><i data-lucide="${node.llmSystemEnabled ? 'toggle-right' : 'toggle-left'}"></i><span>${escapeHtml(node.llmSystemEnabled ? tr('smart.promptLlmDisableSystem') : tr('smart.promptLlmEnableSystem'))}</span></button>
-                    <button class="prompt-node-run prompt-node-control" type="button" ${node.running ? 'disabled' : ''} title="${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}" aria-label="${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}"><i data-lucide="${node.running ? 'loader-2' : 'sparkles'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
+                    <button class="prompt-node-run prompt-node-control ${node.running ? 'is-running' : ''}" type="button" title="${node.running ? escapeHtml(tr('common.stop')) : escapeHtml(tr('common.run'))}" aria-label="${node.running ? escapeHtml(tr('common.stop')) : escapeHtml(tr('common.run'))}"><i data-lucide="${node.running ? 'square' : 'sparkles'}"></i><span>${node.running ? escapeHtml(tr('common.stop')) : escapeHtml(tr('common.run'))}</span></button>
                 </div>
             </div>
         </div>` : '';
@@ -8179,7 +8181,12 @@ function bindPromptNodeControls(el, node){
         capturePendingUndo();
     });
     const runEl = el.querySelector('.prompt-node-run');
-    if(runEl) runEl.onclick = e => { e.preventDefault(); e.stopPropagation(); runPromptLLMNode(node.id); };
+    if(runEl) runEl.onclick = e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if(node.running) stopPromptLLMNode(node.id);
+        else runPromptLLMNode(node.id);
+    };
 }
 function bindLoopNodeControls(el, node){
     el.querySelectorAll('.loop-smart-control').forEach(control => {
@@ -12194,6 +12201,134 @@ async function smartResponseErrorMessage(response, fallback='请求失败'){
     } catch(_) {}
     return fallback;
 }
+function promptNodeElement(nodeId=''){
+    if(!nodeId) return null;
+    return world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+}
+function promptNodeStopText(){
+    return tr('common.stop') || (langIsEn() ? 'Stop' : '停止');
+}
+function promptNodeRunText(){
+    return tr('common.run') || (langIsEn() ? 'Run' : '运行');
+}
+function activePromptNodeStreamState(nodeId=''){
+    return nodeId ? activePromptNodeStreams.get(nodeId) || null : null;
+}
+function clearPromptNodeStreamFlush(state){
+    if(state?.flushTimer){
+        clearTimeout(state.flushTimer);
+        state.flushTimer = 0;
+    }
+}
+function flushPromptNodeStreamText(state, options={}){
+    if(!state) return;
+    clearPromptNodeStreamFlush(state);
+    if(state.pendingText){
+        state.renderedText += state.pendingText;
+        state.pendingText = '';
+    }
+    const node = nodes.find(n => n.id === state.nodeId);
+    if(!node) return;
+    node.text = state.renderedText;
+    syncPromptNodeTextUi(node, {autoScroll:options.autoScroll !== false});
+}
+function queuePromptNodeStreamFlush(state, options={}){
+    if(!state) return;
+    if(options.immediate){
+        flushPromptNodeStreamText(state, options);
+        return;
+    }
+    if(state.flushTimer) return;
+    state.flushTimer = setTimeout(() => flushPromptNodeStreamText(state, options), PROMPT_NODE_STREAM_FLUSH_MS);
+}
+function cleanupPromptNodeStream(nodeId=''){
+    const state = activePromptNodeStreamState(nodeId);
+    if(!state) return;
+    clearPromptNodeStreamFlush(state);
+    activePromptNodeStreams.delete(nodeId);
+}
+function stopPromptLLMNode(nodeId=''){
+    const state = activePromptNodeStreamState(nodeId);
+    if(!state || state.stopping) return false;
+    state.stopping = true;
+    state.controller.abort();
+    return true;
+}
+function syncPromptNodeRunningUi(node){
+    const el = promptNodeElement(node?.id || '');
+    if(!el) return;
+    el.classList.toggle('node-running', Boolean(node?.running));
+    const textEl = el.querySelector('.prompt-node-text');
+    if(textEl) textEl.readOnly = node?.llmEnabled === true;
+    const runEl = el.querySelector('.prompt-node-run');
+    if(runEl){
+        const title = node?.running ? promptNodeStopText() : promptNodeRunText();
+        runEl.disabled = false;
+        runEl.classList.toggle('is-running', Boolean(node?.running));
+        runEl.title = title;
+        runEl.setAttribute('aria-label', title);
+        runEl.innerHTML = `<i data-lucide="${node?.running ? 'square' : 'sparkles'}"></i><span>${escapeHtml(title)}</span>`;
+        refreshIcons();
+    }
+}
+function syncPromptNodeTextUi(node, options={}){
+    const el = promptNodeElement(node?.id || '');
+    if(!el) return;
+    const textEl = el.querySelector('.prompt-node-text');
+    if(textEl){
+        const prevTop = textEl.scrollTop || 0;
+        const prevLeft = textEl.scrollLeft || 0;
+        const nearBottom = textEl.scrollHeight - textEl.clientHeight - prevTop < 24;
+        textEl.value = node?.text || '';
+        if(options.scrollToBottom || (options.autoScroll !== false && nearBottom)) textEl.scrollTop = textEl.scrollHeight;
+        else {
+            textEl.scrollTop = prevTop;
+            textEl.scrollLeft = prevLeft;
+        }
+    }
+    if(node?.promptSplitEnabled === true) refreshPromptNodeSegmentsUi(el, node);
+}
+async function readSmartSseStream(response, onEvent){
+    const reader = response.body?.getReader?.();
+    if(!reader) throw new Error('浏览器不支持流式读取');
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const emit = async rawEvent => {
+        const text = String(rawEvent || '').trim();
+        if(!text) return;
+        const payload = text
+            .split(/\r?\n/)
+            .filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).trim())
+            .join('\n');
+        if(!payload) return;
+        let data = null;
+        try { data = JSON.parse(payload); } catch(_) { return; }
+        await onEvent?.(data);
+    };
+    const flush = async force => {
+        let boundary = buffer.indexOf('\n\n');
+        while(boundary >= 0){
+            const rawEvent = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            await emit(rawEvent);
+            boundary = buffer.indexOf('\n\n');
+        }
+        if(force && buffer.trim()){
+            const rest = buffer;
+            buffer = '';
+            await emit(rest);
+        }
+    };
+    while(true){
+        const {value, done} = await reader.read();
+        if(done) break;
+        buffer += decoder.decode(value, {stream:true}).replace(/\r\n/g, '\n');
+        await flush(false);
+    }
+    buffer += decoder.decode().replace(/\r\n/g, '\n');
+    await flush(true);
+}
 function smartDropDataTypes(dataTransfer){
     return [...(dataTransfer?.types || [])].map(type => String(type || ''));
 }
@@ -15236,6 +15371,7 @@ async function runGeneration(){
 async function runPromptLLMNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
     if(!node || node.type !== 'smart-prompt') return;
+    if(activePromptNodeStreamState(nodeId)) return;
     const message = promptNodeLLMInputText(node).trim();
     if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
     const systemPrompt = (node.llmSystemPrompt || '').trim();
@@ -15252,15 +15388,26 @@ async function runPromptLLMNode(nodeId){
         refs:(mediaRefs || []).map(ref => ({url:ref.url || '', name:ref.name || 'media', kind:ref.kind || ''})).filter(ref => ref.url)
     };
     const runLogStart = nowMs();
+    const previousText = node.text || '';
+    const controller = new AbortController();
+    const streamState = {nodeId:node.id, controller, pendingText:'', renderedText:'', flushTimer:0, stopping:false};
+    activePromptNodeStreams.set(node.id, streamState);
     node.llmEnabled = true;
+    node.llmProvider = provider;
+    node.llmModel = model;
     node.running = true;
-    render();
+    rememberRecentPromptNodeLlmSettings(node);
+    syncPromptNodeRunningUi(node);
     try {
         const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
         const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
-        const result = await fetch('/api/canvas-llm', {
+        let streamedText = '';
+        let gotDelta = false;
+        let finalModel = model;
+        const response = await fetch('/api/canvas-llm/stream', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
+            signal:controller.signal,
             body:JSON.stringify({
                 message,
                 messages:[],
@@ -15271,23 +15418,67 @@ async function runPromptLLMNode(nodeId){
                 ms_model: provider === 'modelscope' ? model : '',
                 system_prompt:node.llmSystemEnabled ? (systemPrompt || 'You are a helpful prompt assistant.') : ''
             })
-        }).then(async r => {
-            if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.promptLlmFailed')));
-            return r.json();
         });
-        node.text = (result.text || '').trim();
-        node.llmProvider = provider;
-        node.llmModel = model;
-        rememberRecentPromptNodeLlmSettings(node);
+        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, tr('smart.promptLlmFailed')));
+        await readSmartSseStream(response, async event => {
+            if(event?.type === 'error') throw new Error(event.detail || tr('smart.promptLlmFailed'));
+            if(event?.type === 'delta'){
+                if(!gotDelta){
+                    gotDelta = true;
+                    streamedText = '';
+                    streamState.renderedText = '';
+                }
+                const delta = String(event.delta || '');
+                streamedText += delta;
+                streamState.pendingText += delta;
+                queuePromptNodeStreamFlush(streamState, {autoScroll:true});
+                return;
+            }
+            if(event?.type === 'done'){
+                finalModel = event.model || finalModel;
+                queuePromptNodeStreamFlush(streamState, {immediate:true, autoScroll:true});
+                const doneText = String(event.text || streamedText || '').trim();
+                if(doneText || gotDelta){
+                    streamedText = doneText || streamedText;
+                    gotDelta = true;
+                    streamState.renderedText = streamedText || streamState.renderedText || '';
+                    streamState.pendingText = '';
+                    node.text = streamedText || node.text || '';
+                    syncPromptNodeTextUi(node, {autoScroll:true});
+                }
+            }
+        });
+        if(!gotDelta){
+            node.text = previousText;
+            syncPromptNodeTextUi(node, {autoScroll:false});
+        } else {
+            queuePromptNodeStreamFlush(streamState, {immediate:true, autoScroll:true});
+            node.text = String(node.text || streamedText || '').trim() || previousText;
+            syncPromptNodeTextUi(node, {autoScroll:true});
+            addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart)});
+        }
+        node.llmModel = finalModel;
         scheduleSave();
     } catch(e) {
-        if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart), error:e.message || tr('smart.promptLlmFailed')});
-        if(e && typeof e === 'object') e.smartGenerationLogged = true;
-        notifySmartTaskFailure(e.message || tr('smart.promptLlmFailed'));
-        toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
+        const aborted = controller.signal.aborted || e?.name === 'AbortError' || e?.promptNodeAborted || streamState.stopping;
+        queuePromptNodeStreamFlush(streamState, {immediate:true, autoScroll:!aborted});
+        if(!(node.text || '').trim()) node.text = previousText;
+        syncPromptNodeTextUi(node, {autoScroll:!aborted});
+        if(aborted){
+            if((node.text || '').trim()){
+                addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart)});
+            }
+        } else {
+            if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart), error:e.message || tr('smart.promptLlmFailed')});
+            if(e && typeof e === 'object') e.smartGenerationLogged = true;
+            notifySmartTaskFailure(e.message || tr('smart.promptLlmFailed'));
+            toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
+        }
     } finally {
+        cleanupPromptNodeStream(node.id);
         node.running = false;
-        render();
+        syncPromptNodeRunningUi(node);
+        scheduleSave();
     }
 }
 function comfyFieldKind(field){

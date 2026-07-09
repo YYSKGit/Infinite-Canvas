@@ -14156,23 +14156,7 @@ async def canvas_video(payload: CanvasVideoRequest):
 
 # --- Canvas LLM ---
 
-@app.post("/api/canvas-llm")
-async def canvas_llm(payload: CanvasLLMRequest):
-    _provider = get_api_provider(payload.provider)
-    if is_codex_provider(_provider):
-        model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
-        payload.model = model
-        text, raw = await codex_chat_text(payload, payload.messages)
-        return {"text": text, "model": model, "raw_usage": None, "raw": raw}
-    if is_gemini_cli_provider(_provider):
-        model = selected_model(payload.model, (_provider.get("chat_models") or GEMINI_CLI_DEFAULT_CHAT_MODELS)[0])
-        payload.model = model
-        text, raw = await gemini_cli_chat_text(payload, payload.messages)
-        return {"text": text, "model": model, "raw_usage": None, "raw": raw}
-    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
-    # 判断协议：APIMart 异步 vs 标准 OpenAI
-    _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
-    _is_apimart = is_apimart_provider(_llm_provider)
+async def build_canvas_llm_upstream_messages(payload: CanvasLLMRequest, model: str = ""):
     system_prompt = (payload.system_prompt or "").strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
     for item in payload.messages[-MAX_HISTORY_MESSAGES:]:
@@ -14180,7 +14164,6 @@ async def canvas_llm(payload: CanvasLLMRequest):
         content = item.get("content")
         if role in {"user", "assistant"} and content:
             upstream_messages.append({"role": role, "content": content})
-    # 构造用户消息：有图片/视频时用 OpenAI/Gemini 多模态格式
     image_inputs = [img for img in (payload.images or []) if is_image_reference_value(img)]
     video_inputs = [video for video in (payload.videos or []) if is_video_reference_value(video)]
     if image_inputs or video_inputs:
@@ -14210,10 +14193,30 @@ async def canvas_llm(payload: CanvasLLMRequest):
                     continue
                 content_parts.append({"type": "video_url", "video_url": {"url": ref_url}})
                 ok_videos += 1
-        print(f"[canvas-llm] model={model} provider={payload.provider} text_len={len(payload.message)} images={ok_imgs}/{len(payload.images)} videos={ok_videos}/{len(payload.videos)}")
+        print(f"[canvas-llm] model={model or payload.model} provider={payload.provider} text_len={len(payload.message)} images={ok_imgs}/{len(payload.images)} videos={ok_videos}/{len(payload.videos)}")
         upstream_messages.append({"role": "user", "content": content_parts})
     else:
         upstream_messages.append({"role": "user", "content": payload.message})
+    return upstream_messages
+
+@app.post("/api/canvas-llm")
+async def canvas_llm(payload: CanvasLLMRequest):
+    _provider = get_api_provider(payload.provider)
+    if is_codex_provider(_provider):
+        model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
+        payload.model = model
+        text, raw = await codex_chat_text(payload, payload.messages)
+        return {"text": text, "model": model, "raw_usage": None, "raw": raw}
+    if is_gemini_cli_provider(_provider):
+        model = selected_model(payload.model, (_provider.get("chat_models") or GEMINI_CLI_DEFAULT_CHAT_MODELS)[0])
+        payload.model = model
+        text, raw = await gemini_cli_chat_text(payload, payload.messages)
+        return {"text": text, "model": model, "raw_usage": None, "raw": raw}
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+    # 判断协议：APIMart 异步 vs 标准 OpenAI
+    _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+    _is_apimart = is_apimart_provider(_llm_provider)
+    upstream_messages = await build_canvas_llm_upstream_messages(payload, model)
     raw = None
     try:
         async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
@@ -14247,6 +14250,90 @@ async def canvas_llm(payload: CanvasLLMRequest):
         raise HTTPException(status_code=502, detail=f"解析回复内容失败：{exc}") from exc
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else {}
     return {"text": text, "model": model, "raw_usage": raw_data.get("usage")}
+
+@app.post("/api/canvas-llm/stream")
+async def canvas_llm_stream(payload: CanvasLLMRequest):
+    _provider = get_api_provider(payload.provider)
+    if is_codex_provider(_provider):
+        model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
+        payload.model = model
+
+        async def codex_stream():
+            yield sse_event({"type": "meta", "model": model})
+            try:
+                text, raw = await codex_chat_text(payload, payload.messages)
+            except HTTPException as exc:
+                yield sse_event({"type": "error", "detail": exc.detail})
+                return
+            text = str(text or "").strip() or "接口返回了空回复。"
+            yield sse_event({"type": "delta", "delta": text})
+            yield sse_event({"type": "done", "text": text, "model": model, "raw_usage": None, "raw": raw})
+
+        return StreamingResponse(codex_stream(), media_type="text/event-stream")
+    if is_gemini_cli_provider(_provider):
+        model = selected_model(payload.model, (_provider.get("chat_models") or GEMINI_CLI_DEFAULT_CHAT_MODELS)[0])
+        payload.model = model
+
+        async def gemini_cli_stream():
+            yield sse_event({"type": "meta", "model": model})
+            try:
+                text, raw = await gemini_cli_chat_text(payload, payload.messages)
+            except HTTPException as exc:
+                yield sse_event({"type": "error", "detail": exc.detail})
+                return
+            text = str(text or "").strip() or "接口返回了空回复。"
+            yield sse_event({"type": "delta", "delta": text})
+            yield sse_event({"type": "done", "text": text, "model": model, "raw_usage": None, "raw": raw})
+
+        return StreamingResponse(gemini_cli_stream(), media_type="text/event-stream")
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+    _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+    upstream_messages = await build_canvas_llm_upstream_messages(payload, model)
+
+    async def stream():
+        content_parts = []
+        raw_usage = None
+        yield sse_event({"type": "meta", "model": model})
+        try:
+            async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
+                req_body = apply_venice_chat_completion_parameters({"model": model, "messages": upstream_messages, "stream": True}, _llm_provider)
+                async with client.stream(
+                    "POST",
+                    f"{chat_base}/chat/completions",
+                    headers=chat_hdrs,
+                    json=req_body,
+                ) as response:
+                    if response.status_code >= 400:
+                        detail = await response.aread()
+                        body = detail.decode("utf-8", errors="ignore")
+                        friendly = friendly_chat_error_detail(body, model, _llm_provider)
+                        yield sse_event({"type": "error", "detail": friendly or f"上游接口错误：{body}"})
+                        return
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data:"):
+                            line = line[5:].strip()
+                        if line == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(chunk, dict) and chunk.get("usage"):
+                            raw_usage = chunk.get("usage")
+                        delta = text_delta_from_chat_chunk(chunk)
+                        if delta:
+                            content_parts.append(delta)
+                            yield sse_event({"type": "delta", "delta": delta})
+        except httpx.HTTPError as exc:
+            log_net_error(f"画布 LLM(流式) 网络/TLS错误 provider={payload.provider} model={model}", exc)
+            yield sse_event({"type": "error", "detail": f"请求上游接口失败：{exc}"})
+            return
+        text = "".join(content_parts).strip() or "接口返回了空回复。"
+        yield sse_event({"type": "done", "text": text, "model": model, "raw_usage": raw_usage})
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 # --- 对话管理 ---
 
