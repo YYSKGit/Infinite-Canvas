@@ -116,6 +116,7 @@ const ASSET_SMART_CATEGORY_PREFIX = '__smart_class__::';
 const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
 const PROMPT_TEMPLATE_GROUPS_KEY = 'smart_canvas_prompt_template_groups_v1';
 const PROMPT_TEMPLATE_OVERRIDES_KEY = 'smart_canvas_prompt_template_overrides_v1';
+const PROMPT_NODE_LLM_SETTINGS_KEY = 'smart_canvas_prompt_node_llm_settings_v1';
 let promptPresets = [];
 let builtinPromptTemplates = [];
 let promptLibraries = [];
@@ -930,6 +931,7 @@ const RECENT_SMART_SETTINGS_KEY = 'smart_canvas_recent_run_settings_v1';
 const initialSmartSettings = cloneSmartSettings(settings);
 let canvasDefaultSmartSettings = cloneSmartSettings(settings);
 let recentSmartSettingsByMode = {};
+let recentPromptNodeLlmSettings = {};
 function smartSettingsModeKey(source=settings){
     const engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(source?.engine) ? source.engine : 'api';
     if(engine === 'api') return `api:${source?.apiKind === 'video' ? 'video' : 'image'}`;
@@ -948,6 +950,31 @@ function loadRecentSmartSettings(){
 }
 function saveRecentSmartSettings(){
     localStorage.setItem(RECENT_SMART_SETTINGS_KEY, JSON.stringify(recentSmartSettingsByMode));
+}
+function normalizePromptNodeLlmSettings(source={}){
+    const providerId = resolveChatProviderId(source?.llmProvider || '');
+    return {
+        llmProvider:providerId,
+        llmModel:resolveChatModel(source?.llmModel || '', providerId)
+    };
+}
+function loadRecentPromptNodeLlmSettings(){
+    try {
+        const data = JSON.parse(localStorage.getItem(PROMPT_NODE_LLM_SETTINGS_KEY) || '{}');
+        recentPromptNodeLlmSettings = normalizePromptNodeLlmSettings(data && typeof data === 'object' ? data : {});
+    } catch(e) {
+        recentPromptNodeLlmSettings = normalizePromptNodeLlmSettings({});
+    }
+}
+function saveRecentPromptNodeLlmSettings(){
+    localStorage.setItem(PROMPT_NODE_LLM_SETTINGS_KEY, JSON.stringify(recentPromptNodeLlmSettings));
+}
+function rememberRecentPromptNodeLlmSettings(source={}){
+    recentPromptNodeLlmSettings = normalizePromptNodeLlmSettings(source);
+    saveRecentPromptNodeLlmSettings();
+}
+function recentPromptNodeLlmSettingsSnapshot(){
+    return normalizePromptNodeLlmSettings(recentPromptNodeLlmSettings);
 }
 function recentSmartSettingsForMode(modeKey=''){
     const key = modeKey || recentSmartSettingsByMode.__lastKey || smartSettingsModeKey(settings);
@@ -2376,6 +2403,55 @@ function chatModelOptions(selectedModel='', providerId=''){
     const models = providerChatModels(selectedProvider);
     const selected = resolveChatModel(selectedModel, selectedProvider);
     return [...new Set([selected, ...models].filter(Boolean))].map(model => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(modelDisplayName(selectedProvider, model) || model)}</option>`).join('');
+}
+function promptNodeChatProviderLabel(providerId=''){
+    const selected = resolveChatProviderId(providerId);
+    const provider = chatApiProviders().find(item => item.id === selected);
+    return provider?.name || selected || 'LLM';
+}
+function renderPromptNodeSelectControl({controlClass='', icon='sparkles', title='', label='', optionsHtml=''}){
+    return `<div class="smart-control prompt-node-select-control ${controlClass}">
+        <button class="smart-pill prompt-node-select-pill prompt-node-control" type="button">
+            <i data-lucide="${escapeHtml(icon)}"></i>
+            <span class="sub">${escapeHtml(label)}</span>
+            <i data-lucide="chevron-down" class="pill-caret"></i>
+        </button>
+        <div class="smart-popover compact-popover prompt-node-select-popover">
+            <div class="smart-popover-title">${escapeHtml(title)}</div>
+            <div class="model-list">${optionsHtml}</div>
+        </div>
+    </div>`;
+}
+function renderPromptNodeLlmProviderControl(node){
+    const current = resolveChatProviderId(node.llmProvider || '');
+    const providers = chatApiProviders();
+    const optionsHtml = providers.length
+        ? providers.map(provider => `<button type="button" class="direct-option ${provider.id === current ? 'active' : ''}" data-prompt-llm-param="provider" data-prompt-llm-value="${escapeHtml(provider.id)}"><span>${escapeHtml(provider.name || provider.id)}</span></button>`).join('')
+        : `<div class="muted-note">${escapeHtml(tr('smart.noApiPlatform'))}</div>`;
+    return renderPromptNodeSelectControl({
+        controlClass:'prompt-llm-provider-control',
+        icon:'plug-zap',
+        title:'LLM 平台',
+        label:promptNodeChatProviderLabel(current),
+        optionsHtml
+    });
+}
+function renderPromptNodeLlmModelControl(node){
+    const providerId = resolveChatProviderId(node.llmProvider || '');
+    const models = providerChatModels(providerId);
+    const current = resolveChatModel(node.llmModel || '', providerId);
+    const currentLabel = modelDisplayName(providerId, current) || current || tr('smart.model');
+    const orderedModels = models.includes(current) ? models : [...models, current].filter(Boolean);
+    const optionsHtml = models.length
+        ? orderedModels.map(model => `<button type="button" class="direct-option ${model === current ? 'active' : ''}" data-prompt-llm-param="model" data-prompt-llm-value="${escapeHtml(model)}"><span>${escapeHtml(modelDisplayName(providerId, model) || model)}</span></button>`).join('')
+        : `<div class="muted-note">${escapeHtml(tr('smart.noImageModel'))}</div>`;
+    return renderPromptNodeSelectControl({
+        controlClass:'prompt-llm-model-control',
+        icon:'sparkles',
+        title:'LLM 模型',
+        label:currentLabel,
+        optionsHtml
+    });
 }
 function apiProviderById(providerId){
     if(providerId === 'volcengine') return volcengineProvider();
@@ -5918,6 +5994,7 @@ async function loadCanvas(){
         });
         canvasDefaultSmartSettings = cloneSmartSettings(settings);
         loadRecentSmartSettings();
+        loadRecentPromptNodeLlmSettings();
         if(settings.comfy_workflow && !settings.comfyWorkflow) settings.comfyWorkflow = settings.comfy_workflow;
         if(settings.comfy_params && !settings.comfyParams) settings.comfyParams = settings.comfy_params;
         updateProviderModels();
@@ -6073,7 +6150,8 @@ function createNode(x, y, images=[], options={}){
 }
 function createPromptNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
-    const providerId = resolveChatProviderId();
+    const llmDefaults = recentPromptNodeLlmSettingsSnapshot();
+    const providerId = llmDefaults.llmProvider || resolveChatProviderId();
     const node = {
         id:uid('prompt'),
         type:'smart-prompt',
@@ -6087,7 +6165,7 @@ function createPromptNode(x, y, options={}){
         promptSplitEnabled:false,
         llmEnabled:false,
         llmProvider:providerId,
-        llmModel:resolveChatModel('', providerId),
+        llmModel:llmDefaults.llmModel || resolveChatModel('', providerId),
         llmSystemEnabled:false,
         llmSystemPrompt:'You are a helpful prompt assistant.',
         llmInstruction:'',
@@ -7202,8 +7280,8 @@ function promptNodeBodyHtml(node){
     </div>` : '';
     const llmParams = node.llmEnabled ? `
         <div class="prompt-node-llm">
-            <select class="prompt-node-control prompt-llm-provider">${chatProviderOptions(node.llmProvider)}</select>
-            <select class="prompt-node-control prompt-llm-model">${chatModelOptions(node.llmModel, node.llmProvider)}</select>
+            ${renderPromptNodeLlmProviderControl(node)}
+            ${renderPromptNodeLlmModelControl(node)}
             <div class="prompt-llm-instruction-wrap">
                 <textarea class="prompt-node-control prompt-llm-instruction" placeholder="${escapeHtml(tr('smart.promptLlmInstructionPlaceholder'))}" style="height:${promptLlmInstructionHeight(node)}px">${escapeHtml(node.llmInstruction || '')}</textarea>
                 <div class="prompt-llm-instruction-resize prompt-node-control" data-llm-instruction-resize="1" title="拖动调整高度"><span></span></div>
@@ -7901,10 +7979,43 @@ function clearPortDragVisual(){
     world.querySelectorAll('.image-node.port-hover').forEach(el => el.classList.remove('port-hover'));
 }
 function bindPromptNodeControls(el, node){
-    el.querySelectorAll('.prompt-node-control, .prompt-node-pill').forEach(control => {
+    el.querySelectorAll('.prompt-node-control, .prompt-node-pill, .prompt-node-llm .smart-control').forEach(control => {
         control.addEventListener('mousedown', e => e.stopPropagation());
         control.addEventListener('click', e => e.stopPropagation());
         control.addEventListener('dblclick', e => e.stopPropagation());
+    });
+    el.querySelectorAll('.prompt-node-llm .prompt-node-select-control').forEach(ctrl => {
+        ctrl.onmouseleave = () => ctrl.classList.remove('interacting');
+    });
+    el.querySelectorAll('.prompt-node-llm .prompt-node-select-control > .smart-pill').forEach(pill => {
+        pill.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const ctrl = pill.parentElement;
+            const wasPinned = ctrl.classList.contains('pinned');
+            closeAllSmartPopovers();
+            if(!wasPinned) ctrl.classList.add('pinned');
+        };
+    });
+    el.querySelectorAll('.prompt-node-llm [data-prompt-llm-param]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeAllSmartPopovers();
+            const param = btn.dataset.promptLlmParam;
+            const value = btn.dataset.promptLlmValue || '';
+            if(param === 'provider'){
+                node.llmProvider = resolveChatProviderId(value);
+                node.llmModel = resolveChatModel('', node.llmProvider);
+            } else if(param === 'model'){
+                node.llmModel = resolveChatModel(value, node.llmProvider || '');
+            } else {
+                return;
+            }
+            rememberRecentPromptNodeLlmSettings(node);
+            render();
+            scheduleSave();
+        };
     });
     const textEl = el.querySelector('.prompt-node-text');
     if(textEl) {
@@ -7966,16 +8077,6 @@ function bindPromptNodeControls(el, node){
         render();
         scheduleSave();
     };
-    const providerEl = el.querySelector('.prompt-llm-provider');
-    if(providerEl) providerEl.onchange = e => {
-        e.stopPropagation();
-        node.llmProvider = resolveChatProviderId(e.target.value);
-        node.llmModel = resolveChatModel('', node.llmProvider);
-        render();
-        scheduleSave();
-    };
-    const modelEl = el.querySelector('.prompt-llm-model');
-    if(modelEl) modelEl.onchange = e => { e.stopPropagation(); node.llmModel = e.target.value; scheduleSave(); };
     const systemToggleEl = el.querySelector('.prompt-system-toggle');
     if(systemToggleEl) systemToggleEl.onclick = e => {
         e.preventDefault();
@@ -15109,6 +15210,7 @@ async function runPromptLLMNode(nodeId){
         node.text = (result.text || '').trim();
         node.llmProvider = provider;
         node.llmModel = model;
+        rememberRecentPromptNodeLlmSettings(node);
         scheduleSave();
     } catch(e) {
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart), error:e.message || tr('smart.promptLlmFailed')});
