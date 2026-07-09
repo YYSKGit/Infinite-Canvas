@@ -1896,7 +1896,7 @@ function promptNodeLayoutSize(node){
     if(isSmartGroupCompactMember(node) && Number.isFinite(explicitW) && explicitW > 24 && Number.isFinite(explicitH) && explicitH > 24){
         return {width:Math.round(explicitW), height:Math.round(explicitH)};
     }
-    const width = !Number.isFinite(explicitW) || explicitW === 360 ? PROMPT_NODE_DEFAULT_W : explicitW;
+    const width = !Number.isFinite(explicitW) ? PROMPT_NODE_DEFAULT_W : explicitW;
     const fallbackH = promptNodeMinHeight(node);
     const legacyExpandedH = node?.llmSystemEnabled ? 344 : 292;
     const height = !Number.isFinite(explicitH) || explicitH === 194 || explicitH === oldCollapsedH || explicitH === oldExpandedH || explicitH === legacyExpandedH
