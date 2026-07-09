@@ -73,7 +73,7 @@
         "smart.uploadButton": { zh: "上传", en: "Upload" },
         "smart.uploadButtonHint": { zh: "上传图片、视频或音频", en: "Upload images, video, or audio" },
         "smart.uploadNodeRefHint": { zh: "可接入上游参考，也可上传素材", en: "Connect upstream references or upload media" },
-        "smart.createImportNode": { zh: "上传节点", en: "Upload Node" },
+        "smart.createImportNode": { zh: "空白画布", en: "Upload Node" },
         "smart.createImportNodeSub": { zh: "支持图片/音频/视频/批量上传", en: "Images, audio, video, batch upload" },
         "smart.createExportNode": { zh: "导出节点", en: "Export Node" },
         "smart.createExportNodeSub": { zh: "接收多种格式并一键导出", en: "Collect any format and export" },
