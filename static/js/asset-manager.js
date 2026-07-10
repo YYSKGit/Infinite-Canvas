@@ -5,6 +5,19 @@ const uploadInput = document.getElementById('assetUploadInput');
 
 const LOCAL_CAPTION_SETTINGS_KEY = 'asset_manager_local_caption_settings_v1';
 const PREVIEW_SETTINGS_KEY = 'asset_manager_preview_settings_v1';
+const CANVAS_ASSET_SORT_KEY = 'asset_manager_canvas_asset_sort_v1';
+const CANVAS_ASSET_SORT_VALUES = new Set(['canvas_asc', 'updated_desc', 'updated_asc', 'name_asc', 'kind']);
+function readCanvasAssetSort(){
+    try {
+        const value = localStorage.getItem(CANVAS_ASSET_SORT_KEY) || '';
+        return CANVAS_ASSET_SORT_VALUES.has(value) ? value : 'canvas_asc';
+    } catch(_) {
+        return 'canvas_asc';
+    }
+}
+function writeCanvasAssetSort(value){
+    try { localStorage.setItem(CANVAS_ASSET_SORT_KEY, value); } catch(_) {}
+}
 function readLocalCaptionSettings(){
     try {
         const data = JSON.parse(localStorage.getItem(LOCAL_CAPTION_SETTINGS_KEY) || '{}');
@@ -121,7 +134,7 @@ let activeCanvasAssetCanvasId = '';
 let selectedCanvasAssetId = '';
 let selectedCanvasAssetIds = new Set();
 let canvasAssetQuery = '';
-let canvasAssetSort = 'canvas_asc';
+let canvasAssetSort = readCanvasAssetSort();
 let canvasAssetManageMode = false;
 let previewMuted = savedPreviewSettings.muted !== false;
 let searchCompositionActive = false;
@@ -825,7 +838,7 @@ function canvasKindLabel(kind){
     return kind === 'smart' ? '智能画布' : '普通画布';
 }
 function canvasAssetSortLabel(){
-    const map = {canvas_asc:'画布名称', updated_desc:'最近更新', updated_asc:'最早更新', name_asc:'名称 A-Z', kind:'类型'};
+    const map = {canvas_asc:'画布名称', updated_desc:'最近创建', updated_asc:'最早创建', name_asc:'名称 A-Z', kind:'类型'};
     return map[canvasAssetSort] || map.canvas_asc;
 }
 function currentCanvasAssetItems(){
@@ -845,7 +858,7 @@ function currentCanvasAssetItems(){
         ].join(' ').toLowerCase().includes(q);
     });
     list = list.slice();
-    const byTime = item => Number(item.canvas_updated_at || item.created_at || 0);
+    const byTime = item => Number(item.created_at || 0);
     const byCanvasName = (a, b) => String(a.canvas_title || '').localeCompare(String(b.canvas_title || ''), 'zh-Hans-CN', {numeric:true, sensitivity:'base'})
         || String(a.canvas_id || '').localeCompare(String(b.canvas_id || ''), 'zh-Hans-CN')
         || byTime(b) - byTime(a);
@@ -1346,8 +1359,8 @@ function renderCanvasAssetsManager(){
                     <label class="asset-search-wrap"><i data-lucide="search"></i><input id="canvasAssetSearch" class="asset-search" type="search" value="${escapeAttr(canvasAssetQuery)}" placeholder="搜索画布资产"></label>
                     <select id="canvasAssetSort" class="manage-select canvas-sort-select" title="排序方法">
                         <option value="canvas_asc" ${canvasAssetSort === 'canvas_asc' ? 'selected' : ''}>画布名称</option>
-                        <option value="updated_desc" ${canvasAssetSort === 'updated_desc' ? 'selected' : ''}>最近更新</option>
-                        <option value="updated_asc" ${canvasAssetSort === 'updated_asc' ? 'selected' : ''}>最早更新</option>
+                        <option value="updated_desc" ${canvasAssetSort === 'updated_desc' ? 'selected' : ''}>最近创建</option>
+                        <option value="updated_asc" ${canvasAssetSort === 'updated_asc' ? 'selected' : ''}>最早创建</option>
                         <option value="name_asc" ${canvasAssetSort === 'name_asc' ? 'selected' : ''}>资产名称</option>
                         <option value="kind" ${canvasAssetSort === 'kind' ? 'selected' : ''}>类型</option>
                     </select>
@@ -1453,7 +1466,7 @@ function renderCanvasAssetDetail(item){
                     <div class="detail-meta"><span>类型</span><strong>${escapeHtml(canvasAssetKindLabel(item))}</strong></div>
                     <div class="detail-meta"><span>画布分类</span><strong>${escapeHtml(canvasKindLabel(item.canvas_kind))}</strong></div>
                     <div class="detail-meta"><span>来源画布</span><strong title="${escapeAttr(item.canvas_title || '')}">${escapeHtml(item.canvas_title || '未命名画布')}</strong></div>
-                    <div class="detail-meta"><span>更新时间</span><strong>${escapeHtml(formatDate(item.canvas_updated_at || item.created_at))}</strong></div>
+                    <div class="detail-meta"><span>创建时间</span><strong>${escapeHtml(formatDate(item.created_at))}</strong></div>
                     <div class="detail-meta"><span>来源节点</span><strong title="${escapeAttr(item.node_title || item.node_type || '')}">${escapeHtml(item.node_title || item.node_type || '节点')}</strong></div>
                     <div class="detail-meta"><span>节点类型</span><strong>${escapeHtml(item.node_type || '-')}</strong></div>
                 </div>
@@ -4593,6 +4606,7 @@ root.addEventListener('change', event => {
     }
     if(event.target?.id === 'canvasAssetSort'){
         canvasAssetSort = event.target.value || 'canvas_asc';
+        writeCanvasAssetSort(canvasAssetSort);
         selectedCanvasAssetId = '';
         render();
     }

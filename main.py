@@ -3432,11 +3432,41 @@ def canvas_node_title(node):
         return ""
     return str(node.get("title") or node.get("name") or node.get("label") or node.get("type") or "节点")[:120]
 
+def canvas_asset_timestamp(value):
+    if not isinstance(value, dict):
+        return 0
+    for key in ("created_at", "createdAt", "generated_at", "generatedAt", "completed_at", "completedAt", "timestamp"):
+        raw = value.get(key)
+        try:
+            timestamp = int(float(raw or 0))
+        except (TypeError, ValueError):
+            continue
+        if timestamp > 0:
+            return timestamp * 1000 if timestamp < 10_000_000_000 else timestamp
+    return 0
+
+def canvas_asset_log_times(canvas):
+    times = {}
+    logs = canvas.get("logs") if isinstance(canvas.get("logs"), list) else []
+    for log in logs:
+        if not isinstance(log, dict):
+            continue
+        timestamp = canvas_asset_timestamp(log)
+        if not timestamp:
+            continue
+        outputs = log.get("outputs") if isinstance(log.get("outputs"), list) else []
+        for output in outputs:
+            url = canvas_asset_downloadable_url(canvas_asset_url_value(output))
+            if url:
+                times[url] = max(timestamp, times.get(url, 0))
+    return times
+
 def extract_canvas_assets(canvas):
     record = canvas_record(canvas)
     canvas_id = str(record.get("id") or "")
     items = []
     seen = set()
+    log_times = canvas_asset_log_times(canvas)
     nodes = canvas.get("nodes") if isinstance(canvas.get("nodes"), list) else []
     for node_index, node in enumerate(nodes):
         if not isinstance(node, dict):
@@ -3469,7 +3499,7 @@ def extract_canvas_assets(canvas):
                 "node_title": node_title,
                 "node_type": str(node.get("type") or ""),
                 "source_path": field_path,
-                "created_at": node.get("created_at") or record.get("updated_at") or record.get("created_at") or 0,
+                "created_at": canvas_asset_timestamp(raw) or log_times.get(url, 0) or canvas_asset_timestamp(node) or record.get("created_at") or 0,
             }
             if isinstance(raw, dict):
                 for key in ("natural_w", "natural_h", "width", "height", "size", "duration", "runMs"):
@@ -3505,7 +3535,7 @@ def canvas_assets_index():
         item_counts["all"] += len(canvas_items)
         item_counts[kind] = item_counts.get(kind, 0) + len(canvas_items)
     canvases.sort(key=lambda item: (0 if item.get("pinned") else 1, -int(item.get("updated_at") or item.get("created_at") or 0)))
-    items.sort(key=lambda item: int(item.get("canvas_updated_at") or item.get("created_at") or 0), reverse=True)
+    items.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
     categories = [
         {"id": "all", "name": "全部画布", "count": item_counts.get("all", 0), "canvas_count": canvas_counts.get("all", 0)},
         {"id": "smart", "name": "智能画布", "count": item_counts.get("smart", 0), "canvas_count": canvas_counts.get("smart", 0)},
