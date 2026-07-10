@@ -45,6 +45,8 @@ const veniceCreditsPanelTotal = document.getElementById('veniceCreditsPanelTotal
 const veniceCreditsPanelPercent = document.getElementById('veniceCreditsPanelPercent');
 const veniceCreditsPanelRefill = document.getElementById('veniceCreditsPanelRefill');
 const veniceCreditsPanelUpdatedAt = document.getElementById('veniceCreditsPanelUpdatedAt');
+const veniceVideoQuote = document.getElementById('veniceVideoQuote');
+const veniceVideoQuoteText = veniceVideoQuote?.querySelector('.venice-video-quote-text') || null;
 const assetToggle = document.getElementById('assetToggle');
 const assetPanel = document.getElementById('assetPanel');
 const assetCloseBtn = document.getElementById('assetCloseBtn');
@@ -165,6 +167,10 @@ let veniceCreditsRefreshToken = 0;
 let veniceCreditsRefreshTimer = null;
 let veniceCreditsAutoRefreshTimer = null;
 let veniceCreditsCooldownTimer = null;
+let veniceVideoQuoteTimer = null;
+let veniceVideoQuoteController = null;
+let veniceVideoQuoteSignature = '';
+let veniceVideoQuoteRequestToken = 0;
 const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v1';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
@@ -3047,6 +3053,98 @@ function isVeniceVideoProvider(providerId=''){
     const provider = videoProviderById(idText);
     return String(provider?.protocol || '').trim().toLowerCase() === 'venice';
 }
+function hideVeniceVideoQuote(){
+    if(veniceVideoQuoteTimer){
+        clearTimeout(veniceVideoQuoteTimer);
+        veniceVideoQuoteTimer = null;
+    }
+    if(veniceVideoQuoteController){
+        veniceVideoQuoteController.abort();
+        veniceVideoQuoteController = null;
+    }
+    veniceVideoQuoteRequestToken++;
+    veniceVideoQuoteSignature = '';
+    if(veniceVideoQuote){
+        veniceVideoQuote.hidden = true;
+        veniceVideoQuote.className = 'venice-video-quote';
+        veniceVideoQuote.removeAttribute('title');
+    }
+}
+function setVeniceVideoQuoteStatus(status, text, title=''){
+    if(!veniceVideoQuote || !veniceVideoQuoteText) return;
+    veniceVideoQuote.hidden = false;
+    veniceVideoQuote.className = `venice-video-quote is-${status}`;
+    veniceVideoQuoteText.textContent = text;
+    if(title) veniceVideoQuote.title = title;
+    else veniceVideoQuote.removeAttribute('title');
+}
+function syncVeniceVideoQuote(){
+    const active = settings.apiKind === 'video' && isVeniceVideoProvider(settings.videoProvider || '');
+    if(!active){
+        hideVeniceVideoQuote();
+        return;
+    }
+    const payload = {
+        provider_id:String(settings.videoProvider || 'venice'),
+        model:String(settings.videoModel || ''),
+        duration:Math.max(1, Math.min(60, Number(settings.videoDuration) || 5)),
+        resolution:String(settings.videoResolution || '480p'),
+        generate_audio:Boolean(settings.videoGenerateAudio)
+    };
+    if(!payload.model){
+        setVeniceVideoQuoteStatus('error', '暂无报价');
+        return;
+    }
+    const signature = JSON.stringify(payload);
+    const subject = activeSettingsSubject() || activeComposerNode();
+    const subjectId = String(subject?.id || 'unbound');
+    const activeKey = `${subjectId}:${signature}`;
+    if(activeKey === veniceVideoQuoteSignature) return;
+    veniceVideoQuoteSignature = activeKey;
+    if(veniceVideoQuoteTimer) clearTimeout(veniceVideoQuoteTimer);
+    if(veniceVideoQuoteController) veniceVideoQuoteController.abort();
+    const requestToken = ++veniceVideoQuoteRequestToken;
+    const cached = subject?.veniceVideoQuoteCache;
+    if(cached?.signature === signature && Number.isFinite(Number(cached.quote)) && Number.isFinite(Number(cached.cny))){
+        const quote = Number(cached.quote);
+        const cny = Number(cached.cny);
+        const usd = Number.isFinite(Number(cached.usd)) ? Number(cached.usd) : quote / 100;
+        setVeniceVideoQuoteStatus('ready', `预计 ¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7`);
+        return;
+    }
+    setVeniceVideoQuoteStatus('loading', '报价加载中');
+    veniceVideoQuoteTimer = setTimeout(async () => {
+        veniceVideoQuoteTimer = null;
+        const controller = new AbortController();
+        veniceVideoQuoteController = controller;
+        try {
+            const response = await fetch('/api/venice/video/quote', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:signature,
+                signal:controller.signal
+            });
+            const data = await response.json().catch(() => ({}));
+            if(!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+            if(requestToken !== veniceVideoQuoteRequestToken || activeKey !== veniceVideoQuoteSignature) return;
+            const quote = Number(data.quote);
+            const cny = Number(data.cny);
+            if(!Number.isFinite(quote) || !Number.isFinite(cny)) throw new Error('报价数据无效');
+            const usd = Number.isFinite(Number(data.usd)) ? Number(data.usd) : quote / 100;
+            if(subject){
+                subject.veniceVideoQuoteCache = {signature, quote, usd, cny, updatedAt:Date.now()};
+                scheduleSave();
+            }
+            setVeniceVideoQuoteStatus('ready', `预计 ¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7`);
+        } catch(error) {
+            if(error?.name === 'AbortError') return;
+            if(requestToken !== veniceVideoQuoteRequestToken || activeKey !== veniceVideoQuoteSignature) return;
+            setVeniceVideoQuoteStatus('error', '报价暂不可用', String(error?.message || error || ''));
+        } finally {
+            if(veniceVideoQuoteController === controller) veniceVideoQuoteController = null;
+        }
+    }, 250);
+}
 function nearestVeniceVideoAspectByRatio(ratio){
     const target = Number(ratio);
     if(!(target > 0 && Number.isFinite(target))) return '16:9';
@@ -3221,6 +3319,7 @@ function renderDynamicParams(){
     else if(settings.engine === 'modelscope') renderMsParams();
     else if(settings.engine === 'runninghub') renderRunningHubParams();
     else renderComfyParams();
+    syncVeniceVideoQuote();
     bindDynamicParams();
     restoreOpenControl(keepOpen);
     restoreDynamicParamsScroll(scrollState);
@@ -4410,6 +4509,7 @@ function setDynamicSetting(key, value){
     persistActiveSmartSettings();
     rememberRecentSmartSettings(settings, activeSettingsSubject());
     if(layoutKeys.has(key)) renderDynamicParams();
+    else if(key === 'videoDuration') syncVeniceVideoQuote();
     scheduleSave();
 }
 function closeAllSmartPopovers(){
