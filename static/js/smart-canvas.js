@@ -6,6 +6,11 @@ const shell = document.getElementById('shell');
 const world = document.getElementById('world');
 const composer = document.getElementById('composer');
 const createMenu = document.getElementById('createMenu');
+const smartCanvasSwitcher = document.getElementById('smartCanvasSwitcher');
+const smartCanvasSwitcherBtn = document.getElementById('smartCanvasSwitcherBtn');
+const smartCanvasSwitcherMenu = document.getElementById('smartCanvasSwitcherMenu');
+const smartCanvasSwitcherList = document.getElementById('smartCanvasSwitcherList');
+const smartCanvasSwitcherLabel = document.getElementById('smartCanvasSwitcherLabel');
 const promptInput = document.getElementById('promptInput');
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
@@ -1269,6 +1274,85 @@ function backToCanvasList(){
     savePromptDraftForCurrent();
     window.location.href = canvasListUrlForProject(canvas?.project || sourceProjectId || 'default');
 }
+function setSmartCanvasSwitcherOpen(open){
+    if(!smartCanvasSwitcher || !smartCanvasSwitcherMenu || !smartCanvasSwitcherBtn) return;
+    smartCanvasSwitcher.classList.toggle('open', open);
+    smartCanvasSwitcherMenu.hidden = !open;
+    smartCanvasSwitcherBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+async function switchToSmartCanvas(nextCanvasId){
+    if(!nextCanvasId || nextCanvasId === canvasId) return setSmartCanvasSwitcherOpen(false);
+    savePromptDraftForCurrent();
+    if(canvas) await saveCanvas();
+    const projectId = rememberCanvasListProject(canvas?.project || sourceProjectId || 'default');
+    window.location.href = `/static/smart-canvas.html?id=${encodeURIComponent(nextCanvasId)}&project=${encodeURIComponent(projectId)}`;
+}
+let smartCanvasSwitcherItems = null;
+let smartCanvasSwitcherLoadPromise = null;
+function renderSmartCanvasSwitcher(){
+    if(!smartCanvasSwitcherList) return;
+    const items = smartCanvasSwitcherItems;
+    if(!items) return;
+    smartCanvasSwitcherList.innerHTML = '';
+    if(!items.length){
+        smartCanvasSwitcherList.innerHTML = '<div class="smart-canvas-switcher-empty">暂无其他智能画布</div>';
+        return;
+    }
+    const fragment = document.createDocumentFragment();
+    items.forEach(item => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `smart-canvas-switcher-item${item.id === canvasId ? ' active' : ''}`;
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', item.id === canvasId ? 'true' : 'false');
+        const label = document.createElement('span');
+        label.textContent = item.title || '智能画布';
+        button.appendChild(label);
+        if(item.id === canvasId){
+            button.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20 6-11 11-5-5"></path></svg>');
+        }
+        button.addEventListener('click', () => switchToSmartCanvas(item.id));
+        fragment.appendChild(button);
+    });
+    smartCanvasSwitcherList.appendChild(fragment);
+}
+async function loadSmartCanvasSwitcher(force=false){
+    if(!smartCanvasSwitcherList) return;
+    if(smartCanvasSwitcherItems && !force){
+        renderSmartCanvasSwitcher();
+        return;
+    }
+    if(smartCanvasSwitcherLoadPromise && !force) return smartCanvasSwitcherLoadPromise;
+    smartCanvasSwitcherLoadPromise = (async () => {
+      try {
+        const res = await fetch('/api/canvases');
+        if(!res.ok) throw new Error('canvas list failed');
+        const data = await res.json();
+        const projectId = canvas?.project || sourceProjectId || 'default';
+        smartCanvasSwitcherItems = (data.canvases || []).filter(item => (item.kind || 'classic') === 'smart' && (item.project || 'default') === projectId);
+        renderSmartCanvasSwitcher();
+      } catch(e){
+        smartCanvasSwitcherList.innerHTML = '<div class="smart-canvas-switcher-empty">画布列表加载失败</div>';
+      } finally {
+        smartCanvasSwitcherLoadPromise = null;
+      }
+    })();
+    return smartCanvasSwitcherLoadPromise;
+}
+smartCanvasSwitcherBtn?.addEventListener('click', () => {
+    const open = !smartCanvasSwitcher.classList.contains('open');
+    setSmartCanvasSwitcherOpen(open);
+    if(open && !smartCanvasSwitcherItems){
+        smartCanvasSwitcherList.innerHTML = '<div class="smart-canvas-switcher-empty">...</div>';
+        loadSmartCanvasSwitcher();
+    }
+});
+document.addEventListener('pointerdown', e => {
+    if(smartCanvasSwitcher?.classList.contains('open') && !e.target.closest('#smartCanvasSwitcher')) setSmartCanvasSwitcherOpen(false);
+});
+document.addEventListener('keydown', e => {
+    if(e.key === 'Escape' && smartCanvasSwitcher?.classList.contains('open')) setSmartCanvasSwitcherOpen(false);
+});
 function promptPlainText(){
     return originalPromptTextFromParts(collectPromptParts());
 }
@@ -6479,6 +6563,7 @@ async function loadCanvas(){
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
+        if(smartCanvasSwitcherLabel) smartCanvasSwitcherLabel.textContent = canvas.title || tr('canvas.smartCanvas');
         nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
         migrateSmartGroupImageMembers();
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
@@ -8951,7 +9036,7 @@ function handlePortDrop(drag, e){
         return;
     }
     if(!drag.moved){ discardPendingUndo(); render(); return; }
-    if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
+    if(hit?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
         discardPendingUndo(); render(); return;
     }
     const p = screenToWorld(e);
@@ -17068,14 +17153,14 @@ shell.addEventListener('click', e => {
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
 }, true);
 shell.addEventListener('click', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
     const nodeEl = e.target.closest('.image-node');
@@ -17083,8 +17168,8 @@ shell.addEventListener('click', e => {
     else exitZoomPreview(screenToWorld(e));
 }, true);
 shell.onmousedown = e => {
-    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
-    if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
+    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
     closeCreateMenu();
     if(e.button === 0 && isRKeyDown){
         e.preventDefault();
@@ -17112,7 +17197,7 @@ shell.oncontextmenu = e => {
         e.stopPropagation();
         return;
     }
-    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(didPan || e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -17128,14 +17213,14 @@ shell.oncontextmenu = e => {
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     openCreateMenu(e);
 };
 shell.onclick = e => {
     if(selectionJustFinished) return;
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     closeCreateMenu();
     clearSelection();
@@ -17639,7 +17724,7 @@ window.onmouseup = e => {
     }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
@@ -18741,6 +18826,7 @@ window.onload = async () => {
     await loadConfig();
     await loadAssetLibrary();
     await loadCanvas();
+    loadSmartCanvasSwitcher();
     scheduleVeniceCreditsRefresh('', 80);
     syncApiKindToggleVisibility();
     render();

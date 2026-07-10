@@ -20,7 +20,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1783387674"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1783698959">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1783700050">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -81,6 +81,16 @@
             </div>
         </div>
         <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="canvas.backToList">返回画布列表</span></button>
+        <div id="smartCanvasSwitcher" class="smart-canvas-switcher">
+            <button id="smartCanvasSwitcherBtn" class="smart-canvas-switcher-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+                <span id="smartCanvasSwitcherLabel">智能画布</span>
+                <i data-lucide="chevron-down" class="smart-canvas-switcher-caret"></i>
+            </button>
+            <div id="smartCanvasSwitcherMenu" class="smart-canvas-switcher-menu" role="listbox" aria-label="切换智能画布" hidden>
+                <div class="smart-canvas-switcher-heading">智能画布</div>
+                <div id="smartCanvasSwitcherList" class="smart-canvas-switcher-list"></div>
+            </div>
+        </div>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
         <div id="createMenu" class="create-menu">
             <div class="create-menu-grid">
@@ -476,6 +486,6 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1783697258"></script>
+    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1783699829"></script>
 </body>
 </html>
