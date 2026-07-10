@@ -191,6 +191,12 @@ button { border:0; cursor:pointer; }
 .upload-body small { color:var(--faint); font-size:10px; line-height:1.25; font-weight:800; }
 .asset-card { position:relative; min-width:0; border:1px solid var(--line); border-radius:12px; background:var(--card); overflow:hidden; transition:border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
 .asset-card:hover { border-color:var(--line-2); box-shadow:0 12px 24px var(--shadow); transform:translateY(-1px); }
+.asset-card[draggable="true"] { cursor:grab; }
+.asset-card[draggable="true"]:active { cursor:grabbing; }
+.asset-card.reorder-dragging { opacity:.38; transform:scale(.97); }
+.asset-card.reorder-before::before,.asset-card.reorder-after::after { content:""; position:absolute; z-index:8; top:7px; bottom:7px; width:3px; border-radius:999px; background:#60a5fa; box-shadow:0 0 0 2px color-mix(in srgb, #60a5fa 25%, transparent); pointer-events:none; }
+.asset-card.reorder-before::before { left:-6px; }
+.asset-card.reorder-after::after { right:-6px; }
 .asset-card.active { border-color:rgba(15,23,42,.76); box-shadow:0 0 0 1px rgba(15,23,42,.22), 0 10px 20px var(--shadow); }
 body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-shadow:0 0 0 1px rgba(248,250,252,.3), 0 10px 20px var(--shadow); }
 .asset-card-check { position:absolute; left:8px; top:8px; z-index:2; width:16px; height:16px; accent-color:var(--strong); }

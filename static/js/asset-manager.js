@@ -96,6 +96,11 @@ let workflowTreeEdit = null;
 let promptTreeEdit = null;
 let pendingTreeDelete = '';
 let marqueeState = null;
+let assetReorderDragId = '';
+let assetReorderDropId = '';
+let assetReorderDropAfter = false;
+let assetDragClickUntil = 0;
+let assetReorderBusy = false;
 let sharedFolders = [];
 let activeSharedFolderId = '';
 let activeSharedFolderName = '';
@@ -766,6 +771,9 @@ function currentAssetItems(){
         if(!query) return true;
         return [item.name, item.url, assetKindLabel(item), assetClassificationSearchText(item)].join(' ').toLowerCase().includes(query);
     });
+}
+function assetManualReorderEnabled(){
+    return activeTab === 'assets' && !assetManageMode && !assetReorderBusy && !activeAssetClassFilter && !assetQuery.trim() && Boolean(activeAssetCategory());
 }
 function currentWorkflowItems(){
     const query = workflowQuery.trim().toLowerCase();
@@ -2132,7 +2140,7 @@ function renderAssetTreeInlineEdit(kind){
     </div>`;
 }
 function renderAssetCard(item){
-    return `<article class="asset-card ${item.id === selectedAssetId ? 'active' : ''}" data-asset-card="${escapeAttr(item.id)}">
+    return `<article class="asset-card ${item.id === selectedAssetId ? 'active' : ''}" data-asset-card="${escapeAttr(item.id)}" ${assetManualReorderEnabled() ? 'draggable="true" title="拖拽调整素材顺序"' : ''}>
         <input class="asset-card-check" type="checkbox" data-asset-check="${escapeAttr(item.id)}" ${selectedAssetIds.has(item.id) ? 'checked' : ''}>
         <div class="asset-thumb">${assetThumb(item)}${renderAssetKindBadge(item)}</div>
         <div class="asset-card-body">
@@ -3099,6 +3107,11 @@ async function saveLocalUploadCaption(id){
 }
 async function handleClick(event){
     const target = event.target;
+    if(Date.now() < assetDragClickUntil && target.closest?.('[data-asset-card]')){
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+    }
     if(guardMatchesManagedSelection(target)){
         event.preventDefault();
         event.stopPropagation();
@@ -4633,7 +4646,69 @@ root.addEventListener('change', event => {
         render();
     }
 });
+function clearAssetReorderIndicators(){
+    root.querySelectorAll('.asset-card.reorder-before,.asset-card.reorder-after,.asset-card.reorder-dragging').forEach(card => {
+        card.classList.remove('reorder-before', 'reorder-after', 'reorder-dragging');
+    });
+}
+async function persistAssetReorder(sourceId, targetId, after){
+    const cat = activeAssetCategory();
+    if(!cat || !sourceId || !targetId || sourceId === targetId) return;
+    const previous = (cat.items || []).slice();
+    const next = previous.slice();
+    const sourceIndex = next.findIndex(item => item.id === sourceId);
+    if(sourceIndex < 0) return;
+    const [moved] = next.splice(sourceIndex, 1);
+    let targetIndex = next.findIndex(item => item.id === targetId);
+    if(targetIndex < 0) return;
+    if(after) targetIndex += 1;
+    next.splice(targetIndex, 0, moved);
+    if(next.every((item, index) => item.id === previous[index]?.id)) return;
+    cat.items = next;
+    cat.sort_mode = 'manual';
+    assetReorderBusy = true;
+    render();
+    try {
+        const data = await apiJson('/api/asset-library/items/reorder', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_id:activeAssetLibraryId, category_id:cat.id, item_ids:next.map(item => item.id)})
+        });
+        assetLibrary = data.library || assetLibrary;
+        setStatus('素材顺序已保存');
+    } catch(err){
+        cat.items = previous;
+        setStatus(err.message || '保存素材顺序失败');
+    } finally {
+        assetReorderBusy = false;
+        render();
+    }
+}
+root.addEventListener('dragstart', event => {
+    const card = event.target.closest?.('[data-asset-card]');
+    if(!card || !assetManualReorderEnabled()) return;
+    assetReorderDragId = card.dataset.assetCard || '';
+    assetReorderDropId = '';
+    assetReorderDropAfter = false;
+    card.classList.add('reorder-dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', assetReorderDragId);
+});
 root.addEventListener('dragover', event => {
+    if(assetReorderDragId){
+        const card = event.target.closest?.('[data-asset-card]');
+        if(card && card.dataset.assetCard !== assetReorderDragId){
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            clearAssetReorderIndicators();
+            root.querySelector(`[data-asset-card="${CSS.escape(assetReorderDragId)}"]`)?.classList.add('reorder-dragging');
+            const rect = card.getBoundingClientRect();
+            assetReorderDropId = card.dataset.assetCard || '';
+            assetReorderDropAfter = event.clientX >= rect.left + rect.width / 2;
+            card.classList.add(assetReorderDropAfter ? 'reorder-after' : 'reorder-before');
+            return;
+        }
+    }
     const drop = event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop');
     if(!drop) return;
     event.preventDefault();
@@ -4643,6 +4718,19 @@ root.addEventListener('dragleave', event => {
     event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop')?.classList.remove('drag-over');
 });
 root.addEventListener('drop', event => {
+    if(assetReorderDragId){
+        event.preventDefault();
+        const sourceId = assetReorderDragId;
+        const targetId = assetReorderDropId;
+        const after = assetReorderDropAfter;
+        assetReorderDragId = '';
+        assetReorderDropId = '';
+        assetReorderDropAfter = false;
+        assetDragClickUntil = Date.now() + 250;
+        clearAssetReorderIndicators();
+        if(targetId) persistAssetReorder(sourceId, targetId, after);
+        return;
+    }
     const drop = event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop');
     if(!drop) return;
     event.preventDefault();
@@ -4650,6 +4738,13 @@ root.addEventListener('drop', event => {
     if(drop.id === 'localUploadDrop') uploadLocalAssets(event.dataTransfer.files);
     else if(drop.id === 'workflowDrop') uploadWorkflowFiles(event.dataTransfer.files).catch(err => setStatus(err.message || '上传失败'));
     else uploadFiles(event.dataTransfer.files).catch(err => setStatus(err.message || '上传失败'));
+});
+root.addEventListener('dragend', () => {
+    if(assetReorderDragId) assetDragClickUntil = Date.now() + 250;
+    assetReorderDragId = '';
+    assetReorderDropId = '';
+    assetReorderDropAfter = false;
+    clearAssetReorderIndicators();
 });
 uploadInput?.addEventListener('change', event => {
     const files = event.target.files;

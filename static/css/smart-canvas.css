@@ -1335,6 +1335,10 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .theme-dark .asset-grid::-webkit-scrollbar-thumb:hover { background:rgba(203,213,225,.54); background-clip:content-box; }
 .asset-item { position:relative; min-width:0; align-self:start; aspect-ratio:1/1; border-radius:14px; border:1px solid var(--line); background:var(--card); overflow:hidden; cursor:grab; }
 .asset-item:active { cursor:grabbing; }
+.asset-item.reorder-dragging { opacity:.38; transform:scale(.96); }
+.asset-item.reorder-before::before,.asset-item.reorder-after::after { content:""; position:absolute; z-index:12; top:7px; bottom:7px; width:3px; border-radius:999px; background:#60a5fa; box-shadow:0 0 0 2px color-mix(in srgb, #60a5fa 25%, transparent); pointer-events:none; }
+.asset-item.reorder-before::before { left:0; }
+.asset-item.reorder-after::after { right:0; }
 .asset-thumb { width:100%; height:100%; aspect-ratio:1/1; background:var(--soft); display:block; object-fit:cover; }
 .asset-thumb-wrap { position:relative; width:100%; height:100%; aspect-ratio:1/1; background:var(--soft); overflow:hidden; }
 .asset-thumb-wrap .asset-thumb { width:100%; height:100%; aspect-ratio:auto; }

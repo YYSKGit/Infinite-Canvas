@@ -2815,6 +2815,11 @@ class AssetLibraryBatchMoveRequest(BaseModel):
     target_library_id: str = ""
     target_category_id: str = ""
 
+class AssetLibraryReorderRequest(BaseModel):
+    library_id: str = ""
+    category_id: str = ""
+    item_ids: List[str] = []
+
 class AssetLibraryBatchCropRequest(BaseModel):
     ids: List[str] = []
     library_id: str = ""
@@ -6076,6 +6081,8 @@ def sort_asset_library_items(lib):
         seen.add(id(cat))
         items = cat.get("items")
         if isinstance(items, list):
+            if cat.get("sort_mode") == "manual":
+                continue
             def created_at_key(item):
                 if not isinstance(item, dict):
                     return 0
@@ -15868,6 +15875,23 @@ async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
             existing_ids.add(item.get("id"))
     save_asset_library(lib)
     return {"library": lib, "moved": len(moved)}
+
+@app.post("/api/asset-library/items/reorder")
+async def reorder_asset_library_items(payload: AssetLibraryReorderRequest):
+    lib = load_asset_library()
+    cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="分组不存在")
+    items = cat.get("items") if isinstance(cat.get("items"), list) else []
+    ordered_ids = [str(item_id) for item_id in payload.item_ids if str(item_id)]
+    current_ids = [str(item.get("id") or "") for item in items if isinstance(item, dict)]
+    if len(ordered_ids) != len(current_ids) or len(set(ordered_ids)) != len(ordered_ids) or set(ordered_ids) != set(current_ids):
+        raise HTTPException(status_code=409, detail="素材列表已变化，请刷新后重试")
+    by_id = {str(item.get("id") or ""): item for item in items if isinstance(item, dict)}
+    cat["items"] = [by_id[item_id] for item_id in ordered_ids]
+    cat["sort_mode"] = "manual"
+    save_asset_library(lib)
+    return {"library": lib}
 
 @app.post("/api/asset-library/items/crop")
 async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):

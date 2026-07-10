@@ -129,6 +129,13 @@ let mentionAssetCategoryId = '';
 let mentionFocusIndex = -1;
 let assetLibraryUpdatedAt = 0;
 let assetLibraryRefreshTimer = null;
+let assetReorderDragId = '';
+let assetReorderDropId = '';
+let assetReorderDropAfter = false;
+let assetReorderBusy = false;
+let assetReorderScrollSpeed = 0;
+let assetReorderScrollFrame = 0;
+let assetDragPreview = null;
 let activeAssetSmartClassId = '';
 const ASSET_SMART_CATEGORY_PREFIX = '__smart_class__::';
 const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
@@ -6151,6 +6158,102 @@ function renderAssetLibrary(){
     bindSmartPreviewImageFallbacks(assetGrid);
     refreshIcons();
 }
+function smartAssetReorderEnabled(){
+    return assetTab === 'image' && !assetReorderBusy && !assetLibraryIsLocal() && !parseAssetSmartClassId(activeAssetCategoryId) && Boolean(activeAssetCategory());
+}
+function clearSmartAssetReorderIndicators(){
+    assetGrid?.querySelectorAll('.asset-item.reorder-before,.asset-item.reorder-after,.asset-item.reorder-dragging').forEach(card => {
+        card.classList.remove('reorder-before', 'reorder-after', 'reorder-dragging');
+    });
+}
+function clearSmartAssetDragPreview(){
+    assetDragPreview?.remove?.();
+    assetDragPreview = null;
+}
+function setSmartAssetDragPreview(event, item, card){
+    clearSmartAssetDragPreview();
+    const media = card?.querySelector('img,video');
+    const naturalWidth = Number(item?.natural_w || item?.naturalWidth || item?.width || media?.naturalWidth || media?.videoWidth || 0);
+    const naturalHeight = Number(item?.natural_h || item?.naturalHeight || item?.height || media?.naturalHeight || media?.videoHeight || 0);
+    const ratio = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : 1;
+    let width = 180;
+    let height = width / ratio;
+    if(height > 160){ height = 160; width = height * ratio; }
+    width = Math.max(24, Math.round(width));
+    height = Math.max(24, Math.round(height));
+    const preview = document.createElement('div');
+    Object.assign(preview.style, {position:'fixed', left:'-10000px', top:'-10000px', width:`${width}px`, height:`${height}px`, overflow:'hidden', borderRadius:'12px', background:'#111827', border:'1px solid rgba(255,255,255,.5)', boxShadow:'0 14px 36px rgba(0,0,0,.35)', pointerEvents:'none', zIndex:'-1'});
+    const image = document.createElement('img');
+    image.src = media?.tagName === 'IMG' ? (media.currentSrc || media.src || item?.url || '') : smartMediaPreviewUrl(item || {url:card?.dataset?.url || ''}, 512);
+    image.alt = '';
+    Object.assign(image.style, {width:'100%', height:'100%', objectFit:'cover', display:'block'});
+    preview.appendChild(image);
+    document.body.appendChild(preview);
+    assetDragPreview = preview;
+    event.dataTransfer?.setDragImage?.(preview, Math.round(width / 2), Math.min(28, Math.round(height / 3)));
+}
+function stopSmartAssetReorderScroll(){
+    assetReorderScrollSpeed = 0;
+    if(assetReorderScrollFrame) cancelAnimationFrame(assetReorderScrollFrame);
+    assetReorderScrollFrame = 0;
+}
+function runSmartAssetReorderScroll(){
+    if(!assetReorderDragId || !assetGrid || !assetReorderScrollSpeed){
+        stopSmartAssetReorderScroll();
+        return;
+    }
+    assetGrid.scrollTop += assetReorderScrollSpeed;
+    assetReorderScrollFrame = requestAnimationFrame(runSmartAssetReorderScroll);
+}
+function updateSmartAssetReorderScroll(clientY){
+    if(!assetGrid || !assetReorderDragId) return stopSmartAssetReorderScroll();
+    const rect = assetGrid.getBoundingClientRect();
+    const edge = Math.min(72, rect.height * .22);
+    let speed = 0;
+    if(clientY < rect.top + edge){
+        speed = -Math.max(4, Math.min(22, (rect.top + edge - clientY) / edge * 22));
+    } else if(clientY > rect.bottom - edge){
+        speed = Math.max(4, Math.min(22, (clientY - (rect.bottom - edge)) / edge * 22));
+    }
+    assetReorderScrollSpeed = speed;
+    if(speed && !assetReorderScrollFrame) assetReorderScrollFrame = requestAnimationFrame(runSmartAssetReorderScroll);
+    if(!speed && assetReorderScrollFrame) stopSmartAssetReorderScroll();
+}
+async function persistSmartAssetReorder(sourceId, targetId, after){
+    const cat = activeAssetCategory();
+    if(!cat || !sourceId || !targetId || sourceId === targetId) return;
+    const previous = (cat.items || []).slice();
+    const next = previous.slice();
+    const sourceIndex = next.findIndex(item => item.id === sourceId);
+    if(sourceIndex < 0) return;
+    const [moved] = next.splice(sourceIndex, 1);
+    let targetIndex = next.findIndex(item => item.id === targetId);
+    if(targetIndex < 0) return;
+    if(after) targetIndex += 1;
+    next.splice(targetIndex, 0, moved);
+    if(next.every((item, index) => item.id === previous[index]?.id)) return;
+    cat.items = next;
+    cat.sort_mode = 'manual';
+    assetReorderBusy = true;
+    renderAssetLibrary();
+    try {
+        const res = await fetch('/api/asset-library/items/reorder', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_id:activeAssetLibraryId, category_id:cat.id, item_ids:next.map(item => item.id)})
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || '保存素材顺序失败');
+        setAssetLibraryFromResponse(data, {render:false});
+        toast('素材顺序已保存');
+    } catch(err){
+        cat.items = previous;
+        toast(err.message || '保存素材顺序失败');
+    } finally {
+        assetReorderBusy = false;
+        renderAssetLibrary();
+    }
+}
 function openAssetNameDialog({title='', value='', placeholder='', cancelValue='', multiline=false }={}){
     if(!assetDialogBackdrop || !assetDialogInput || !assetDialogOk || !assetDialogCancel) return Promise.resolve(cancelValue);
     return new Promise(resolve => {
@@ -6343,10 +6446,25 @@ function bindAssetItemEvents(){
                 return;
             }
             hideAssetHoverPreview();
-            e.dataTransfer.effectAllowed = 'copy';
+            const canReorder = smartAssetReorderEnabled();
+            e.dataTransfer.effectAllowed = canReorder ? 'copyMove' : 'copy';
             const item = (activeAssetCategory()?.items || []).find(x => x.id === el.dataset.assetId);
+            setSmartAssetDragPreview(e, item || {url:el.dataset.url, name:el.dataset.name, kind:el.dataset.kind}, el);
+            if(canReorder){
+                assetReorderDragId = el.dataset.assetId || '';
+                e.dataTransfer.setData('application/x-smart-asset-reorder', assetReorderDragId);
+                el.classList.add('reorder-dragging');
+            }
             e.dataTransfer.setData('application/x-smart-asset', JSON.stringify(assetNodeImageFromItem(item || {url:el.dataset.url, name:el.dataset.name, kind:el.dataset.kind})));
             e.dataTransfer.setData('text/plain', el.dataset.url || '');
+        });
+        el.addEventListener('dragend', () => {
+            assetReorderDragId = '';
+            assetReorderDropId = '';
+            assetReorderDropAfter = false;
+            stopSmartAssetReorderScroll();
+            clearSmartAssetDragPreview();
+            clearSmartAssetReorderIndicators();
         });
     });
     assetGrid.querySelectorAll('[data-rename-asset]').forEach(btn => {
@@ -18270,6 +18388,7 @@ function setAssetDragOver(active){
     assetPanel.classList.toggle('drag-over', !!active);
 }
 function handleAssetPanelDragOver(e){
+    if(Array.from(e.dataTransfer?.types || []).includes('application/x-smart-asset-reorder')) return;
     if(hasCanvasImageDrag(e) || hasSmartImageDropData(e.dataTransfer)){
         e.preventDefault();
         e.stopPropagation();
@@ -18278,6 +18397,12 @@ function handleAssetPanelDragOver(e){
     }
 }
 async function handleAssetPanelDrop(e){
+    if(Array.from(e.dataTransfer?.types || []).includes('application/x-smart-asset-reorder')){
+        e.preventDefault();
+        e.stopPropagation();
+        setAssetDragOver(false);
+        return;
+    }
     if(!hasCanvasImageDrag(e) && !hasSmartImageDropData(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
@@ -18314,7 +18439,47 @@ async function handleAssetPanelDrop(e){
         toast(err.message || tr('smart.assetAddFail'));
     }
 }
+assetGrid?.addEventListener('dragover', e => {
+    const types = Array.from(e.dataTransfer?.types || []);
+    if(!types.includes('application/x-smart-asset-reorder') || !assetReorderDragId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    updateSmartAssetReorderScroll(e.clientY);
+    const card = e.target.closest?.('.asset-item[data-asset-id]');
+    if(!card || card.dataset.assetId === assetReorderDragId){
+        clearSmartAssetReorderIndicators();
+        assetGrid.querySelector(`[data-asset-id="${CSS.escape(assetReorderDragId)}"]`)?.classList.add('reorder-dragging');
+        return;
+    }
+    e.dataTransfer.dropEffect = 'move';
+    clearSmartAssetReorderIndicators();
+    assetGrid.querySelector(`[data-asset-id="${CSS.escape(assetReorderDragId)}"]`)?.classList.add('reorder-dragging');
+    const rect = card.getBoundingClientRect();
+    assetReorderDropId = card.dataset.assetId || '';
+    assetReorderDropAfter = e.clientX >= rect.left + rect.width / 2;
+    card.classList.add(assetReorderDropAfter ? 'reorder-after' : 'reorder-before');
+});
+assetGrid?.addEventListener('drop', e => {
+    const types = Array.from(e.dataTransfer?.types || []);
+    if(!types.includes('application/x-smart-asset-reorder') || !assetReorderDragId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const sourceId = assetReorderDragId;
+    const targetId = assetReorderDropId;
+    const after = assetReorderDropAfter;
+    assetReorderDragId = '';
+    assetReorderDropId = '';
+    assetReorderDropAfter = false;
+    stopSmartAssetReorderScroll();
+    clearSmartAssetDragPreview();
+    clearSmartAssetReorderIndicators();
+    if(targetId) persistSmartAssetReorder(sourceId, targetId, after);
+});
+assetGrid?.addEventListener('dragleave', e => {
+    if(assetReorderDragId && !assetGrid.contains(e.relatedTarget)) stopSmartAssetReorderScroll();
+});
 assetDropZone?.addEventListener('dragover', e => {
+    if(Array.from(e.dataTransfer?.types || []).includes('application/x-smart-asset-reorder')) return;
     if(hasCanvasImageDrag(e) || hasSmartImageDropData(e.dataTransfer)){
         e.preventDefault();
         e.stopPropagation();
