@@ -6353,6 +6353,8 @@ function showAssetHoverPreview(event, item){
     }));
 }
 function hideAssetHoverPreview(){
+    clearTimeout(assetHoverTimer);
+    assetHoverTimer = 0;
     if(!assetHoverPreview) return;
     assetHoverPreview.style.display = 'none';
     assetHoverPreview.hidden = true;
