@@ -27,6 +27,7 @@ import shlex
 import functools
 import html
 import inspect
+from contextlib import asynccontextmanager
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, Thread
@@ -37,7 +38,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Uplo
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.middleware.cors import CORSMiddleware
 
 QUIET_ACCESS_PATHS = {
@@ -67,7 +68,15 @@ class QuietAccessLogFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -163,6 +172,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
+VENICE_AUTH_REFRESH_TASK = None
 APP_VERSION = "2026.06.03"
 GITHUB_REPO_URL = "https://github.com/hero8152/Infinite-Canvas"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/hero8152/Infinite-Canvas/main/VERSION"
@@ -178,10 +188,10 @@ MODELSCOPE_VERSION_URL = MODELSCOPE_FILE_API_ROOT + "VERSION"
 MODELSCOPE_UPDATE_NOTES_URL = MODELSCOPE_FILE_API_ROOT + "static/update-notes.json"
 MODELSCOPE_TREE_URL = "https://www.modelscope.ai/api/v1/studio/daniel8152/Infinite-Canvas/repo/files?Revision=master&Recursive=true"
 
-@app.on_event("startup")
 async def startup_event():
-    global GLOBAL_LOOP
+    global GLOBAL_LOOP, VENICE_AUTH_REFRESH_TASK
     GLOBAL_LOOP = asyncio.get_running_loop()
+    VENICE_AUTH_REFRESH_TASK = asyncio.create_task(venice_auth_refresh_loop())
     sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
@@ -198,6 +208,16 @@ async def startup_event():
         await asyncio.to_thread(migrate_mislabeled_image_extensions)
     except Exception as exc:
         print(f"纠正图片扩展名失败: {exc}")
+
+async def shutdown_event():
+    global VENICE_AUTH_REFRESH_TASK
+    if VENICE_AUTH_REFRESH_TASK is not None:
+        VENICE_AUTH_REFRESH_TASK.cancel()
+        try:
+            await VENICE_AUTH_REFRESH_TASK
+        except asyncio.CancelledError:
+            pass
+        VENICE_AUTH_REFRESH_TASK = None
 
 @app.websocket("/ws/stats")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
@@ -347,6 +367,9 @@ VENICE_OUTERFACE_IMAGE_URL = "https://outerface.venice.ai/api/inference/image"
 VENICE_OUTERFACE_IMAGE_EDIT_URL = "https://outerface.venice.ai/api/inference/multi-edit"
 VENICE_OUTERFACE_USER_SESSION_URL = "https://outerface.venice.ai/api/user/session"
 VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
+VENICE_AUTH_REFRESH_SECONDS = max(5.0, float(os.getenv("VENICE_AUTH_REFRESH_SECONDS", "30") or 30))
+VENICE_WEB_AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
+VENICE_WEB_AUTH_LOCKS: Dict[str, asyncio.Lock] = {}
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
     "gpt-image-2/image-to-image-official-stable",
@@ -2582,8 +2605,7 @@ class ApiProviderPayload(BaseModel):
     clear_volcengine_access_key_id: bool = False
     clear_volcengine_secret_access_key: bool = False
 
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 class ChatRequest(BaseModel):
     conversation_id: str = ""
@@ -8607,7 +8629,7 @@ async def poll_call_with_retry(call, retry_state: Dict[str, Any], context: str):
         retry_state["error_delay"] = min(delay * backoff, max_delay)
         return None
 
-async def venice_web_auth_info(client, provider):
+async def fetch_venice_web_auth_info(client, provider):
     """Fetch JWT token and user_id from Venice Clerk. Returns (jwt, user_id)."""
     client_cookie = validate_venice_client_cookie(venice_client_cookie_value((provider or {}).get("id") or "venice"))
     cookie_header = {"Cookie": f"__client={client_cookie}", "Accept": "application/json"}
@@ -8626,9 +8648,83 @@ async def venice_web_auth_info(client, provider):
         raise HTTPException(status_code=502, detail=f"Venice Clerk 未返回 jwt：{token_raw}")
     return token, user_id
 
-async def venice_web_auth_jwt(client, provider):
-    token, _ = await venice_web_auth_info(client, provider)
-    return token
+def venice_auth_cache_key(provider) -> str:
+    return str((provider or {}).get("id") or "venice").strip().lower()
+
+def venice_auth_cookie_fingerprint(client_cookie: str) -> str:
+    return hashlib.sha256(str(client_cookie or "").encode("utf-8")).hexdigest()
+
+async def venice_web_auth_info(client, provider, force_refresh=False, stale_token=""):
+    """Return cached Venice Clerk auth, refreshing at most once per refresh window."""
+    cache_key = venice_auth_cache_key(provider)
+    client_cookie = validate_venice_client_cookie(venice_client_cookie_value(cache_key))
+    cookie_fingerprint = venice_auth_cookie_fingerprint(client_cookie)
+    now = time.monotonic()
+    cached = VENICE_WEB_AUTH_CACHE.get(cache_key)
+    if (
+        not force_refresh
+        and cached
+        and cached.get("cookie_fingerprint") == cookie_fingerprint
+        and now - float(cached.get("refreshed_at") or 0) < VENICE_AUTH_REFRESH_SECONDS
+    ):
+        return cached["token"], cached.get("user_id") or ""
+
+    lock = VENICE_WEB_AUTH_LOCKS.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        cached = VENICE_WEB_AUTH_CACHE.get(cache_key)
+        now = time.monotonic()
+        if force_refresh and stale_token and cached and cached.get("token") != stale_token:
+            return cached["token"], cached.get("user_id") or ""
+        if (
+            not force_refresh
+            and cached
+            and cached.get("cookie_fingerprint") == cookie_fingerprint
+            and now - float(cached.get("refreshed_at") or 0) < VENICE_AUTH_REFRESH_SECONDS
+        ):
+            return cached["token"], cached.get("user_id") or ""
+        token, user_id = await fetch_venice_web_auth_info(client, provider)
+        VENICE_WEB_AUTH_CACHE[cache_key] = {
+            "token": token,
+            "user_id": user_id,
+            "cookie_fingerprint": cookie_fingerprint,
+            "refreshed_at": time.monotonic(),
+        }
+        return token, user_id
+
+async def venice_web_request(client, provider, send):
+    """Send a Venice web request and retry once with fresh Clerk auth on HTTP 401."""
+    token, user_id = await venice_web_auth_info(client, provider)
+    response = await send(token, user_id)
+    if response.status_code != 401:
+        return response
+    token, user_id = await venice_web_auth_info(client, provider, force_refresh=True, stale_token=token)
+    return await send(token, user_id)
+
+async def venice_auth_refresh_loop():
+    """Keep configured Venice web JWTs warm in the background."""
+    while True:
+        try:
+            providers = [
+                item for item in load_api_providers()
+                if item.get("enabled", True)
+                and is_venice_provider(item)
+                and venice_client_cookie_value(item.get("id") or "venice")
+            ]
+            if providers:
+                timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                    for provider in providers:
+                        try:
+                            await venice_web_auth_info(client, provider, force_refresh=True)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            print(f"[venice-auth] background refresh failed provider={provider.get('id')}: {exc}", flush=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[venice-auth] refresh loop failed: {exc}", flush=True)
+        await asyncio.sleep(VENICE_AUTH_REFRESH_SECONDS)
 
 def venice_decode_jwt_payload(token: str):
     parts = str(token or "").strip().split(".")
@@ -8671,13 +8767,14 @@ def venice_optional_int(payload: dict, key: str) -> Optional[int]:
         return None
 
 async def venice_fetch_credit_usage(client, provider):
-    jwt = await venice_web_auth_jwt(client, provider)
-    headers = {
-        "Accept": "application/json",
-        "Authorization": bearer_auth_value(jwt),
-        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
-    }
-    response = await client.get(VENICE_OUTERFACE_USER_SESSION_URL, headers=headers)
+    async def send(jwt, _user_id):
+        headers = {
+            "Accept": "application/json",
+            "Authorization": bearer_auth_value(jwt),
+            "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+        }
+        return await client.get(VENICE_OUTERFACE_USER_SESSION_URL, headers=headers)
+    response = await venice_web_request(client, provider, send)
     if response.status_code >= 400:
         detail = venice_http_error_detail(response, f"Venice 额度查询失败(HTTP {response.status_code})")
         raise HTTPException(status_code=response.status_code, detail=detail)
@@ -8762,7 +8859,6 @@ async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queu
 
 async def generate_venice_video(client, payload, provider, requested_model):
     model = selected_model(requested_model, "seedance-2-0-enhanced-reference-to-video")
-    jwt = await venice_web_auth_jwt(client, provider)
     aspect_ratio = venice_video_aspect_ratio(payload)
     provider_prompts = payload.provider_prompts if isinstance(payload.provider_prompts, dict) else {}
     prompt_text = str(provider_prompts.get("venice_video") or payload.prompt or "").strip()
@@ -8784,13 +8880,15 @@ async def generate_venice_video(client, payload, provider, requested_model):
         body["referenceImageUrls"] = reference_urls
     if venice_video_requires_face_consent(model):
         body["faceConsent"] = dict(VENICE_SEEDANCE_FACE_CONSENT)
-    queue_headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Authorization": bearer_auth_value(jwt),
-        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
-    }
-    queue_resp = await client.post(VENICE_OUTERFACE_VIDEO_QUEUE_URL, headers=queue_headers, json=body)
+    async def send(jwt, _user_id):
+        queue_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": bearer_auth_value(jwt),
+            "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+        }
+        return await client.post(VENICE_OUTERFACE_VIDEO_QUEUE_URL, headers=queue_headers, json=body)
+    queue_resp = await venice_web_request(client, provider, send)
     if queue_resp.status_code >= 400:
         detail = venice_http_error_detail(queue_resp, f"Venice 视频队列请求失败(HTTP {queue_resp.status_code})")
         raise HTTPException(status_code=queue_resp.status_code, detail=detail)
@@ -8885,15 +8983,16 @@ def venice_outerface_image_body(prompt, size, model, user_id):
     }
 
 async def generate_venice_web_image(client, prompt, size, model, provider):
-    jwt, user_id = await venice_web_auth_info(client, provider)
-    body = venice_outerface_image_body(prompt, size, model, user_id)
-    headers = {
-        "Accept": "image/*",
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {jwt}",
-        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
-    }
-    response = await client.post(VENICE_OUTERFACE_IMAGE_URL, headers=headers, json=body)
+    async def send(jwt, user_id):
+        body = venice_outerface_image_body(prompt, size, model, user_id)
+        headers = {
+            "Accept": "image/*",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {jwt}",
+            "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+        }
+        return await client.post(VENICE_OUTERFACE_IMAGE_URL, headers=headers, json=body)
+    response = await venice_web_request(client, provider, send)
     if response.status_code >= 400:
         detail = venice_http_error_detail(response, f"Venice Web 图片生成请求失败(HTTP {response.status_code})")
         raise HTTPException(status_code=response.status_code, detail=detail)
@@ -8920,17 +9019,12 @@ def venice_reference_image_bytes(ref) -> tuple:
 
 async def generate_venice_web_image_edit(client, prompt, model, ref, provider):
     """Post to the outerface multi-edit endpoint as multipart/form-data."""
-    jwt, _ = await venice_web_auth_info(client, provider)
     edit_model = venice_image_edit_model(model)
     if not edit_model:
         raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {model} 没有对应的编辑模型，无法执行图片编辑。")
     img_bytes, mime, filename = venice_reference_image_bytes(ref)
     if not img_bytes:
         raise HTTPException(status_code=400, detail="Venice 图片编辑：无法读取参考图片内容。")
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
-    }
     files = {"files": (filename, img_bytes, mime)}
     data = {
         "acceptCreditFallback": "true",
@@ -8938,7 +9032,13 @@ async def generate_venice_web_image_edit(client, prompt, model, ref, provider):
         "prompt": str(prompt or ""),
         "requestId": venice_outerface_request_id(),
     }
-    response = await client.post(VENICE_OUTERFACE_IMAGE_EDIT_URL, headers=headers, data=data, files=files)
+    async def send(jwt, _user_id):
+        headers = {
+            "Authorization": f"Bearer {jwt}",
+            "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+        }
+        return await client.post(VENICE_OUTERFACE_IMAGE_EDIT_URL, headers=headers, data=data, files=files)
+    response = await venice_web_request(client, provider, send)
     if response.status_code >= 400:
         detail = venice_http_error_detail(response, f"Venice Web 图片编辑请求失败(HTTP {response.status_code})")
         raise HTTPException(status_code=response.status_code, detail=detail)
