@@ -6290,15 +6290,22 @@ function openAssetNameDialog({title='', value='', placeholder='', cancelValue=''
     });
 }
 let assetHoverTimer = 0;
+let assetHoverPreviewToken = 0;
+let assetHoverPreviewPoint = null;
 function positionAssetHoverPreview(event){
     if(!assetHoverPreview || assetHoverPreview.hidden || assetHoverPreview.style.display === 'none') return;
-    const pad = 14;
+    if(Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) assetHoverPreviewPoint = {clientX:event.clientX, clientY:event.clientY};
+    const point = assetHoverPreviewPoint;
+    if(!point) return;
+    const sidePad = 6;
+    const topPad = 6;
+    const bottomPad = -8;
     const w = assetHoverPreview.offsetWidth || 260;
     const h = assetHoverPreview.offsetHeight || 300;
-    let left = event.clientX - w - 16;
-    if(left < pad) left = event.clientX + 16;
-    left = Math.max(pad, Math.min(window.innerWidth - w - pad, left));
-    const top = Math.max(pad, Math.min(window.innerHeight - h - pad, event.clientY + 12));
+    let left = point.clientX - w - 16;
+    if(left < sidePad) left = point.clientX + 16;
+    left = Math.max(sidePad, Math.min(window.innerWidth - w - sidePad, left));
+    const top = Math.max(topPad, Math.min(window.innerHeight - h - bottomPad, point.clientY + 12));
     assetHoverPreview.style.left = `${left}px`;
     assetHoverPreview.style.top = `${top}px`;
 }
@@ -6307,6 +6314,8 @@ function showAssetHoverPreview(event, item){
     let media = assetHoverPreview.querySelector('img,video');
     const name = assetHoverPreview.querySelector('.asset-hover-name');
     const kind = assetMediaKind(item);
+    const previewToken = ++assetHoverPreviewToken;
+    assetHoverPreviewPoint = {clientX:event.clientX, clientY:event.clientY};
     if(kind === 'video' && media?.tagName?.toLowerCase() !== 'video'){
         media?.replaceWith(document.createElement('video'));
         media = assetHoverPreview.querySelector('video');
@@ -6315,6 +6324,8 @@ function showAssetHoverPreview(event, item){
         media = assetHoverPreview.querySelector('img');
     }
     if(kind === 'video'){
+        media.onloadedmetadata = () => { if(previewToken === assetHoverPreviewToken) positionAssetHoverPreview(assetHoverPreviewPoint); };
+        media.onloadeddata = media.onloadedmetadata;
         media.muted = true;
         media.loop = true;
         media.playsInline = true;
@@ -6329,6 +6340,7 @@ function showAssetHoverPreview(event, item){
         // 用预览代理（缩放图）而非原图，悬浮预览更快、不卡。
         media.loading = 'lazy';
         media.decoding = 'async';
+        media.onload = () => { if(previewToken === assetHoverPreviewToken) positionAssetHoverPreview(assetHoverPreviewPoint); };
         media.src = smartMediaPreviewUrl(item, 768);
         media.alt = 'asset preview';
     }
@@ -6336,12 +6348,18 @@ function showAssetHoverPreview(event, item){
     assetHoverPreview.hidden = false;
     assetHoverPreview.style.display = 'block';
     positionAssetHoverPreview(event);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if(previewToken === assetHoverPreviewToken) positionAssetHoverPreview(assetHoverPreviewPoint);
+    }));
 }
 function hideAssetHoverPreview(){
     if(!assetHoverPreview) return;
     assetHoverPreview.style.display = 'none';
     assetHoverPreview.hidden = true;
+    assetHoverPreviewToken += 1;
+    assetHoverPreviewPoint = null;
     const media = assetHoverPreview.querySelector('img,video');
+    if(media){ media.onload = null; media.onloadedmetadata = null; media.onloadeddata = null; }
     media?.pause?.();
     media?.removeAttribute('src');
     media?.load?.();
