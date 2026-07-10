@@ -68,6 +68,7 @@ class QuietAccessLogFilter(logging.Filter):
         return True
 
 logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
+SERVER_LOGGER = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -8757,7 +8758,11 @@ async def venice_auth_refresh_loop():
                         try:
                             await venice_web_auth_info(client, provider, force_refresh=True)
                             if failure.get("count"):
-                                print(f"[venice-auth] background refresh recovered provider={provider_id} after={failure.get('count')} failures", flush=True)
+                                SERVER_LOGGER.info(
+                                    "Venice auth refresh recovered · provider=%s · previous failures=%s",
+                                    provider_id,
+                                    failure.get("count"),
+                                )
                             VENICE_AUTH_REFRESH_FAILURES.pop(provider_id, None)
                         except asyncio.CancelledError:
                             raise
@@ -8775,11 +8780,17 @@ async def venice_auth_refresh_loop():
                                 "signature": signature,
                             }
                             if should_log:
-                                print(f"[venice-auth] background refresh failed provider={provider_id} failures={count} retry_in={backoff:.0f}s error={detail}", flush=True)
+                                SERVER_LOGGER.warning(
+                                    "Venice auth refresh failed · provider=%s · failures=%s · retry in=%.0fs · %s",
+                                    provider_id,
+                                    count,
+                                    backoff,
+                                    detail,
+                                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            print(f"[venice-auth] refresh loop failed: {exc}", flush=True)
+            SERVER_LOGGER.warning("Venice auth refresh loop failed · %s", network_exception_detail(exc))
         await asyncio.sleep(VENICE_AUTH_REFRESH_SECONDS)
 
 def venice_decode_jwt_payload(token: str):
@@ -13373,11 +13384,19 @@ async def get_venice_credits(provider_id: str = "venice"):
         raise
     except httpx.HTTPError as exc:
         detail = network_exception_detail(exc)
-        print(f"[venice-credits] request failed provider={provider.get('id') or provider_id} error={detail}", flush=True)
+        SERVER_LOGGER.warning(
+            "Venice credits request failed · provider=%s · %s",
+            provider.get("id") or provider_id,
+            detail,
+        )
         raise HTTPException(status_code=502, detail=f"Venice 额度查询网络异常：{detail}") from exc
     except Exception as exc:
         detail = network_exception_detail(exc)
-        print(f"[venice-credits] unexpected failure provider={provider.get('id') or provider_id} error={detail}", flush=True)
+        SERVER_LOGGER.warning(
+            "Venice credits request failed unexpectedly · provider=%s · %s",
+            provider.get("id") or provider_id,
+            detail,
+        )
         raise HTTPException(status_code=502, detail=f"Venice 额度查询失败：{detail}") from exc
     return {
         "provider_id": str(provider.get("id") or provider_id),
