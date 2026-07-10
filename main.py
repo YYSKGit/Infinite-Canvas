@@ -1550,7 +1550,7 @@ def versioned_static_html(html: str) -> str:
     if not version:
         return html
     safe_version = urllib.parse.quote(version, safe="._-")
-    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:js|css|html)))(?:\?v=[^"\')#]*)?', re.I)
+    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:json|js|css|html)))(?:\?v=[^"\')#]*)?', re.I)
     def replace(match):
         url = match.group("url")
         cache_version = safe_version

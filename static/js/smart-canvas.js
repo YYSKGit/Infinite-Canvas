@@ -12052,7 +12052,7 @@ function positionComposerForNode(node){
     if(!node) return;
     const rect = nodeRect(node);
     const gap = 14;
-    const cardW = 510;
+    const cardW = 520;
     composer.style.width = `${cardW}px`;
     composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;
