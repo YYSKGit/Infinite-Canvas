@@ -164,6 +164,7 @@ let smartRunStateToken = 0;
 let veniceCreditsRefreshToken = 0;
 let veniceCreditsRefreshTimer = null;
 let veniceCreditsAutoRefreshTimer = null;
+let veniceCreditsCooldownTimer = null;
 const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v1';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
@@ -2879,7 +2880,34 @@ function restoreVeniceCreditsCache(){
         };
     } catch(_) {}
 }
+function veniceCreditsCooldownRemainingMs(){
+    const elapsed = Date.now() - Number(veniceCreditsState.lastRequestAt || 0);
+    return Math.max(0, VENICE_CREDITS_MIN_REFRESH_MS - elapsed);
+}
+function syncVeniceCreditsRefreshButtonState(){
+    if(!veniceCreditsRefreshBtn) return;
+    const spinning = veniceCreditsState.status === 'loading';
+    const remainingMs = veniceCreditsCooldownRemainingMs();
+    const coolingDown = !spinning && remainingMs > 0;
+    veniceCreditsRefreshBtn.classList.toggle('is-spinning', spinning);
+    veniceCreditsRefreshBtn.classList.toggle('is-cooldown', coolingDown);
+    veniceCreditsRefreshBtn.disabled = spinning || coolingDown;
+    veniceCreditsRefreshBtn.setAttribute('aria-busy', spinning ? 'true' : 'false');
+    veniceCreditsRefreshBtn.title = coolingDown ? `冷却中，${Math.ceil(remainingMs / 1000)}秒后可刷新` : '刷新';
+    if(veniceCreditsCooldownTimer){
+        clearTimeout(veniceCreditsCooldownTimer);
+        veniceCreditsCooldownTimer = null;
+    }
+    if(coolingDown){
+        veniceCreditsCooldownTimer = setTimeout(() => {
+            veniceCreditsCooldownTimer = null;
+            syncVeniceCreditsRefreshButtonState();
+            renderVeniceCreditsPanel();
+        }, remainingMs + 40);
+    }
+}
 function renderVeniceCreditsPanel(){
+    syncVeniceCreditsRefreshButtonState();
     if(!veniceCreditsPanel) return;
     const used = Number(veniceCreditsState.used);
     const total = Number(veniceCreditsState.total);
@@ -2923,6 +2951,7 @@ function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt
     const percent = veniceCreditPercent(safeUsed, safeTotal);
     veniceCreditsBadge.classList.toggle('is-loading', state === 'loading');
     veniceCreditsBadge.classList.toggle('is-error', state === 'error');
+    syncVeniceCreditsRefreshButtonState();
     veniceCreditsBadge.title = String(title || '');
     veniceCreditsBadge.style.setProperty('--venice-credits-color', veniceProgressColor(percent));
     if(veniceCreditsValue){
@@ -15836,7 +15865,6 @@ function smartLogActualGenerationRequest(label, {kind='image', endpoint='', prom
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
-    const veniceImageProvider = isVeniceProviderId(runSettings.provider_id || '');
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
@@ -15844,24 +15872,20 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
     const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
     const payload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)};
     const requestBodyJson = JSON.stringify(payload);
-    try {
-        smartLogActualGenerationRequest('API Image', {
-            kind:'image',
-            endpoint:'/api/canvas-image-tasks',
-            provider:payload.provider_id,
-            model:payload.model,
-            prompt:payload.prompt,
-            counts:smartPayloadReferenceMediaCounts(payload),
-            extra:{taskCount:count, size:payload.size, requestBodyJson}
-        });
-        const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
-            return r.json();
-        })));
-        return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
-    } finally {
-        if(veniceImageProvider) scheduleVeniceCreditsRefresh(runSettings.provider_id || '', 120);
-    }
+    smartLogActualGenerationRequest('API Image', {
+        kind:'image',
+        endpoint:'/api/canvas-image-tasks',
+        provider:payload.provider_id,
+        model:payload.model,
+        prompt:payload.prompt,
+        counts:smartPayloadReferenceMediaCounts(payload),
+        extra:{taskCount:count, size:payload.size, requestBodyJson}
+    });
+    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
+        if(!r.ok) throw new Error(await r.text());
+        return r.json();
+    })));
+    return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
 }
 async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const ref = selectedRunningHubRef(runSettings);
