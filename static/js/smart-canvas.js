@@ -6293,8 +6293,8 @@ let assetHoverTimer = 0;
 let assetHoverPreviewToken = 0;
 let assetHoverPreviewPoint = null;
 function positionAssetHoverPreview(event){
-    if(!assetHoverPreview || assetHoverPreview.hidden || assetHoverPreview.style.display === 'none') return;
     if(Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) assetHoverPreviewPoint = {clientX:event.clientX, clientY:event.clientY};
+    if(!assetHoverPreview || assetHoverPreview.hidden || assetHoverPreview.style.display === 'none') return;
     const point = assetHoverPreviewPoint;
     if(!point) return;
     const sidePad = 6;
@@ -6454,7 +6454,8 @@ function bindAssetItemEvents(){
             clearTimeout(assetHoverTimer);
             const data = {url:el.dataset.url, name:el.dataset.name, kind:el.dataset.kind};
             const cx = e.clientX, cy = e.clientY;
-            assetHoverTimer = setTimeout(() => showAssetHoverPreview({clientX:cx, clientY:cy}, data), 160);
+            assetHoverPreviewPoint = {clientX:cx, clientY:cy};
+            assetHoverTimer = setTimeout(() => showAssetHoverPreview(assetHoverPreviewPoint || {clientX:cx, clientY:cy}, data), 500);
         });
         thumb?.addEventListener('mousemove', e => positionAssetHoverPreview(e));
         thumb?.addEventListener('mouseleave', () => { clearTimeout(assetHoverTimer); hideAssetHoverPreview(); });
