@@ -940,11 +940,14 @@ function insertSmartWorkflowIntoCanvas(imported, options={}){
     const srcConnections = (imported.connections || []).filter(Boolean);
     if(!canvas || !srcNodes.length) throw new Error('工作流中没有可导入的节点');
     pushUndo();
-    const minX = Math.min(...srcNodes.map(n => Number(n.x || 0)));
-    const minY = Math.min(...srcNodes.map(n => Number(n.y || 0)));
+    const sourceRects = srcNodes.map(nodeRect);
+    const minX = Math.min(...sourceRects.map(rect => rect.x));
+    const minY = Math.min(...sourceRects.map(rect => rect.y));
+    const maxX = Math.max(...sourceRects.map(rect => rect.x + rect.width));
+    const maxY = Math.max(...sourceRects.map(rect => rect.y + rect.height));
     const target = options.point || viewportCenter();
-    const dx = target.x - minX;
-    const dy = target.y - minY;
+    const dx = target.x - (minX + maxX) / 2;
+    const dy = target.y - (minY + maxY) / 2;
     const idMap = new Map();
     const newNodes = srcNodes.map(source => {
         const copy = serializableSmartNode(source);

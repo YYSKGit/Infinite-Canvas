@@ -6290,7 +6290,7 @@ async def classify_asset_image_best_effort(abs_path, provider_id="", model="", m
         return None
 
 def migrate_asset_library_into_dirs():
-    """一次性整理：给所有图片分组（含默认的角色/场景）补上真实文件夹，并把仍在 library/ 根目录的
+    """一次性整理：给所有图片和工作流分组补上真实文件夹，并把仍在 library/ 根目录的
     素材文件搬进各自分组的文件夹、同步更新 URL。幂等：已经在子文件夹里的不动；可安全反复执行。"""
     try:
         lib = load_asset_library()
@@ -6300,7 +6300,7 @@ def migrate_asset_library_into_dirs():
     changed = False
     for library in lib.get("libraries", []) or []:
         for cat in library.get("categories", []) or []:
-            if (cat.get("type") or "image") != "image":
+            if (cat.get("type") or "image") not in {"image", "workflow"}:
                 continue
             if not cat.get("dir"):
                 cat["dir"] = unique_asset_category_dir(library, cat.get("name") or "分组")
@@ -6356,7 +6356,7 @@ def asset_library_workflow_category(lib, library_id="", category_id=""):
     lib["active_library_id"] = library.get("id") or lib.get("active_library_id")
     return library, cat
 
-def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str = "") -> Dict[str, Any]:
+def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str = "", subdir: str = "") -> Dict[str, Any]:
     if not raw:
         raise HTTPException(status_code=400, detail="工作流文件为空")
     safe_filename = sanitize_export_filename(filename or "canvas-workflow.zip", "canvas-workflow.zip")
@@ -6365,15 +6365,18 @@ def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str =
         safe_filename += ".zip"
         ext = ".zip"
     dest_name = f"workflow_{uuid.uuid4().hex[:12]}_{safe_filename}"
-    dest_path = os.path.join(ASSET_LIBRARY_DIR, dest_name)
-    os.makedirs(ASSET_LIBRARY_DIR, exist_ok=True)
+    subdir = str(subdir or "").strip("/").strip()
+    dest_dir = os.path.join(ASSET_LIBRARY_DIR, subdir) if subdir else ASSET_LIBRARY_DIR
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_path = os.path.join(dest_dir, dest_name)
+    rel = f"{subdir}/{dest_name}" if subdir else dest_name
     with open(dest_path, "wb") as f:
         f.write(raw)
     display_name = sanitize_asset_name(name or os.path.splitext(safe_filename)[0], "工作流")
     return {
         "id": f"wf_{uuid.uuid4().hex[:12]}",
         "name": display_name[:120],
-        "url": f"/assets/library/{dest_name}",
+        "url": "/assets/library/" + urllib.parse.quote(rel, safe="/"),
         "kind": "workflow",
         "type": "workflow",
         "format": "zip" if ext == ".zip" else "json",
@@ -14948,8 +14951,12 @@ async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest
     if not filename.lower().endswith(".zip"):
         filename += ".zip"
     lib = load_asset_library()
-    _, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
-    item = make_workflow_library_item_from_bytes(archive, filename, payload.name or os.path.splitext(filename)[0])
+    library, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
+    if not cat.get("dir"):
+        cat["dir"] = unique_asset_category_dir(library, cat.get("name") or "工作流")
+    item = make_workflow_library_item_from_bytes(
+        archive, filename, payload.name or os.path.splitext(filename)[0], subdir=cat.get("dir") or ""
+    )
     item["node_count"] = meta.get("node_count") or len(payload.nodes or [])
     item["connection_count"] = meta.get("connection_count") or len(payload.connections or [])
     item["resource_count"] = len(meta.get("resources") or [])
@@ -14964,7 +14971,9 @@ async def upload_asset_library_workflows(
     category_id: str = Form(""),
 ):
     lib = load_asset_library()
-    _, cat = asset_library_workflow_category(lib, library_id, category_id)
+    library, cat = asset_library_workflow_category(lib, library_id, category_id)
+    if not cat.get("dir"):
+        cat["dir"] = unique_asset_category_dir(library, cat.get("name") or "工作流")
     added = []
     for file in files[:100]:
         raw = await file.read()
@@ -14972,7 +14981,9 @@ async def upload_asset_library_workflows(
         lower = filename.lower()
         if not (lower.endswith(".json") or lower.endswith(".zip") or raw[:2] == b"PK"):
             continue
-        item = make_workflow_library_item_from_bytes(raw, filename, os.path.splitext(filename)[0])
+        item = make_workflow_library_item_from_bytes(
+            raw, filename, os.path.splitext(filename)[0], subdir=cat.get("dir") or ""
+        )
         cat.setdefault("items", []).append(item)
         added.append(item)
     if not added:
@@ -14996,13 +15007,15 @@ async def import_canvas_workflow(file: UploadFile = File(...)):
                 if not workflow_name:
                     raise HTTPException(status_code=400, detail="压缩包中没有 workflow.json")
                 workflow = json.loads(zf.read(workflow_name).decode("utf-8-sig"))
-                stamp = time.strftime("%Y%m%d-%H%M%S")
-                import_dir = os.path.join(OUTPUT_INPUT_DIR, f"workflow_import_{stamp}_{uuid.uuid4().hex[:6]}")
-                os.makedirs(import_dir, exist_ok=True)
+                import_dir = None
                 for res in workflow.get("resources") or []:
                     archive = str(res.get("archive") or "").replace("\\", "/").lstrip("/")
                     if not archive or archive not in zf.namelist():
                         continue
+                    if import_dir is None:
+                        stamp = time.strftime("%Y%m%d-%H%M%S")
+                        import_dir = os.path.join(OUTPUT_INPUT_DIR, f"workflow_import_{stamp}_{uuid.uuid4().hex[:6]}")
+                        os.makedirs(import_dir, exist_ok=True)
                     base = sanitize_export_filename(res.get("name") or os.path.basename(archive), os.path.basename(archive) or "resource.bin")
                     target = os.path.join(import_dir, f"{uuid.uuid4().hex[:8]}_{base}")
                     with zf.open(archive) as src, open(target, "wb") as dst:
@@ -15335,8 +15348,8 @@ async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
         raise HTTPException(status_code=404, detail="资产库不存在")
     cat_type = "workflow" if str(payload.type or "").lower() == "workflow" else "image"
     category = {"id": f"cat_{uuid.uuid4().hex[:12]}", "name": sanitize_asset_name(payload.name, "新文件夹"), "type": cat_type, "items": []}
-    if cat_type == "image":
-        # 图片分组在 library/ 下建一个真实文件夹，之后该分组的资产都存进这个文件夹，便于在磁盘上管理。
+    if cat_type in {"image", "workflow"}:
+        # 图片和工作流分组都在 library/ 下建真实文件夹，便于在磁盘上按分组管理。
         category["dir"] = unique_asset_category_dir(library, payload.name)
         try:
             os.makedirs(os.path.join(ASSET_LIBRARY_DIR, category["dir"]), exist_ok=True)
