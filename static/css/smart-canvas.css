@@ -19,6 +19,8 @@ html[data-studio-scale="off"].studio-scale-managed .smart-title,
 html[data-studio-scale="off"].studio-scale-managed .smart-log-toggle,
 html[data-studio-scale="off"].studio-scale-managed .smart-shortcut-toggle,
 html[data-studio-scale="off"].studio-scale-managed .smart-workflow-toggle,
+html[data-studio-scale="off"].studio-scale-managed .venice-credits-badge,
+html[data-studio-scale="off"].studio-scale-managed .venice-credits-panel,
 html[data-studio-scale="off"].studio-scale-managed .asset-toggle,
 /* 注意：.composer 不能加进这份 zoom 列表——它在 .world 内用世界坐标定位，
    单独 zoom 会让坐标按 scale 重算，离原点越远偏移越大（小屏下直接飞出屏幕外） */
@@ -53,6 +55,45 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .smart-log-toggle { right:130px; }
 .smart-shortcut-toggle { right:238px; }
 .smart-workflow-toggle { right:346px; }
+.venice-credits-badge {
+    position:absolute;
+    top:22px;
+    right:454px;
+    z-index:56;
+    width:180px;
+    min-height:40px;
+    padding:6px 11px;
+    border-radius:14px;
+    background:var(--panel);
+    color:var(--text);
+    border:1px solid var(--line);
+    box-shadow:0 14px 34px var(--shadow);
+    backdrop-filter:blur(16px);
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:6px;
+    cursor:pointer;
+    user-select:none;
+    transition:transform .14s ease, border-color .14s ease, opacity .14s ease;
+}
+.venice-credits-badge:hover { transform:translateY(-1px); border-color:var(--text); }
+.venice-credits-head { display:flex; align-items:center; gap:6px; min-width:0; font-size:11px; font-weight:760; color:var(--muted); }
+.venice-credits-head i,.venice-credits-head svg { width:14px; height:14px; color:var(--text); flex:0 0 auto; }
+.venice-credits-head span { flex:0 0 auto; white-space:nowrap; }
+.venice-credits-head strong { margin-left:auto; min-width:0; color:var(--text); font-size:11px; font-weight:860; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.venice-credits-track { position:relative; width:100%; height:6px; border-radius:999px; overflow:hidden; background:color-mix(in srgb, var(--line) 68%, transparent); }
+.venice-credits-track > span { display:block; width:0%; height:100%; border-radius:inherit; background:var(--venice-credits-color, #22c55e); transition:width .2s ease, background .2s ease; }
+.venice-credits-badge.is-loading { opacity:.9; }
+.venice-credits-badge.is-error .venice-credits-head strong { color:#f97316; }
+.venice-credits-panel { position:absolute; right:454px; top:66px; z-index:57; width:180px; max-width:calc(100vw - 44px); border:1px solid var(--line); border-radius:18px; background:var(--panel); color:var(--text); box-shadow:0 22px 58px var(--shadow); backdrop-filter:blur(20px); overflow:hidden; opacity:0; visibility:hidden; pointer-events:none; transform:translateY(-8px); transition:opacity .16s ease, transform .16s ease, visibility .16s ease; }
+.venice-credits-panel.open { opacity:1; visibility:visible; pointer-events:auto; transform:translateY(0); }
+.venice-credits-panel-head { min-height:48px; padding:8px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.venice-credits-panel-title { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:900; }
+.venice-credits-panel-title i,.venice-credits-panel-title svg { width:15px; height:15px; }
+.venice-credits-panel-body { padding:10px; display:flex; flex-direction:column; gap:7px; }
+.venice-credits-row { min-height:26px; padding:0 8px; border-radius:10px; border:1px solid var(--line); background:var(--card); display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:11px; color:var(--muted); font-weight:720; }
+.venice-credits-row strong { color:var(--text); font-size:11px; font-weight:850; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .smart-log-toggle:hover,.smart-shortcut-toggle:hover,.smart-workflow-toggle:hover { transform:translateY(-1px); border-color:var(--text); }
 .smart-log-toggle.active,.smart-shortcut-toggle.active,.smart-workflow-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
 .smart-log-toggle i,.smart-log-toggle svg,.smart-shortcut-toggle i,.smart-shortcut-toggle svg,.smart-workflow-toggle i,.smart-workflow-toggle svg { width:16px; height:16px; }
@@ -1235,6 +1276,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-panel.drag-over { border-color:var(--strong); box-shadow:0 24px 64px var(--shadow), 0 0 0 3px rgba(15,23,42,.08); }
 .theme-dark .asset-panel.drag-over { box-shadow:0 24px 64px var(--shadow), 0 0 0 3px rgba(248,250,252,.08); }
 @media (max-width: 900px){
+    .venice-credits-badge { display:none; }
+    .venice-credits-panel { display:none; }
     .asset-toggle { right:14px; width:40px; padding:0; }
     .smart-log-toggle { right:62px; width:40px; padding:0; }
     .smart-shortcut-toggle { right:110px; width:40px; padding:0; }

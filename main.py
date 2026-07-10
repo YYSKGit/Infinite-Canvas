@@ -345,6 +345,7 @@ VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
 VENICE_OUTERFACE_IMAGE_URL = "https://outerface.venice.ai/api/inference/image"
 VENICE_OUTERFACE_IMAGE_EDIT_URL = "https://outerface.venice.ai/api/inference/multi-edit"
+VENICE_OUTERFACE_USER_SESSION_URL = "https://outerface.venice.ai/api/user/session"
 VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
@@ -8629,6 +8630,81 @@ async def venice_web_auth_jwt(client, provider):
     token, _ = await venice_web_auth_info(client, provider)
     return token
 
+def venice_decode_jwt_payload(token: str):
+    parts = str(token or "").strip().split(".")
+    if len(parts) < 2:
+        raise HTTPException(status_code=502, detail="Venice session token 格式不正确。")
+    payload_segment = str(parts[1] or "").strip()
+    if not payload_segment:
+        raise HTTPException(status_code=502, detail="Venice session token 缺少 payload。")
+    padded = payload_segment + ("=" * (-len(payload_segment) % 4))
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=502, detail="Venice session token payload 解码失败。") from exc
+    try:
+        payload = json.loads(decoded)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail="Venice session token payload 不是合法 JSON。") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="Venice session token payload 结构不正确。")
+    return payload
+
+def venice_required_int(payload: dict, key: str, field_label: str) -> int:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    if value is None:
+        raise HTTPException(status_code=502, detail=f"Venice session payload 缺少 {field_label} 字段。")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"Venice session payload 的 {field_label} 不是数字。") from exc
+
+def venice_optional_int(payload: dict, key: str) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+async def venice_fetch_credit_usage(client, provider):
+    jwt = await venice_web_auth_jwt(client, provider)
+    headers = {
+        "Accept": "application/json",
+        "Authorization": bearer_auth_value(jwt),
+        "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+    }
+    response = await client.get(VENICE_OUTERFACE_USER_SESSION_URL, headers=headers)
+    if response.status_code >= 400:
+        detail = venice_http_error_detail(response, f"Venice 额度查询失败(HTTP {response.status_code})")
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    try:
+        raw = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Venice 额度接口返回了非 JSON 内容。") from exc
+    token = str((raw or {}).get("token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=502, detail=f"Venice 额度接口未返回 token：{raw}")
+    token_payload = venice_decode_jwt_payload(token)
+    usage = token_payload.get("bundledCreditsUsage")
+    if not isinstance(usage, dict):
+        raise HTTPException(status_code=502, detail="Venice session payload 缺少 bundledCreditsUsage。")
+    used_credits = venice_required_int(token_payload, "veniceCredits", "veniceCredits")
+    total_credits = venice_required_int(usage, "monthlyRefillCredits", "bundledCreditsUsage.monthlyRefillCredits")
+    available_credits = venice_required_int(usage, "availableCredits", "bundledCreditsUsage.availableCredits")
+    return {
+        "used_credits": used_credits,
+        "total_credits": total_credits,
+        "available_credits": available_credits,
+        "next_refill_at": venice_optional_int(usage, "nextRefillAt"),
+        "tier_cap": venice_optional_int(usage, "tierCap"),
+        "used_this_cycle": venice_optional_int(usage, "usedThisCycle"),
+        "user_type": str(token_payload.get("userType") or ""),
+    }
+
 async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw=None):
     retrieve_url = f"{venice_api_root(provider)}/video/retrieve"
     retrieve_body = {"model": model, "queue_id": queue_id, "delete_media_on_completion": False}
@@ -13127,6 +13203,19 @@ async def get_canvas_image_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="画布任务不存在，可能服务已重启或任务已过期")
     return task
+
+@app.get("/api/venice/credits")
+async def get_venice_credits(provider_id: str = "venice"):
+    provider = get_api_provider(provider_id)
+    if not is_venice_provider(provider):
+        raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or provider_id} 不是 Venice。")
+    timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        usage = await venice_fetch_credit_usage(client, provider)
+    return {
+        "provider_id": str(provider.get("id") or provider_id),
+        **usage,
+    }
 
 async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
     with CANVAS_TASK_LOCK:

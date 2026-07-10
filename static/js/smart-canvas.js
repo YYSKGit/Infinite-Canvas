@@ -35,6 +35,16 @@ const smartWorkflowExportMeta = document.getElementById('smartWorkflowExportMeta
 const smartWorkflowImportInput = document.getElementById('smartWorkflowImportInput');
 const smartWorkflowImportDropZone = document.getElementById('smartWorkflowImportDropZone');
 const selectionBox = document.getElementById('selectionBox');
+const veniceCreditsBadge = document.getElementById('veniceCreditsBadge');
+const veniceCreditsValue = document.getElementById('veniceCreditsValue');
+const veniceCreditsFill = document.getElementById('veniceCreditsFill');
+const veniceCreditsPanel = document.getElementById('veniceCreditsPanel');
+const veniceCreditsRefreshBtn = document.getElementById('veniceCreditsRefreshBtn');
+const veniceCreditsPanelUsed = document.getElementById('veniceCreditsPanelUsed');
+const veniceCreditsPanelTotal = document.getElementById('veniceCreditsPanelTotal');
+const veniceCreditsPanelPercent = document.getElementById('veniceCreditsPanelPercent');
+const veniceCreditsPanelRefill = document.getElementById('veniceCreditsPanelRefill');
+const veniceCreditsPanelUpdatedAt = document.getElementById('veniceCreditsPanelUpdatedAt');
 const assetToggle = document.getElementById('assetToggle');
 const assetPanel = document.getElementById('assetPanel');
 const assetCloseBtn = document.getElementById('assetCloseBtn');
@@ -151,6 +161,26 @@ let smartLoopContext = null;
 let transientSmartCloudLinks = [];
 let runBtnCooldownToken = 0;
 let smartRunStateToken = 0;
+let veniceCreditsRefreshToken = 0;
+let veniceCreditsRefreshTimer = null;
+let veniceCreditsAutoRefreshTimer = null;
+const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v1';
+const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
+const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
+let veniceCreditsState = {
+    providerId:'',
+    used:null,
+    total:null,
+    available:null,
+    nextRefillAt:null,
+    tierCap:null,
+    usedThisCycle:null,
+    userType:'',
+    lastRequestAt:0,
+    updatedAt:0,
+    status:'idle',
+    error:''
+};
 const activeSmartTaskPolls = new Map();
 const smartNodeRunTokens = new Map();
 const activePromptNodeStreams = new Map();
@@ -820,6 +850,7 @@ function normalizeImportedSmartWorkflow(data){
 }
 function openSmartWorkflowTransferModal(){
     if(!canvas){ toast('请先打开画布'); return; }
+    closeVeniceCreditsPanel();
     toggleAssetLibrary(false);
     closeSmartCanvasShortcuts();
     updateSmartWorkflowTransferMeta();
@@ -2725,13 +2756,267 @@ function parseRatioValue(value){
     const h = Number(parts[1]);
     return w > 0 && h > 0 ? w / h : 0;
 }
+function isVeniceProviderId(providerId=''){
+    const idText = String(providerId || '').trim();
+    if(!idText) return false;
+    const provider = (apiProviders || []).find(item => String(item?.id || '').trim() === idText);
+    if(provider){
+        const protocol = String(provider.protocol || '').trim().toLowerCase();
+        if(protocol === 'venice') return true;
+    }
+    return /venice/i.test(idText);
+}
+function resolveVeniceCreditsProviderId(preferredId=''){
+    const wanted = String(preferredId || '').trim();
+    if(wanted && isVeniceProviderId(wanted)) return wanted;
+    if(isVeniceProviderId(settings.provider_id || '')) return String(settings.provider_id || '').trim();
+    if(isVeniceProviderId(settings.videoProvider || '')) return String(settings.videoProvider || '').trim();
+    const providers = (apiProviders || []).filter(item => item?.enabled !== false && String(item?.protocol || '').trim().toLowerCase() === 'venice');
+    if(!providers.length) return '';
+    const primary = providers.find(item => item.primary);
+    return String((primary || providers[0])?.id || '').trim();
+}
+function veniceCreditPercent(used, total){
+    const safeTotal = Number(total);
+    const safeUsed = Number(used);
+    if(!(Number.isFinite(safeUsed) && Number.isFinite(safeTotal) && safeTotal > 0)) return 0;
+    return Math.max(0, Math.min(100, (safeUsed / safeTotal) * 100));
+}
+function veniceProgressColor(percent){
+    if(percent <= 20) return '#ef4444';
+    if(percent <= 40) return '#f97316';
+    if(percent <= 60) return '#f59e0b';
+    if(percent <= 80) return '#10b981';
+    return '#22c55e';
+}
+function formatVeniceCompact(value){
+    const n = Number(value);
+    if(!Number.isFinite(n)) return '--';
+    if(Math.abs(n) < 1000) return new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(Math.round(n));
+    return new Intl.NumberFormat('en-US', {notation:'compact', compactDisplay:'short', maximumFractionDigits:1}).format(n).toUpperCase();
+}
+function formatVeniceFull(value){
+    const n = Number(value);
+    if(!Number.isFinite(n)) return '--';
+    return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(n)));
+}
+function formatVeniceDateTime(timestamp){
+    const t = Number(timestamp);
+    if(!Number.isFinite(t) || t <= 0) return '--';
+    try {
+        return new Date(t).toLocaleString('zh-CN', {hour12:false});
+    } catch(_) {
+        return '--';
+    }
+}
+function isFiniteInputNumber(value){
+    if(value === null || value === undefined || value === '') return false;
+    const n = Number(value);
+    return Number.isFinite(n);
+}
+function veniceRemainingText(timestamp){
+    const t = Number(timestamp);
+    if(!Number.isFinite(t) || t <= 0) return '--';
+    const deltaMs = t - Date.now();
+    if(deltaMs <= 0) return '已到期';
+    const hours = deltaMs / 3600000;
+    if(hours < 24) return `剩余 ${Math.max(1, Math.ceil(hours))} 小时`;
+    return `剩余 ${Math.max(1, Math.ceil(hours / 24))} 天`;
+}
+function veniceAgoText(timestamp) {
+    const t = Number(timestamp);
+    if(!Number.isFinite(t) || t <= 0) return '--';
+    const deltaMs = Date.now() - t;
+    if(deltaMs < 60000) return '刚刚更新';
+    const minutes = Math.floor(deltaMs / 60000);
+    if(minutes < 60) return `${minutes} 分钟前`;
+    const hours = Math.floor(minutes / 60);
+    if(hours < 24) return `${hours} 小时前`;
+    const days = Math.floor(hours / 24);
+    return `${days} 天前`;
+}
+function persistVeniceCreditsCache(){
+    try {
+        const total = Number(veniceCreditsState.total);
+        const used = Number(veniceCreditsState.used);
+        if(!(Number.isFinite(total) && total > 0 && Number.isFinite(used))) return;
+        localStorage.setItem(VENICE_CREDITS_CACHE_KEY, JSON.stringify({
+            providerId:veniceCreditsState.providerId || '',
+            used:Number(used),
+            total:Number(total),
+            available:Number(veniceCreditsState.available),
+            nextRefillAt:Number(veniceCreditsState.nextRefillAt || 0) || null,
+            tierCap:Number(veniceCreditsState.tierCap || 0) || null,
+            usedThisCycle:Number(veniceCreditsState.usedThisCycle || 0) || null,
+            userType:String(veniceCreditsState.userType || ''),
+            lastRequestAt:Number(veniceCreditsState.lastRequestAt || 0) || 0,
+            updatedAt:Number(veniceCreditsState.updatedAt || Date.now()),
+        }));
+    } catch(_) {}
+}
+function restoreVeniceCreditsCache(){
+    try {
+        const raw = localStorage.getItem(VENICE_CREDITS_CACHE_KEY);
+        if(!raw) return;
+        const data = JSON.parse(raw);
+        const total = Number(data?.total);
+        const used = Number(data?.used);
+        if(!(Number.isFinite(total) && total > 0 && Number.isFinite(used))) return;
+        veniceCreditsState = {
+            ...veniceCreditsState,
+            providerId:String(data?.providerId || ''),
+            used,
+            total,
+            available:Number.isFinite(Number(data?.available)) ? Number(data.available) : null,
+            nextRefillAt:Number.isFinite(Number(data?.nextRefillAt)) ? Number(data.nextRefillAt) : null,
+            tierCap:Number.isFinite(Number(data?.tierCap)) ? Number(data.tierCap) : null,
+            usedThisCycle:Number.isFinite(Number(data?.usedThisCycle)) ? Number(data.usedThisCycle) : null,
+            userType:String(data?.userType || ''),
+            lastRequestAt:Number.isFinite(Number(data?.lastRequestAt)) ? Number(data.lastRequestAt) : 0,
+            updatedAt:Number.isFinite(Number(data?.updatedAt)) ? Number(data.updatedAt) : 0,
+            status:'ready',
+            error:''
+        };
+    } catch(_) {}
+}
+function renderVeniceCreditsPanel(){
+    if(!veniceCreditsPanel) return;
+    const used = Number(veniceCreditsState.used);
+    const total = Number(veniceCreditsState.total);
+    const percent = veniceCreditPercent(used, total);
+    const valid = Number.isFinite(used) && Number.isFinite(total) && total > 0;
+    if(veniceCreditsPanelUsed) veniceCreditsPanelUsed.textContent = valid ? formatVeniceFull(used) : '--';
+    if(veniceCreditsPanelTotal) veniceCreditsPanelTotal.textContent = valid ? formatVeniceFull(total) : '--';
+    if(veniceCreditsPanelPercent) veniceCreditsPanelPercent.textContent = valid ? `${percent.toFixed(1)}%` : '--';
+    if(veniceCreditsPanelRefill) veniceCreditsPanelRefill.textContent = veniceRemainingText(veniceCreditsState.nextRefillAt);
+    if(veniceCreditsPanelUpdatedAt) veniceCreditsPanelUpdatedAt.textContent = veniceAgoText(veniceCreditsState.updatedAt);
+}
+function closeVeniceCreditsPanel(){
+    veniceCreditsPanel?.classList.remove('open');
+}
+function toggleVeniceCreditsPanel(forceOpen=null){
+    if(!veniceCreditsPanel) return;
+    const nextOpen = forceOpen == null ? !veniceCreditsPanel.classList.contains('open') : Boolean(forceOpen);
+    if(nextOpen) renderVeniceCreditsPanel();
+    veniceCreditsPanel.classList.toggle('open', nextOpen);
+    if(nextOpen) refreshIcons();
+}
+function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt=null, tierCap=null, usedThisCycle=null, userType='', providerId='', state='idle', title=''}={}){
+    if(!veniceCreditsBadge) return;
+    if(isFiniteInputNumber(used)) veniceCreditsState.used = Number(used);
+    if(isFiniteInputNumber(total) && Number(total) > 0) veniceCreditsState.total = Number(total);
+    if(isFiniteInputNumber(available)) veniceCreditsState.available = Number(available);
+    if(isFiniteInputNumber(nextRefillAt)) veniceCreditsState.nextRefillAt = Number(nextRefillAt);
+    if(isFiniteInputNumber(tierCap)) veniceCreditsState.tierCap = Number(tierCap);
+    if(isFiniteInputNumber(usedThisCycle)) veniceCreditsState.usedThisCycle = Number(usedThisCycle);
+    if(providerId) veniceCreditsState.providerId = String(providerId || '');
+    if(userType) veniceCreditsState.userType = String(userType || '');
+    veniceCreditsState.status = state || veniceCreditsState.status || 'idle';
+    veniceCreditsState.error = state === 'error' ? String(title || '') : '';
+    if(state === 'ready' && Number.isFinite(Number(veniceCreditsState.total)) && Number(veniceCreditsState.total) > 0){
+        veniceCreditsState.updatedAt = Date.now();
+        persistVeniceCreditsCache();
+    }
+    const safeTotal = Number(veniceCreditsState.total);
+    const safeUsed = Number(veniceCreditsState.used);
+    const hasNumbers = Number.isFinite(safeUsed) && Number.isFinite(safeTotal) && safeTotal > 0;
+    const percent = veniceCreditPercent(safeUsed, safeTotal);
+    veniceCreditsBadge.classList.toggle('is-loading', state === 'loading');
+    veniceCreditsBadge.classList.toggle('is-error', state === 'error');
+    veniceCreditsBadge.title = String(title || '');
+    veniceCreditsBadge.style.setProperty('--venice-credits-color', veniceProgressColor(percent));
+    if(veniceCreditsValue){
+        if(hasNumbers){
+            veniceCreditsValue.textContent = `${formatVeniceCompact(safeUsed)} / ${formatVeniceCompact(safeTotal)}`;
+        } else if(state === 'loading'){
+            veniceCreditsValue.textContent = '-- / --';
+        } else if(state === 'error'){
+            veniceCreditsValue.textContent = '刷新失败';
+        } else {
+            veniceCreditsValue.textContent = '-- / --';
+        }
+    }
+    if(veniceCreditsFill) veniceCreditsFill.style.width = `${percent.toFixed(2)}%`;
+    const track = veniceCreditsBadge.querySelector('.venice-credits-track');
+    if(track){
+        track.setAttribute('aria-valuenow', `${Math.round(percent)}`);
+        track.setAttribute('aria-valuetext', hasNumbers ? `${formatVeniceFull(safeUsed)} / ${formatVeniceFull(safeTotal)}` : '-- / --');
+    }
+    renderVeniceCreditsPanel();
+}
+async function refreshVeniceCredits(options={}){
+    if(!veniceCreditsBadge) return null;
+    const now = Date.now();
+    const elapsed = now - Number(veniceCreditsState.lastRequestAt || 0);
+    if(elapsed < VENICE_CREDITS_MIN_REFRESH_MS){
+        renderVeniceCreditsPanel();
+        return null;
+    }
+    const providerId = resolveVeniceCreditsProviderId(options?.providerId || '');
+    if(!providerId){
+        setVeniceCreditsUi({state:'idle', title:'未检测到可用的 Venice 平台配置'});
+        return null;
+    }
+    veniceCreditsState.lastRequestAt = now;
+    renderVeniceCreditsPanel();
+    const token = ++veniceCreditsRefreshToken;
+    setVeniceCreditsUi({state:'loading', title:'正在刷新 Venice 额度...'});
+    try {
+        const response = await fetch(`/api/venice/credits?provider_id=${encodeURIComponent(providerId)}`);
+        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, 'Venice 额度查询失败'));
+        const data = await response.json();
+        if(token !== veniceCreditsRefreshToken) return data;
+        const used = Number(data?.used_credits);
+        const total = Number(data?.total_credits);
+        if(!Number.isFinite(used) || !Number.isFinite(total) || total <= 0){
+            throw new Error('Venice 额度接口返回数据不完整');
+        }
+        const usedLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(used)));
+        const totalLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(total)));
+        const percent = veniceCreditPercent(used, total);
+        setVeniceCreditsUi({
+            used,
+            total,
+            available:Number(data?.available_credits),
+            nextRefillAt:Number(data?.next_refill_at),
+            tierCap:Number(data?.tier_cap),
+            usedThisCycle:Number(data?.used_this_cycle),
+            userType:String(data?.user_type || ''),
+            providerId:String(data?.provider_id || providerId),
+            state:'ready',
+            title:`Venice 已使用额度 ${usedLabel} / ${totalLabel} (${percent.toFixed(1)}%)`,
+        });
+        return data;
+    } catch(e) {
+        if(token !== veniceCreditsRefreshToken) return null;
+        setVeniceCreditsUi({state:'error', title:e?.message || 'Venice 额度刷新失败'});
+        return null;
+    }
+}
+function scheduleVeniceCreditsRefresh(providerId='', delay=0){
+    if(!veniceCreditsBadge) return;
+    if(veniceCreditsRefreshTimer){
+        clearTimeout(veniceCreditsRefreshTimer);
+        veniceCreditsRefreshTimer = null;
+    }
+    const ms = Math.max(0, Number(delay) || 0);
+    veniceCreditsRefreshTimer = setTimeout(() => {
+        veniceCreditsRefreshTimer = null;
+        refreshVeniceCredits({providerId});
+    }, ms);
+}
+function startVeniceCreditsAutoRefresh(){
+    if(veniceCreditsAutoRefreshTimer) return;
+    veniceCreditsAutoRefreshTimer = setInterval(() => {
+        refreshVeniceCredits();
+    }, VENICE_CREDITS_AUTO_REFRESH_MS);
+}
 const VENICE_VIDEO_ASPECTS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
 function isVeniceVideoProvider(providerId=''){
     const idText = String(providerId || '').trim();
-    if(/venice/i.test(idText)) return true;
+    if(isVeniceProviderId(idText)) return true;
     const provider = videoProviderById(idText);
-    const nameText = String(provider?.name || provider?.label || '').trim();
-    return /venice/i.test(nameText);
+    return String(provider?.protocol || '').trim().toLowerCase() === 'venice';
 }
 function nearestVeniceVideoAspectByRatio(ratio){
     const target = Number(ratio);
@@ -4349,7 +4634,9 @@ async function loadConfig(){
         lastConfigRefreshAt = Date.now();
         sanitizeSmartApiSelection(settings);
         updateProviderModels();
+        scheduleVeniceCreditsRefresh('', 80);
     } catch(e) {
+        setVeniceCreditsUi({state:'error', title:e?.message || tr('smart.toastApiSettingsFail')});
         toast(tr('smart.toastApiSettingsFail'));
     }
 }
@@ -5513,6 +5800,7 @@ function toggleAssetLibrary(open=!assetLibraryOpen){
     if(!assetPanel || !assetToggle) return;
     assetLibraryOpen = !!open;
     if(assetLibraryOpen){
+        closeVeniceCreditsPanel();
         closeSmartCanvasShortcuts();
         closeSmartWorkflowTransferModal();
     }
@@ -7299,6 +7587,7 @@ function renderSmartCanvasLog(){
 }
 function openSmartCanvasLog(){
     if(!canvas) return;
+    closeVeniceCreditsPanel();
     renderSmartCanvasLog();
     smartLogModal.classList.add('open');
 }
@@ -7306,6 +7595,7 @@ function closeSmartCanvasLog(){
     smartLogModal.classList.remove('open');
 }
 function openSmartCanvasShortcuts(){
+    closeVeniceCreditsPanel();
     toggleAssetLibrary(false);
     closeSmartWorkflowTransferModal();
     smartShortcutModal?.classList.add('open');
@@ -15546,6 +15836,7 @@ function smartLogActualGenerationRequest(label, {kind='image', endpoint='', prom
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
+    const veniceImageProvider = isVeniceProviderId(runSettings.provider_id || '');
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
@@ -15553,20 +15844,24 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
     const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
     const payload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)};
     const requestBodyJson = JSON.stringify(payload);
-    smartLogActualGenerationRequest('API Image', {
-        kind:'image',
-        endpoint:'/api/canvas-image-tasks',
-        provider:payload.provider_id,
-        model:payload.model,
-        prompt:payload.prompt,
-        counts:smartPayloadReferenceMediaCounts(payload),
-        extra:{taskCount:count, size:payload.size, requestBodyJson}
-    });
-    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
-        return r.json();
-    })));
-    return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    try {
+        smartLogActualGenerationRequest('API Image', {
+            kind:'image',
+            endpoint:'/api/canvas-image-tasks',
+            provider:payload.provider_id,
+            model:payload.model,
+            prompt:payload.prompt,
+            counts:smartPayloadReferenceMediaCounts(payload),
+            extra:{taskCount:count, size:payload.size, requestBodyJson}
+        });
+        const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
+            if(!r.ok) throw new Error(await r.text());
+            return r.json();
+        })));
+        return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    } finally {
+        if(veniceImageProvider) scheduleVeniceCreditsRefresh(runSettings.provider_id || '', 120);
+    }
 }
 async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const ref = selectedRunningHubRef(runSettings);
@@ -15632,6 +15927,7 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
 }
 async function runApiVideoGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.videoModel) throw new Error(tr('smart.errNoVideoModel'));
+    const veniceVideoProvider = isVeniceVideoProvider(runSettings.videoProvider || '');
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
         const trustedMode = Boolean(runSettings.videoTrustedAsset);
@@ -15706,6 +16002,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         if(result && result.jimeng_pending) throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
         return resultMediaUrls(result);
     } finally {
+        if(veniceVideoProvider) scheduleVeniceCreditsRefresh(runSettings.videoProvider || '', 120);
         transientSmartCloudLinks = [];
     }
 }
@@ -16092,6 +16389,7 @@ async function querySmartImageTaskNow(nodeId, localTaskId){
         }
         if(data.status === 'failed'){
             task.error = data.error || tr('smart.errRunFailed');
+            if(isVeniceProviderId(task.providerId || providerIdForSmartTask(node, task))) scheduleVeniceCreditsRefresh(task.providerId || providerIdForSmartTask(node, task), 120);
             toast(task.error.slice(0, 160));
         } else {
             task.error = data.message || '任务仍在生成中，请稍后再查询';
@@ -16099,6 +16397,7 @@ async function querySmartImageTaskNow(nodeId, localTaskId){
         }
     } catch(e){
         task.error = e.message || '查询失败';
+        if(isVeniceProviderId(task.providerId || providerIdForSmartTask(node, task))) scheduleVeniceCreditsRefresh(task.providerId || providerIdForSmartTask(node, task), 120);
         toast(task.error.slice(0, 160));
     } finally {
         const latest = smartPendingTasks(node).find(item => item.taskId === localTaskId);
@@ -16169,6 +16468,8 @@ async function pollSmartCanvasTask(taskId){
 }
 function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     if(!node || !taskId) return;
+    const taskMeta = smartPendingTasks(node).find(task => task.taskId === taskId) || null;
+    const taskProviderId = String(taskMeta?.providerId || taskMeta?.provider_id || '');
     node.pendingTasks = smartPendingTasks(node).filter(task => task.taskId !== taskId);
     node.pending = Math.max(0, Number(node.pending || 0) - 1);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
@@ -16206,6 +16507,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         delete node.h;
         notifySmartTaskSuccess(kind, node.images.length);
     }
+    if(isVeniceProviderId(taskProviderId)) scheduleVeniceCreditsRefresh(taskProviderId, 120);
 }
 async function resumeSmartPendingNode(node, logContext={}){
     const tasks = smartPendingTasks(node);
@@ -16249,6 +16551,7 @@ async function resumeSmartPendingNode(node, logContext={}){
                 node.pending = Math.max(1, smartPendingTasks(node).length);
                 logTaskFailure(task.error, task);
                 notifySmartTaskFailure(task.error || '任务未丢失，可稍后手动查询结果');
+                if(isVeniceProviderId(task.providerId || '')) scheduleVeniceCreditsRefresh(task.providerId || '', 120);
                 toast('任务未丢失，可稍后手动查询结果');
                 render();
                 scheduleSave();
@@ -16268,6 +16571,7 @@ async function resumeSmartPendingNode(node, logContext={}){
             logTaskFailure(e.message || tr('smart.errRunFailed'), task);
             if(e && typeof e === 'object') e.smartGenerationLogged = true;
             notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
+            if(isVeniceProviderId(task.providerId || '')) scheduleVeniceCreditsRefresh(task.providerId || '', 120);
             toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
             render();
             scheduleSave();
@@ -17346,6 +17650,25 @@ fileInput.onchange = () => {
 };
 if(assetToggle) assetToggle.onclick = () => toggleAssetLibrary();
 if(assetCloseBtn) assetCloseBtn.onclick = () => toggleAssetLibrary(false);
+veniceCreditsBadge?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleVeniceCreditsPanel();
+});
+veniceCreditsBadge?.addEventListener('keydown', event => {
+    if(event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleVeniceCreditsPanel();
+});
+veniceCreditsPanel?.addEventListener('pointerdown', event => event.stopPropagation());
+veniceCreditsPanel?.addEventListener('mousedown', event => event.stopPropagation());
+veniceCreditsPanel?.addEventListener('click', event => event.stopPropagation());
+veniceCreditsRefreshBtn?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    refreshVeniceCredits();
+});
 if(smartWorkflowToggle) smartWorkflowToggle.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
@@ -17847,6 +18170,7 @@ document.addEventListener('click', event => {
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
     if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
     if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
+    if(!event.target.closest('#veniceCreditsBadge') && !event.target.closest('#veniceCreditsPanel')) closeVeniceCreditsPanel();
 });
 // Capture-phase listener so stopPropagation on inner elements can't block it.
 // Closes the button-triggered picker when clicking anywhere inside the composer card
@@ -18169,6 +18493,19 @@ requestAnimationFrame(animateSpinners);
 
 window.onload = async () => {
     applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light');
+    restoreVeniceCreditsCache();
+    setVeniceCreditsUi({
+        used:veniceCreditsState.used,
+        total:veniceCreditsState.total,
+        available:veniceCreditsState.available,
+        nextRefillAt:veniceCreditsState.nextRefillAt,
+        tierCap:veniceCreditsState.tierCap,
+        usedThisCycle:veniceCreditsState.usedThisCycle,
+        userType:veniceCreditsState.userType,
+        providerId:veniceCreditsState.providerId,
+        state:Number.isFinite(Number(veniceCreditsState.total)) && Number(veniceCreditsState.total) > 0 ? 'ready' : 'idle',
+        title:''
+    });
     loadPromptPresets();
     loadPromptTemplateGroups();
     loadPromptTemplateOverrides();
@@ -18176,9 +18513,11 @@ window.onload = async () => {
     if(window.StudioI18n) window.StudioI18n.apply();
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();
+    startVeniceCreditsAutoRefresh();
     await loadConfig();
     await loadAssetLibrary();
     await loadCanvas();
+    scheduleVeniceCreditsRefresh('', 80);
     syncApiKindToggleVisibility();
     render();
 };
