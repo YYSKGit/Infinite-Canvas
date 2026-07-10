@@ -17,6 +17,10 @@
             document.body.classList.toggle('studio-theme-dark', dark);
             document.body.classList.toggle('theme-dark', dark);
         }
+        const metaThemeColor = document.getElementById('pwa-theme-color');
+        if (metaThemeColor) {
+            metaThemeColor.setAttribute('content', dark ? '#0f141d' : '#ffffff');
+        }
         window.dispatchEvent(new CustomEvent('studio-theme-change', { detail: { theme: next } }));
     }
 
