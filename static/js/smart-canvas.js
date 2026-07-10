@@ -167,6 +167,8 @@ let veniceCreditsRefreshToken = 0;
 let veniceCreditsRefreshTimer = null;
 let veniceCreditsAutoRefreshTimer = null;
 let veniceCreditsCooldownTimer = null;
+let veniceCreditsAutoFailureCount = 0;
+let veniceCreditsNextAutoRetryAt = 0;
 let veniceVideoQuoteTimer = null;
 let veniceVideoQuoteController = null;
 let veniceVideoQuoteSignature = '';
@@ -174,6 +176,7 @@ let veniceVideoQuoteRequestToken = 0;
 const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v1';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
+const VENICE_CREDITS_AUTO_MAX_BACKOFF_MS = 30 * 60 * 1000;
 let veniceCreditsState = {
     providerId:'',
     used:null,
@@ -832,8 +835,8 @@ function serializableSmartNode(node){
     delete copy._dom;
     return copy;
 }
-function selectedSmartWorkflowPayload(){
-    const ids = selectedNodeIds();
+function selectedSmartWorkflowPayload(nodeIds=null){
+    const ids = Array.isArray(nodeIds) && nodeIds.length ? nodeIds : selectedNodeIds();
     const idSet = new Set(ids);
     const selectedNodes = nodes.filter(node => idSet.has(node.id)).map(serializableSmartNode);
     const selectedSet = new Set(selectedNodes.map(node => node.id));
@@ -918,14 +921,28 @@ async function exportSelectedSmartWorkflow(includeResources=false){
         toast(err.message || '导出工作流失败');
     }
 }
-function insertSmartWorkflowIntoCanvas(imported){
+function remapSmartWorkflowNodeReferences(node, idMap){
+    if(!node || !idMap) return node;
+    const remapId = value => idMap.get(value) || '';
+    const remapList = value => Array.isArray(value) ? value.map(remapId).filter(Boolean) : value;
+    // These fields contain node ids rather than ordinary user configuration. Keep this list
+    // centralized so file import, asset import and future clone paths restore the same graph.
+    ['inputNodeIds', 'memberIds', 'nodeIds', 'childrenIds'].forEach(key => {
+        if(Array.isArray(node[key])) node[key] = remapList(node[key]);
+    });
+    ['sourceNodeId', 'loopSourceId', 'loopRootId', 'parentGroupId', 'groupId', 'targetNodeId'].forEach(key => {
+        if(node[key]) node[key] = remapId(node[key]);
+    });
+    return node;
+}
+function insertSmartWorkflowIntoCanvas(imported, options={}){
     const srcNodes = (imported.nodes || []).filter(Boolean);
     const srcConnections = (imported.connections || []).filter(Boolean);
     if(!canvas || !srcNodes.length) throw new Error('工作流中没有可导入的节点');
     pushUndo();
     const minX = Math.min(...srcNodes.map(n => Number(n.x || 0)));
     const minY = Math.min(...srcNodes.map(n => Number(n.y || 0)));
-    const target = viewportCenter();
+    const target = options.point || viewportCenter();
     const dx = target.x - minX;
     const dy = target.y - minY;
     const idMap = new Map();
@@ -942,6 +959,7 @@ function insertSmartWorkflowIntoCanvas(imported){
     const newConnections = srcConnections
         .map(conn => ({...JSON.parse(JSON.stringify(conn)), from:idMap.get(conn.from), to:idMap.get(conn.to)}))
         .filter(conn => conn.from && conn.to);
+    newNodes.forEach(node => remapSmartWorkflowNodeReferences(node, idMap));
     nodes.push(...newNodes);
     canvas.connections = [...(canvas.connections || []), ...newConnections];
     selectedIds = newNodes.length > 1 ? newNodes.map(node => node.id) : [];
@@ -952,7 +970,7 @@ function insertSmartWorkflowIntoCanvas(imported){
     scheduleSave();
     toast(`已导入 ${newNodes.length} 个节点`);
 }
-async function importSmartWorkflowFile(file){
+async function importSmartWorkflowFile(file, options={}){
     if(!canvas || !file) return;
     try {
         if(smartWorkflowTransferSub) smartWorkflowTransferSub.textContent = '正在导入工作流...';
@@ -961,7 +979,7 @@ async function importSmartWorkflowFile(file){
         const res = await fetch('/api/canvas-workflows/import', {method:'POST', body:form});
         if(!res.ok) throw new Error(await responseErrorMessage(res, '导入工作流失败'));
         const data = await res.json();
-        insertSmartWorkflowIntoCanvas(normalizeImportedSmartWorkflow(data));
+        insertSmartWorkflowIntoCanvas(normalizeImportedSmartWorkflow(data), options);
         closeSmartWorkflowTransferModal();
     } catch(err) {
         if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
@@ -2982,6 +3000,8 @@ function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt
 async function refreshVeniceCredits(options={}){
     if(!veniceCreditsBadge) return null;
     const now = Date.now();
+    const automatic = options?.automatic === true;
+    if(automatic && now < veniceCreditsNextAutoRetryAt) return null;
     const elapsed = now - Number(veniceCreditsState.lastRequestAt || 0);
     if(elapsed < VENICE_CREDITS_MIN_REFRESH_MS){
         renderVeniceCreditsPanel();
@@ -3021,9 +3041,19 @@ async function refreshVeniceCredits(options={}){
             state:'ready',
             title:`Venice 已使用额度 ${usedLabel} / ${totalLabel} (${percent.toFixed(1)}%)`,
         });
+        veniceCreditsAutoFailureCount = 0;
+        veniceCreditsNextAutoRetryAt = 0;
         return data;
     } catch(e) {
         if(token !== veniceCreditsRefreshToken) return null;
+        if(automatic){
+            veniceCreditsAutoFailureCount++;
+            const backoff = Math.min(
+                VENICE_CREDITS_AUTO_REFRESH_MS * (2 ** Math.min(veniceCreditsAutoFailureCount - 1, 4)),
+                VENICE_CREDITS_AUTO_MAX_BACKOFF_MS
+            );
+            veniceCreditsNextAutoRetryAt = Date.now() + backoff;
+        }
         setVeniceCreditsUi({state:'error', title:e?.message || 'Venice 额度刷新失败'});
         return null;
     }
@@ -3043,7 +3073,7 @@ function scheduleVeniceCreditsRefresh(providerId='', delay=0){
 function startVeniceCreditsAutoRefresh(){
     if(veniceCreditsAutoRefreshTimer) return;
     veniceCreditsAutoRefreshTimer = setInterval(() => {
-        refreshVeniceCredits();
+        refreshVeniceCredits({automatic:true});
     }, VENICE_CREDITS_AUTO_REFRESH_MS);
 }
 const VENICE_VIDEO_ASPECTS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
@@ -5996,7 +6026,8 @@ function renderAssetLibrary(){
     const workflowMode = assetTab === 'workflow';
     assetImageControls.style.display = (imageMode || workflowMode) ? 'block' : 'none';
     const localMode = assetLibraryIsLocal();
-    assetDropZone.style.display = imageMode ? 'flex' : 'none';
+    assetDropZone.style.display = (imageMode || workflowMode) ? 'flex' : 'none';
+    assetDropZone.textContent = workflowMode ? '把选中的一个或多个节点拖到这里保存工作流' : tr('smart.assetDropHint');
     assetGrid.style.display = (imageMode || workflowMode) ? 'grid' : 'none';
     workflowEmpty.style.display = 'none';
     if(!imageMode && !workflowMode){ refreshIcons(); return; }
@@ -6020,7 +6051,7 @@ function renderAssetLibrary(){
     if(assetAddCategoryBtn) assetAddCategoryBtn.disabled = Boolean(smartClass);
     if(assetRenameCategoryBtn) assetRenameCategoryBtn.disabled = !cat || Boolean(smartClass) || (localMode && (cat.id === '__root__' || !cat.id));
     assetGrid.innerHTML = items.length ? items.map(item => `
-        <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="${workflowMode ? 'false' : 'true'}" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-kind="${escapeHtml(assetMediaKind(item))}">
+        <div class="asset-item ${workflowMode ? 'workflow-asset-item' : ''}" draggable="true" data-asset-id="${escapeHtml(item.id)}" data-url="${escapeHtml(item.url)}" data-name="${escapeHtml(item.name || 'asset')}" data-format="${escapeHtml(item.format || '')}" data-kind="${escapeHtml(assetMediaKind(item))}">
             ${assetThumbHtml(item)}
             ${workflowMode
                 ? `<button class="asset-card-delete" type="button" data-delete-workflow-asset="${escapeHtml(item.id)}" title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`
@@ -6265,6 +6296,22 @@ function bindAssetItemEvents(){
     });
 }
 function bindWorkflowAssetItemEvents(){
+    assetGrid.querySelectorAll('.workflow-asset-item').forEach(el => {
+        el.addEventListener('dragstart', event => {
+            if(event.target.closest('button')){
+                event.preventDefault();
+                return;
+            }
+            event.dataTransfer.effectAllowed = 'copy';
+            event.dataTransfer.setData('application/x-smart-workflow-asset', JSON.stringify({
+                id:el.dataset.assetId || '',
+                url:el.dataset.url || '',
+                name:el.dataset.name || '工作流',
+                format:el.dataset.format || ''
+            }));
+            event.dataTransfer.setData('text/plain', el.dataset.url || '');
+        });
+    });
     assetGrid.querySelectorAll('[data-rename-workflow-asset]').forEach(btn => {
         btn.onclick = async e => {
             e.preventDefault();
@@ -6288,6 +6335,36 @@ function bindWorkflowAssetItemEvents(){
             }
         };
     });
+}
+async function saveSmartWorkflowToAssetLibrary(nodeIds=[]){
+    const payload = selectedSmartWorkflowPayload(nodeIds);
+    if(!payload.nodes.length){ toast('请先选择要保存的节点'); return; }
+    const cat = activeWorkflowAssetCategory();
+    if(!cat){ toast('请先新建或选择工作流分组'); return; }
+    const fallback = payload.nodes.length === 1
+        ? (payload.nodes[0].title || payload.nodes[0].name || '工作流')
+        : `${canvas?.title || '智能画布'} - ${payload.nodes.length} 个节点`;
+    const name = await openAssetNameDialog({title:'保存工作流', value:fallback, placeholder:'工作流名称'});
+    if(!name) return;
+    const filename = `${String(name).replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) || 'workflow'}.zip`;
+    const res = await fetch('/api/canvas-workflows/export-to-library', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({...payload, include_resources:true, filename, name, library_id:activeAssetLibraryId, category_id:cat.id})
+    });
+    if(!res.ok) throw new Error(await responseErrorMessage(res, '保存工作流失败'));
+    const data = await res.json();
+    setAssetLibraryFromResponse(data);
+    toast(`已保存工作流：${data.item?.name || name}`);
+}
+async function importSmartWorkflowAsset(asset, point){
+    if(!asset?.url) throw new Error('工作流资产地址无效');
+    const res = await fetch(asset.url);
+    if(!res.ok) throw new Error(await responseErrorMessage(res, '读取工作流资产失败'));
+    const ext = asset.format === 'json' || /\.json(?:$|[?#])/i.test(asset.url) ? 'json' : 'zip';
+    const blob = await res.blob();
+    const file = new File([blob], `${asset.name || 'workflow'}.${ext}`, {type:blob.type || (ext === 'zip' ? 'application/zip' : 'application/json')});
+    await importSmartWorkflowFile(file, {point});
 }
 async function addUrlToAssetLibrary(url, name=''){
     if(assetLibraryIsLocal()) return addUrlToLocalAssetLibrary(url, name);
@@ -6689,12 +6766,7 @@ function pasteNodes(){
         idMap.set(n.id, copy.id);
         return copy;
     });
-    copies.forEach(copy => {
-        if(Array.isArray(copy.inputNodeIds)){
-            copy.inputNodeIds = copy.inputNodeIds.map(id => idMap.get(id)).filter(Boolean);
-        }
-        if(copy.sourceNodeId) copy.sourceNodeId = idMap.get(copy.sourceNodeId) || '';
-    });
+    copies.forEach(copy => remapSmartWorkflowNodeReferences(copy, idMap));
     const newConnections = (nodeClipboard.connections || []).map(conn => ({
         ...conn,
         from:idMap.get(conn.from),
@@ -12859,7 +12931,8 @@ function hasSmartInputThumbDrag(dataTransfer){
 function setSmartDropCopyEffect(e, includeAsset=false){
     e.preventDefault();
     if(hasSmartInputThumbDrag(e.dataTransfer)) return;
-    if(hasSmartImageDropData(e.dataTransfer) || (includeAsset && hasSmartAssetDrag(e.dataTransfer))){
+    const hasWorkflowAsset = smartDropDataTypes(e.dataTransfer).includes('application/x-smart-workflow-asset');
+    if(hasSmartImageDropData(e.dataTransfer) || hasWorkflowAsset || (includeAsset && hasSmartAssetDrag(e.dataTransfer))){
         e.dataTransfer.dropEffect = 'copy';
     }
 }
@@ -17445,6 +17518,21 @@ window.onmouseup = e => {
         let stateChanged = false;
         const hit = document.elementFromPoint(e.clientX, e.clientY);
         const droppedOnAssetPanel = assetLibraryOpen && hit && assetPanel?.contains(hit);
+        if(droppedOnAssetPanel && draggedNode && assetTab === 'workflow'){
+            const workflowNodeIds = (dragState.groupIds || [draggedNode.id]).filter(id => nodes.some(node => node.id === id));
+            (dragState.group || [{id:dragState.id, ox:dragState.ox, oy:dragState.oy}]).forEach(item => {
+                const n = nodes.find(x => x.id === item.id);
+                if(n){ n.x = item.ox; n.y = item.oy; }
+            });
+            setAssetDragOver(false);
+            discardPendingUndo();
+            clearDropHighlight();
+            dragState = null;
+            document.body.classList.remove('smart-node-drag');
+            render();
+            void saveSmartWorkflowToAssetLibrary(workflowNodeIds).catch(err => toast(err.message || '保存工作流失败'));
+            return;
+        }
         if(droppedOnAssetPanel && draggedNode && (draggedNode.images || []).length){
             const imagesToSave = (draggedNode.images || []).filter(img => img?.url);
             imagesToSave.forEach(img => addUrlToAssetLibrary(img.url, img.name || draggedNode.title || 'image'));
@@ -17564,8 +17652,17 @@ shell.addEventListener('wheel', e => {
 shell.ondragover = e => setSmartDropCopyEffect(e, true);
 shell.ondrop = async e => {
     e.preventDefault();
-    if(e.target.closest('.image-node')) return;
     const p = screenToWorld(e);
+    const workflowRaw = e.dataTransfer.getData('application/x-smart-workflow-asset');
+    if(workflowRaw){
+        try {
+            await importSmartWorkflowAsset(JSON.parse(workflowRaw), p);
+        } catch(err){
+            toast(err.message || '导入工作流资产失败');
+        }
+        return;
+    }
+    if(e.target.closest('.image-node')) return;
     const assetRaw = e.dataTransfer.getData('application/x-smart-asset');
     if(assetRaw){
         try {

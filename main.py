@@ -45,6 +45,7 @@ QUIET_ACCESS_PATHS = {
     "/api/queue_status",
     "/api/canvases",
     "/api/canvases/trash",
+    "/api/venice/credits",
 }
 QUIET_ACCESS_PREFIXES = (
     "/api/canvases/",
@@ -371,6 +372,9 @@ VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
 VENICE_AUTH_REFRESH_SECONDS = max(5.0, float(os.getenv("VENICE_AUTH_REFRESH_SECONDS", "30") or 30))
 VENICE_WEB_AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
 VENICE_WEB_AUTH_LOCKS: Dict[str, asyncio.Lock] = {}
+VENICE_AUTH_REFRESH_FAILURES: Dict[str, Dict[str, Any]] = {}
+VENICE_AUTH_FAILURE_LOG_INTERVAL = max(60.0, float(os.getenv("VENICE_AUTH_FAILURE_LOG_INTERVAL", "300") or 300))
+VENICE_AUTH_MAX_FAILURE_BACKOFF = max(VENICE_AUTH_REFRESH_SECONDS, float(os.getenv("VENICE_AUTH_MAX_FAILURE_BACKOFF", "300") or 300))
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
     "gpt-image-2/text-to-image-official-stable",
     "gpt-image-2/image-to-image-official-stable",
@@ -3573,6 +3577,26 @@ def log_net_error(context, exc, url=""):
             print(f"[NET-ERR] {context} | {type(exc).__name__}: {exc}", flush=True)
         except Exception:
             pass
+
+def network_exception_detail(exc, max_depth=6) -> str:
+    """Return a useful one-line exception chain even when str(exc) is empty."""
+    parts = []
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen and len(parts) < max_depth:
+        seen.add(id(current))
+        name = type(current).__name__
+        message = str(current or "").strip()
+        if not message:
+            try:
+                message = repr(current).strip()
+            except Exception:
+                message = ""
+        if message in {name, f"{name}()", f"{name}('')", f'{name}("")'}:
+            message = ""
+        parts.append(f"{name}: {message}" if message else name)
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+    return " <- ".join(parts) or type(exc).__name__
 
 def api_headers(json_body=True, provider=None, model=""):
     if provider:
@@ -8722,12 +8746,33 @@ async def venice_auth_refresh_loop():
                 timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
                 async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                     for provider in providers:
+                        provider_id = str(provider.get("id") or "venice")
+                        failure = VENICE_AUTH_REFRESH_FAILURES.get(provider_id) or {}
+                        now = time.monotonic()
+                        if now < float(failure.get("next_retry_at") or 0):
+                            continue
                         try:
                             await venice_web_auth_info(client, provider, force_refresh=True)
+                            if failure.get("count"):
+                                print(f"[venice-auth] background refresh recovered provider={provider_id} after={failure.get('count')} failures", flush=True)
+                            VENICE_AUTH_REFRESH_FAILURES.pop(provider_id, None)
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
-                            print(f"[venice-auth] background refresh failed provider={provider.get('id')}: {exc}", flush=True)
+                            detail = network_exception_detail(exc)
+                            count = int(failure.get("count") or 0) + 1
+                            backoff = min(VENICE_AUTH_REFRESH_SECONDS * (2 ** min(count - 1, 8)), VENICE_AUTH_MAX_FAILURE_BACKOFF)
+                            signature = f"{type(exc).__name__}:{detail}"
+                            last_log_at = float(failure.get("last_log_at") or 0)
+                            should_log = count == 1 or signature != failure.get("signature") or now - last_log_at >= VENICE_AUTH_FAILURE_LOG_INTERVAL
+                            VENICE_AUTH_REFRESH_FAILURES[provider_id] = {
+                                "count": count,
+                                "next_retry_at": now + backoff,
+                                "last_log_at": now if should_log else last_log_at,
+                                "signature": signature,
+                            }
+                            if should_log:
+                                print(f"[venice-auth] background refresh failed provider={provider_id} failures={count} retry_in={backoff:.0f}s error={detail}", flush=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -13318,8 +13363,19 @@ async def get_venice_credits(provider_id: str = "venice"):
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or provider_id} 不是 Venice。")
     timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        usage = await venice_fetch_credit_usage(client, provider)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            usage = await venice_fetch_credit_usage(client, provider)
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        detail = network_exception_detail(exc)
+        print(f"[venice-credits] request failed provider={provider.get('id') or provider_id} error={detail}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Venice 额度查询网络异常：{detail}") from exc
+    except Exception as exc:
+        detail = network_exception_detail(exc)
+        print(f"[venice-credits] unexpected failure provider={provider.get('id') or provider_id} error={detail}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Venice 额度查询失败：{detail}") from exc
     return {
         "provider_id": str(provider.get("id") or provider_id),
         **usage,

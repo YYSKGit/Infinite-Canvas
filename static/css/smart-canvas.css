@@ -1329,7 +1329,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-video-badge i,.asset-video-badge svg { width:10px; height:10px; }
 .workflow-thumb { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; padding:10px; color:var(--muted); text-align:center; font-size:10px; font-weight:850; }
 .workflow-thumb i,.workflow-thumb svg { width:24px; height:24px; color:var(--text); }
-.workflow-asset-item { cursor:default; }
+.workflow-asset-item { cursor:grab; }
+.workflow-asset-item:active { cursor:grabbing; }
 .asset-meta { display:none; }
 .asset-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; font-weight:600; color:var(--text); }
 .asset-local-tag { flex:0 0 auto; height:20px; padding:0 7px; border-radius:999px; display:inline-flex; align-items:center; background:var(--soft); border:1px solid var(--line); color:var(--faint); font-size:9px; font-weight:900; }
