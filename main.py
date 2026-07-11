@@ -9023,7 +9023,19 @@ def venice_raise_for_blocked_response(response):
     if blocked:
         raise HTTPException(status_code=400, detail=f"Venice 返回内容被过滤：{', '.join(blocked)}")
 
+def venice_raise_for_black_image(content: bytes):
+    """Reject successfully decoded Venice images whose RGB pixels are all black."""
+    try:
+        with Image.open(BytesIO(content or b"")) as image:
+            extrema = image.convert("RGB").getextrema()
+    except Exception:
+        # Preserve the existing response handling for non-image/invalid payloads.
+        return
+    if extrema and all(channel_min == 0 and channel_max == 0 for channel_min, channel_max in extrema):
+        raise HTTPException(status_code=400, detail="Venice 返回了纯黑图片，已判定为生成失败。")
+
 async def venice_binary_image_response_to_data_url(response):
+    venice_raise_for_black_image(response.content)
     content_type = str(response.headers.get("content-type") or "image/png").split(";", 1)[0].strip().lower() or "image/png"
     encoded = base64.b64encode(response.content).decode("ascii")
     return {"type": "b64", "value": encoded, "mime_type": content_type}
