@@ -16158,17 +16158,20 @@ async function runGeneration(){
             customSize:`${outpaintSize.width}x${outpaintSize.height}`
         };
     }
+    // Freeze all task decisions before the first await. Async completion must not restore
+    // shared UI settings: users normally continue working on another node while it runs.
+    const activeSettings = cloneSmartSettings(settings);
     const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
-    const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video' ? 'video' : 'image';
-    const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, settings);
-    rememberRecentSmartSettings(settings, node);
+    const logKind = isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video' ? 'video' : 'image';
+    const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, activeSettings);
+    rememberRecentSmartSettings(activeSettings, node);
     const runLogStart = nowMs();
-    const expectedCount = settings.engine === 'runninghub'
-        ? Math.max(1, Math.min(8, Number(settings.count || 1)))
-        : settings.engine === 'comfy'
-        ? (settings.comfyMode === 'text' || settings.comfyMode === 'enhance' || settings.comfyMode === 'edit' || settings.comfyMode === 'custom' ? 1 : 1)
-        : Math.max(1, Math.min(8, Number(settings.count || 1)));
-    const apiConcurrentRun = isApiLikeEngine(settings.engine) || settings.engine === 'runninghub' || settings.engine === 'modelscope' || settings.engine === 'comfy';
+    const expectedCount = activeSettings.engine === 'runninghub'
+        ? Math.max(1, Math.min(8, Number(activeSettings.count || 1)))
+        : activeSettings.engine === 'comfy'
+        ? (activeSettings.comfyMode === 'text' || activeSettings.comfyMode === 'enhance' || activeSettings.comfyMode === 'edit' || activeSettings.comfyMode === 'custom' ? 1 : 1)
+        : Math.max(1, Math.min(8, Number(activeSettings.count || 1)));
+    const apiConcurrentRun = isApiLikeEngine(activeSettings.engine) || activeSettings.engine === 'runninghub' || activeSettings.engine === 'modelscope' || activeSettings.engine === 'comfy';
     pushUndo();
     let extracted = null;
     let branchNode = null;
@@ -16208,29 +16211,27 @@ async function runGeneration(){
     }
     render();
     try {
-        if(settings.engine === 'comfy'){
+        if(activeSettings.engine === 'comfy'){
             await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
-            settings = previousSettings;
             return;
         }
-        if(isApiLikeEngine(settings.engine) && settings.apiKind === 'video'){
-            const outVideos = await runApiVideoGeneration(prompt, refs, settings, request);
+        if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video'){
+            const outVideos = await runApiVideoGeneration(prompt, refs, activeSettings, request);
             if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
             if(request?.actualApiPrompt) runLog.requestPrompt = String(request.actualApiPrompt || '');
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
             addSmartGenerationLog({run:runLog, outputs:outVideos, runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
-            settings = previousSettings;
             scheduleSave();
             return;
         }
-        const outImages = settings.engine === 'runninghub'
-            ? (await Promise.all(Array.from({length:expectedCount}, () => runRunningHubGeneration(prompt, refs)))).flat()
-            : settings.engine === 'modelscope'
-                ? await runModelscopeGeneration(prompt, refs, settings, request)
-                : await runApiGeneration(prompt, refs, settings, request);
-        if(isApiLikeEngine(settings.engine)){
+        const outImages = activeSettings.engine === 'runninghub'
+            ? (await Promise.all(Array.from({length:expectedCount}, () => runRunningHubGeneration(prompt, refs, activeSettings)))).flat()
+            : activeSettings.engine === 'modelscope'
+                ? await runModelscopeGeneration(prompt, refs, activeSettings, request)
+                : await runApiGeneration(prompt, refs, activeSettings, request);
+        if(isApiLikeEngine(activeSettings.engine)){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
             pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
@@ -16244,7 +16245,6 @@ async function runGeneration(){
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart});
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
                 clearPromptInput({preserveDraft:true});
-                settings = previousSettings;
                 scheduleSave();
                 return;
             }
@@ -16252,7 +16252,6 @@ async function runGeneration(){
             if(outpaintSize) delete node.outpaintSize;
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             clearPromptInput({preserveDraft:true});
-            settings = previousSettings;
             scheduleSave();
             return;
         }
@@ -16261,10 +16260,8 @@ async function runGeneration(){
         finalizePendingNode(pendingNode, outImages, pendingMeta);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
         clearPromptInput({preserveDraft:true});
-        settings = previousSettings;
         scheduleSave();
     } catch(e) {
-        settings = previousSettings;
         if(request?.actualApiPrompt && logKind === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         if(handleJimengPendingSignal(pendingNode, e)){
             delete pendingNode._runMetaTargetId;
