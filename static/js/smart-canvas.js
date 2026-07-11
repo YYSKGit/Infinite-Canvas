@@ -5933,6 +5933,23 @@ function markSmartNodeComplete(node, meta=null){
     node.runTimerHidden = meta?.hideTimer === true || keepHidden;
     return node;
 }
+function markSmartNodeRunFailed(node, options={}){
+    if(!node) return node;
+    smartNodeRunTokens.delete(node.id);
+    node.running = false;
+    node.queued = false;
+    const activeTasks = options.keepRecoverableTasks
+        ? smartPendingTasks(node).filter(task => !task.failed)
+        : [];
+    node.pending = activeTasks.length;
+    if(!activeTasks.length){
+        node.runFinishedAt = nowMs();
+        if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
+        node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
+        node.runTimerHidden = false;
+    }
+    return node;
+}
 function completedDownstreamOutputForNode(sourceNode){
     if(!sourceNode?.id) return null;
     const startedAt = Number(sourceNode.runStartedAt || 0);
@@ -13757,7 +13774,12 @@ function genPromptSnapshotFromNode(node){
 function embedGenPromptIntoImages(images, node){
     const snapshot = genPromptSnapshotFromNode(node);
     if(!snapshot || !images?.length) return images;
-    return images.map(img => img ? {...img, _genPrompt: cloneGenPromptSnapshot(snapshot)} : img);
+    // A media item's generation snapshot is immutable. Re-running the node may
+    // update node.runPrompt before the previous outputs are archived, so only
+    // backfill legacy/generated items that do not already own a snapshot.
+    return images.map(img => img
+        ? (img._genPrompt ? img : {...img, _genPrompt: cloneGenPromptSnapshot(snapshot)})
+        : img);
 }
 function addConnection(fromId, toId, kind='flow'){
     if(!fromId || !toId || fromId === toId) return;
@@ -15362,19 +15384,23 @@ function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=nul
         delete history.h;
         syncHistoryNodePromptFromImages(history);
     }
-    node.images = next;
+    // Generated media owns its generation metadata from the moment it is
+    // attached to the canvas. History/grouping is only presentation and must
+    // not be responsible for making the metadata durable.
+    if(meta) attachRunMeta(node, meta);
+    const embeddedNext = embedGenPromptIntoImages(next, node);
+    node.images = embeddedNext;
     markSmartNodeComplete(node, meta);
     node.outputKind = kind;
     node.title = cascadeOutputTitle(kind, node.images.length);
     node.scale = node.images.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
     delete node.w;
     delete node.h;
-    if(meta) attachRunMeta(node, meta);
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
     const skipShift = options.skipShift || Boolean(smartLoopContext?.nodeId);
     if(!skipShift) pushRightSideNodes(node, afterRight - beforeRight + 36);
     selectedImage = {nodeId:'', index:-1};
-    return next;
+    return embeddedNext;
 }
 function appendOutputsToNode(node, additions, kind='image', options={}){
     if(!node || !additions?.length) return [];
@@ -15389,7 +15415,9 @@ function appendOutputsToNode(node, additions, kind='image', options={}){
         return true;
     });
     if(!next.length) return [];
-    node.images = [...existing, ...next];
+    if(options.meta) attachRunMeta(node, options.meta);
+    const embeddedNext = embedGenPromptIntoImages(next, node);
+    node.images = [...existing, ...embeddedNext];
     markSmartNodeComplete(node);
     node.outputKind = kind;
     node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image');
@@ -15398,9 +15426,9 @@ function appendOutputsToNode(node, additions, kind='image', options={}){
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
     const skipShift = options.skipShift || Boolean(smartLoopContext?.nodeId);
     if(!skipShift) pushRightSideNodes(node, afterRight - beforeRight + 36);
-    return next;
+    return embeddedNext;
 }
-function appendLoopOutputsToNode(node, additions, kind='image', ctx=smartLoopContext){
+function appendLoopOutputsToNode(node, additions, kind='image', ctx=smartLoopContext, meta=null){
     if(!node || !additions?.length) return [];
     const runState = ctx?.runState;
     if(runState && !runState.loopAppendInitialized) runState.loopAppendInitialized = new Set();
@@ -15419,7 +15447,7 @@ function appendLoopOutputsToNode(node, additions, kind='image', ctx=smartLoopCon
         }
         node.images = [];
     }
-    return appendOutputsToNode(node, additions, kind, {skipShift:true});
+    return appendOutputsToNode(node, additions, kind, {skipShift:true, meta});
 }
 function syncCascadeRunButton(node=selectedNode()){
     if(!cascadeRunBtn) return;
@@ -15665,9 +15693,9 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
             return stripImageGenerationMeta(copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:(typeof item === 'object' && item.kind) || result.kind, generatedResult:true}));
         }).filter(item => item.url);
         if(ctx?.appendLoopOutputs) {
-            appendLoopOutputsToNode(outputNode, additions, result.kind, ctx);
+            additions = appendLoopOutputsToNode(outputNode, additions, result.kind, ctx, meta);
         } else {
-            replaceOutputsToNodeWithHistory(outputNode, additions, result.kind, null, {skipShift:Boolean(ctx?.nodeId)});
+            additions = replaceOutputsToNodeWithHistory(outputNode, additions, result.kind, meta, {skipShift:Boolean(ctx?.nodeId)});
         }
         outputNode.runPrompt = targetPromptState.runPrompt;
         outputNode.runModelPrompt = targetPromptState.runModelPrompt;
@@ -15786,7 +15814,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
             }).filter(item => item.url);
             outputSlot = liveSmartNode(outputSlot);
             outputSlot.images = nonPreviewOutputImages(outputSlot.images);
-            replaceOutputsToNodeWithHistory(outputSlot, additions, result.kind, meta, {skipShift:Boolean(ctx?.nodeId)});
+            additions = replaceOutputsToNodeWithHistory(outputSlot, additions, result.kind, meta, {skipShift:Boolean(ctx?.nodeId)});
         }
         outputSlot = liveSmartNode(outputSlot);
         markSmartNodeComplete(outputSlot, meta);
@@ -16250,13 +16278,13 @@ async function runGeneration(){
             selectedId = node.id;
         } else {
             pendingNode.pending = 0;
-            pendingNode.running = false;
             delete pendingNode._replaceExistingOutputsOnNextResult;
             if(!(pendingNode.images || []).length){
                 delete pendingNode.w;
                 delete pendingNode.h;
             }
         }
+        markSmartNodeRunFailed(pendingNode, {keepRecoverableTasks:true});
         if(extracted) restoreFromExtraction(node, extracted);
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
@@ -16748,6 +16776,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     } else {
         const created = createNode((node.x || 0) + nodeRect(node).width + 40, node.y || 0, out);
         attachRunMeta(created, meta);
+        created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
     clearPromptInput({preserveDraft:true});
@@ -16762,6 +16791,7 @@ async function runComfyText(node, prompt, pendingNode, meta){
     } else {
         const created = createNode((node.x || 0) + nodeRect(node).width + 40, node.y || 0, out.map((url, i) => ({url, name:`comfy-${i + 1}.png`})));
         attachRunMeta(created, meta);
+        created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
     clearPromptInput({preserveDraft:true});
@@ -16778,6 +16808,7 @@ async function runComfyEnhance(node, refs, pendingNode, meta){
     } else {
         const created = createNode((node.x || 0) + nodeRect(node).width + 40, node.y || 0, out.map((url, i) => ({url, name:`enhance-${i + 1}.png`})));
         attachRunMeta(created, meta);
+        created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
     scheduleSave();
@@ -16794,6 +16825,7 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta){
     } else {
         const created = createNode((node.x || 0) + nodeRect(node).width + 40, node.y || 0, out.map((url, i) => ({url, name:`edit-${i + 1}.png`})));
         attachRunMeta(created, meta);
+        created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
     clearPromptInput({preserveDraft:true});
@@ -17097,7 +17129,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         seen.add(key);
         return true;
     });
-    node.images = [...existing, ...additions];
+    node.images = [...existing, ...embedGenPromptIntoImages(additions, node)];
     if(additions.length) node.outputKind = kind;
     if(!node.pending && smartPendingTasks(node).length === 0){
         delete node.pendingTasks;
@@ -17129,8 +17161,10 @@ async function resumeSmartPendingNode(node, logContext={}){
             error:message
         });
     };
-    node.pending = Math.max(tasks.length, Number(node.pending || 0) || tasks.length);
+    const activeTaskCount = tasks.filter(task => !task.failed).length;
+    node.pending = activeTaskCount;
     node.running = false;
+    if(!activeTaskCount) markSmartNodeRunFailed(node, {keepRecoverableTasks:true});
     render();
     const failures = [];
     await Promise.all(tasks.map(async task => {
@@ -17154,8 +17188,7 @@ async function resumeSmartPendingNode(node, logContext={}){
                 task.recoverTaskId = e.recoverTaskId;
                 task.providerId = e.providerId || task.providerId || providerIdForSmartTask(node, task);
                 task.error = e.message || tr('smart.errRunFailed');
-                node.running = false;
-                node.pending = Math.max(1, smartPendingTasks(node).length);
+                markSmartNodeRunFailed(node, {keepRecoverableTasks:true});
                 logTaskFailure(task.error, task);
                 notifySmartTaskFailure(task.error || '任务未丢失，可稍后手动查询结果');
                 if(isVeniceProviderId(task.providerId || '')) scheduleVeniceCreditsRefresh(task.providerId || '', 120);
@@ -17168,7 +17201,7 @@ async function resumeSmartPendingNode(node, logContext={}){
             node.pending = Math.max(0, Number(node.pending || 0) - 1);
             if(!node.pending && smartPendingTasks(node).length === 0){
                 delete node.pendingTasks;
-                node.running = false;
+                markSmartNodeRunFailed(node);
                 if(!(node.images || []).length){
                     delete node.w;
                     delete node.h;
