@@ -2442,6 +2442,10 @@ function arrangeSelectedSmartNodes(){
 }
 function applyViewport(){
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
+    world.style.setProperty('--canvas-counter-scale', String(1 / viewport.scale));
+    // The composer lives in world coordinates so it follows its node, but its
+    // controls should remain a stable, screen-space size at every canvas zoom.
+    composer?.style.setProperty('--composer-counter-scale', String(1 / viewport.scale));
     // world 被 transform:scale 缩放后，其内部带 backdrop-filter 的卡片（参数设置/合成卡等）
     // 会被部分浏览器（Chrome/Edge 等 Blink 内核）当作独立合成层先按 1x 栅格化、再整体缩放，
     // 缩小时位图被降采样 → 组件发虚。缩放态下关闭这些 backdrop-filter（底色本身已接近不透明，
@@ -14467,11 +14471,11 @@ function positionMentionPickerAtCaret(){
     const rowRect = row.getBoundingClientRect();
     if(mentionAnchorEl){
         const anchorRect = mentionAnchorEl.getBoundingClientRect();
-        const scale = (typeof viewport !== 'undefined' && Number(viewport?.scale)) || 1;
-        const safeScale = scale > 0 ? scale : 1;
         const pickerWidth = mentionPicker.offsetWidth || 340;
         const base = mentionPicker.offsetParent || mentionPicker.parentElement || row;
         const baseRect = base.getBoundingClientRect();
+        const measuredScale = base.offsetWidth ? baseRect.width / base.offsetWidth : 1;
+        const safeScale = measuredScale > 0 ? measuredScale : 1;
         const baseLogicalWidth = baseRect.width / safeScale;
         const rawLeft = (anchorRect.right - baseRect.left) / safeScale - pickerWidth;
         const rawTop = (anchorRect.bottom - baseRect.top) / safeScale + 2;
@@ -14487,10 +14491,11 @@ function positionMentionPickerAtCaret(){
         caretRect = range.getClientRects()[0] || range.getBoundingClientRect();
     }
     const inputRect = promptInput.getBoundingClientRect();
-    // composer 在 world 里被 viewport.scale 缩放过，getBoundingClientRect 返回的是缩放后的屏幕像素，
-    // 而 style.left/top 是逻辑像素 → 需要除以 scale 才能正确还原 caret 的逻辑坐标
-    const scale = (typeof viewport !== 'undefined' && Number(viewport?.scale)) || 1;
-    const safeScale = scale > 0 ? scale : 1;
+    // Use the composer's measured screen scale. It normally stays at 1 because
+    // the composer counter-scales the world, while this also remains robust if
+    // another UI scale is applied by the host page.
+    const measuredScale = row.offsetWidth ? rowRect.width / row.offsetWidth : 1;
+    const safeScale = measuredScale > 0 ? measuredScale : 1;
     const rowLogicalWidth = rowRect.width / safeScale;
     const pickerWidth = mentionPicker.offsetWidth || 340;
     const maxLeft = Math.max(4, rowLogicalWidth - pickerWidth - 4);
