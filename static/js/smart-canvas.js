@@ -1479,7 +1479,17 @@ async function loadSmartCanvasSwitcher(force=false){
         if(!res.ok) throw new Error('canvas list failed');
         const data = await res.json();
         const projectId = canvas?.project || sourceProjectId || 'default';
-        smartCanvasSwitcherItems = (data.canvases || []).filter(item => (item.kind || 'classic') === 'smart' && (item.project || 'default') === projectId);
+        smartCanvasSwitcherItems = (data.canvases || [])
+            .filter(item => (item.kind || 'classic') === 'smart' && (item.project || 'default') === projectId)
+            // Saving the canvas being left updates `updated_at`.  Sorting by that
+            // field makes the switcher reshuffle after every selection, so keep a
+            // deterministic creation order (while still respecting pinned items).
+            .sort((a, b) => {
+                const pinned = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+                if(pinned) return pinned;
+                const created = Number(b.created_at || 0) - Number(a.created_at || 0);
+                return created || String(a.id || '').localeCompare(String(b.id || ''));
+            });
         renderSmartCanvasSwitcher();
       } catch(e){
         smartCanvasSwitcherList.innerHTML = '<div class="smart-canvas-switcher-empty">画布列表加载失败</div>';
@@ -6846,7 +6856,8 @@ async function loadCanvas(){
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
-        document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
+        const titleEl = document.getElementById('smartTitle');
+        if(titleEl) titleEl.textContent = canvas.title || tr('canvas.smartCanvas');
         if(smartCanvasSwitcherLabel) smartCanvasSwitcherLabel.textContent = canvas.title || tr('canvas.smartCanvas');
         nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
         migrateSmartGroupImageMembers();
@@ -9684,7 +9695,9 @@ function bindNodeEvents(){
             }).filter(Boolean);
             dragState = {id:node.id, startX:e.clientX, startY:e.clientY, ox:node.x || 0, oy:node.y || 0, group, groupIds:group.map(item => item.id), ctrlGroup:Boolean(e.ctrlKey), altCopy};
             document.body.classList.add('smart-node-drag');
-            capturePendingUndo();
+            // duplicateForAltDrag already records the pre-copy snapshot.  A
+            // second snapshot here would turn copy+drag into two undo steps.
+            if(!altCopy) capturePendingUndo();
         };
         el.querySelectorAll('.node-port').forEach(port => {
             port.addEventListener('mousedown', e => {
@@ -17213,13 +17226,20 @@ function groupSelectedNodes(){
     const minY = Math.min(...rects.map(r => r.y));
     const maxX = Math.max(...rects.map(r => r.x + r.width));
     const maxY = Math.max(...rects.map(r => r.y + r.height));
+    // Ctrl+G should preserve the visual footprint of the selected nodes. Image
+    // members are absorbed into the smart group below, and that process clears
+    // w/h so automatic thumbnail layout can normally choose a compact size.
+    // Remember the selection bounds and restore them before arranging so this
+    // manual grouping action does not unexpectedly shrink the whole selection.
+    const groupedWidth = Math.max(SMART_GROUP_DEFAULT_WIDTH, Math.round(maxX - minX + 36));
+    const groupedHeight = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(maxY - minY + 72));
     const group = {
         id:uid('group'),
         type:'smart-group',
         x:Math.round(minX - 18),
         y:Math.round(minY - 44),
-        w:Math.max(340, Math.round(maxX - minX + 36)),
-        h:Math.max(220, Math.round(maxY - minY + 72)),
+        w:groupedWidth,
+        h:groupedHeight,
         title:'智能分组',
         items:[],
         images:[],
@@ -17228,7 +17248,25 @@ function groupSelectedNodes(){
     nodes.push(group);
     // 图片成员吸收进分组网格，提示词/循环作为成员节点；随后自动整理。
     selected.forEach(node => addNodeToSmartGroup(group, node));
+    // addNodeToSmartGroup intentionally clears dimensions for general-purpose
+    // auto layout. Ctrl+G is the exception: retain the selected footprint.
+    group.w = groupedWidth;
+    group.h = groupedHeight;
+    const groupedRefs = smartGroupImageRefs(group).filter(ref => ref.item?.url);
+    if(groupedRefs.length > 1){
+        // Preserve the useful width, then make the height hug the rows produced
+        // at that width. Keeping the old selection height verbatim can leave a
+        // large empty area when wide images collapse into a single grid row.
+        const fitted = smartGroupThumbLayout(group);
+        const rows = Math.max(1, Number(fitted?.visibleRows || fitted?.rows) || 1);
+        const thumb = Math.max(28, Number(fitted?.thumb) || 96);
+        group.h = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(rows * thumb + Math.max(0, rows - 1) * 8 + 60));
+    }
     arrangeSmartGroupMembers(group, {skipUndo:true});
+    // Non-thumbnail member layouts size themselves from their contents. Keep
+    // the Ctrl+G container at least as large as the original selection there too.
+    group.w = Math.max(groupedWidth, Number(group.w) || 0);
+    if(!groupedRefs.length) group.h = Math.max(groupedHeight, Number(group.h) || 0);
     selectedIds = [];
     selectedId = group.id;
     selectedImage = {nodeId:'', index:-1};
@@ -17368,13 +17406,44 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
     if(!group || !isSmartGroupNode(group)) return false;
     const list = (draggedNodes || []).filter(n => n && n.id !== group.id);
     if(!list.length) return false;
+    const beforeRect = nodeRect(group);
+    const beforeRefs = smartGroupImageRefs(group).filter(ref => ref.item?.url);
+    const beforeLayout = beforeRefs.length ? smartGroupThumbLayout(group) : null;
+    const existingCell = beforeRefs.length === 1
+        ? Math.max(96, Math.round(Number(beforeLayout?.innerW) || (Number(beforeRect.width) || 0) - 32))
+        : Math.max(96, Math.round(Number(beforeLayout?.thumb) || 0));
+    const draggedImageCell = Math.max(0, ...list.filter(isSmartImageNode).map(node => Math.round(Number(nodeRect(node).width) || 0)));
+    const preservedCell = Math.max(existingCell, draggedImageCell);
+    let preservedWidth = Math.max(SMART_GROUP_DEFAULT_WIDTH, Math.round(Number(beforeRect.width) || 0));
+    const preservedHeight = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(Number(beforeRect.height) || 0));
     let added = false;
     list.forEach(n => {
         if(addNodeToSmartGroup(group, n)) added = true;
     });
     if(!added) return false;
+    // Absorbing image nodes clears the group's explicit dimensions. Manual
+    // drag-in should behave like Ctrl+G: keep the useful current width, then
+    // derive a tight height from the resulting thumbnail rows.
+    group.w = preservedWidth;
+    group.h = preservedHeight;
+    const groupedRefs = smartGroupImageRefs(group).filter(ref => ref.item?.url);
+    if(groupedRefs.length > 1){
+        // Follow the original automatic grid rule directly: choose columns from
+        // sqrt(item count), keep one stable cell size, then derive both container
+        // dimensions. Do not feed an oversized width back into the fitter, since
+        // that makes it prefer one ever-wider row and shrink every later item.
+        const itemCount = groupedRefs.length + smartGroupCompactMembers(group).length;
+        const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(itemCount))));
+        const rows = Math.ceil(itemCount / cols);
+        const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
+        preservedWidth = Math.round(cols * preservedCell + Math.max(0, cols - 1) * 8 + 32);
+        group.w = preservedWidth;
+        group.h = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(visibleRows * preservedCell + Math.max(0, visibleRows - 1) * 8 + 60));
+    }
     // 提示词/循环成员入组后自动整理成网格（图片已收进卡片网格，自动平铺）。
     arrangeSmartGroupMembers(group, {skipUndo:true});
+    group.w = Math.max(preservedWidth, Number(group.w) || 0);
+    if(!groupedRefs.length) group.h = Math.max(preservedHeight, Number(group.h) || 0);
     selectedIds = [];
     // 图片被吸收进分组（原节点已删除），统一选中目标分组；仅当单个提示词/循环节点拖入时保持选中它。
     const survivingSingle = list.length === 1 && nodes.some(n => n.id === list[0].id) ? list[0].id : '';
@@ -17762,9 +17831,34 @@ window.onmousemove = e => {
                 if(img){
                     commitPendingUndo();
                     undoSuppressed = true;
+                    const sourceGroupLayout = isSmartGroupNode(source) ? smartGroupThumbLayout(source) : null;
+                    const sourceGroupCell = Math.max(28, Math.round(Number(
+                        sourceGroupLayout?.thumb || sourceGroupLayout?.innerW || 0
+                    ) || 96));
                     applyNodeMetaToImage(img, source);
                     source.images.splice(thumbDragState.imgIndex, 1);
                     if(isSmartGroupNode(source)){
+                        const remainingCount = smartGroupImageRefs(source).length + smartGroupCompactMembers(source).length;
+                        // A two-item grid carries explicit grid dimensions. Once
+                        // it becomes a single image those dimensions would stretch
+                        // the survivor, so let the single-image layout use its
+                        // natural aspect ratio again.
+                        if(remainingCount === 0){
+                            source.w = SMART_GROUP_DEFAULT_WIDTH;
+                            source.h = SMART_GROUP_DEFAULT_HEIGHT;
+                        } else if(smartGroupImageRefs(source).length === 1 && smartGroupCompactMembers(source).length === 0){
+                            delete source.w;
+                            delete source.h;
+                        } else {
+                            // Rebuild the explicit grid bounds from the remaining
+                            // item count. Otherwise a 3-item (2-row) group keeps
+                            // its old height after becoming a 2-item (1-row) group.
+                            const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(remainingCount))));
+                            const rows = Math.ceil(remainingCount / cols);
+                            const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
+                            source.w = Math.round(cols * sourceGroupCell + Math.max(0, cols - 1) * 8 + 32);
+                            source.h = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(visibleRows * sourceGroupCell + Math.max(0, visibleRows - 1) * 8 + 60));
+                        }
                         arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
                     } else if(source.images.length <= 1){
                         source.title = 'Image';
