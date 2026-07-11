@@ -6,6 +6,20 @@ const uploadInput = document.getElementById('assetUploadInput');
 const LOCAL_CAPTION_SETTINGS_KEY = 'asset_manager_local_caption_settings_v1';
 const PREVIEW_SETTINGS_KEY = 'asset_manager_preview_settings_v1';
 const CANVAS_ASSET_SORT_KEY = 'asset_manager_canvas_asset_sort_v1';
+const ACTIVE_TAB_KEY = 'asset_manager_active_tab_v1';
+const ACTIVE_TAB_VALUES = new Set(['assets', 'workflows', 'prompts', 'canvas-assets', 'local']);
+function readActiveTab(){
+    try {
+        const value = localStorage.getItem(ACTIVE_TAB_KEY) || '';
+        return ACTIVE_TAB_VALUES.has(value) ? value : 'assets';
+    } catch(_) {
+        return 'assets';
+    }
+}
+function writeActiveTab(value){
+    if(!ACTIVE_TAB_VALUES.has(value)) return;
+    try { localStorage.setItem(ACTIVE_TAB_KEY, value); } catch(_) {}
+}
 const CANVAS_ASSET_SORT_VALUES = new Set(['canvas_asc', 'updated_desc', 'updated_asc', 'name_asc', 'kind']);
 function readCanvasAssetSort(){
     try {
@@ -54,7 +68,7 @@ function writePreviewSettings(){
 const savedLocalCaptionSettings = readLocalCaptionSettings();
 const savedPreviewSettings = readPreviewSettings();
 
-let activeTab = 'assets';
+let activeTab = readActiveTab();
 let assetLibrary = {libraries:[], categories:[]};
 let promptLibrary = {libraries:[]};
 let apiProviders = [];
@@ -1241,22 +1255,6 @@ function normalizeCanvasAssetState(){
     if(!selectedCanvasAssetId && items.length) selectedCanvasAssetId = items[0].id;
     selectedCanvasAssetIds = new Set([...selectedCanvasAssetIds].filter(id => findCanvasAssetItem(id)));
 }
-async function refreshCanvasAssets(){
-    try {
-        setStatus('正在刷新画布资产...');
-        const data = await apiJson('/api/canvas-assets');
-        canvasAssetsData = {
-            categories:Array.isArray(data.categories) ? data.categories : [],
-            canvases:Array.isArray(data.canvases) ? data.canvases : [],
-            items:Array.isArray(data.items) ? data.items : []
-        };
-        normalizeCanvasAssetState();
-        render();
-        setStatus('画布资产已刷新');
-    } catch(err) {
-        setStatus(err.message || '刷新画布资产失败');
-    }
-}
 async function loadAll(){
     setStatus('加载中...');
     const [assetData, promptData, providerData, canvasAssetData] = await Promise.all([
@@ -1363,7 +1361,6 @@ function renderCanvasAssetsManager(){
                     <span>${canvasAssetViewSubtitle(items)}</span>
                 </div>
                 <div class="asset-tools">
-                    <button class="asset-btn" type="button" data-canvas-asset-refresh title="重新读取画布中的图片、视频、音频资源"><i data-lucide="refresh-cw"></i><span>刷新资源</span></button>
                     <label class="asset-search-wrap"><i data-lucide="search"></i><input id="canvasAssetSearch" class="asset-search" type="search" value="${escapeAttr(canvasAssetQuery)}" placeholder="搜索画布资产"></label>
                     <select id="canvasAssetSort" class="manage-select canvas-sort-select" title="排序方法">
                         <option value="canvas_asc" ${canvasAssetSort === 'canvas_asc' ? 'selected' : ''}>画布名称</option>
@@ -1386,7 +1383,7 @@ function renderCanvasAssetsManager(){
             <div class="content-scroll">
                 <div class="asset-grid">
                     ${groups.map(group => renderCanvasAssetGroup(group)).join('')}
-                    ${items.length ? '' : '<div class="empty-state">当前分类没有可下载的画布资产。可以点击“刷新资源”，或在画布中生成/导入图片、视频、音频后再查看。</div>'}
+                    ${items.length ? '' : '<div class="empty-state">当前分类没有可下载的画布资产。可以点击右上角“刷新”，或在画布中生成/导入图片、视频、音频后再查看。</div>'}
                 </div>
             </div>
         </section>
@@ -3203,7 +3200,7 @@ async function handleClick(event){
         }
     }
     const tabBtn = target.closest?.('[data-tab]');
-    if(tabBtn){ activeTab = tabBtn.dataset.tab || 'assets'; selectedAssetIds.clear(); selectedWorkflowIds.clear(); selectedPromptIds.clear(); selectedLocalIds.clear(); selectedLocalUploadIds.clear(); selectedCanvasAssetIds.clear(); render(); return; }
+    if(tabBtn){ activeTab = tabBtn.dataset.tab || 'assets'; writeActiveTab(activeTab); selectedAssetIds.clear(); selectedWorkflowIds.clear(); selectedPromptIds.clear(); selectedLocalIds.clear(); selectedLocalUploadIds.clear(); selectedCanvasAssetIds.clear(); render(); return; }
     if(target.closest?.('#refreshBtn')){ await loadAll(); return; }
     if(target.closest?.('[data-preview-mute-toggle]')){
         event.preventDefault();
@@ -3336,7 +3333,6 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-canvas-asset-refresh]')){ await refreshCanvasAssets(); return; }
     if(target.closest?.('[data-canvas-asset-select-all]')){ currentCanvasAssetItems().forEach(item => selectedCanvasAssetIds.add(item.id)); render(); return; }
     if(target.closest?.('[data-canvas-asset-clear-selection]')){ selectedCanvasAssetIds.clear(); render(); return; }
     if(target.closest?.('[data-canvas-asset-download-selected]')){ await downloadCanvasAssetItems([...selectedCanvasAssetIds]); return; }
@@ -4758,6 +4754,7 @@ uploadInput?.addEventListener('change', event => {
 document.querySelectorAll('[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
         activeTab = btn.dataset.tab || 'assets';
+        writeActiveTab(activeTab);
         selectedAssetIds.clear();
         selectedWorkflowIds.clear();
         selectedPromptIds.clear();
