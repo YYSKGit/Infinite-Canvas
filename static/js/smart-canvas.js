@@ -9984,7 +9984,30 @@ function deleteImage(id, imageIndex){
     if(!node || imageIndex < 0) return;
     pushUndo();
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
-    if(node.images.length <= 1) node.title = 'Image';
+    if(node.images.length <= 1){
+        node.title = 'Image';
+        if(isSmartGroupNode(node)){
+            if(node.images.length === 1 && smartGroupCompactMembers(node).length === 0){
+                // Match the drag-out path: discard the former multi-image grid
+                // dimensions so the survivor returns to its natural single-item
+                // layout instead of being stretched across the old group box.
+                delete node.w;
+                delete node.h;
+                arrangeSmartGroupMembers(node, {skipUndo:true});
+            } else if(node.images.length === 0 && smartGroupMembers(node).length === 0){
+                node.w = SMART_GROUP_DEFAULT_WIDTH;
+                node.h = SMART_GROUP_DEFAULT_HEIGHT;
+            }
+        } else if(isHistoryGroupNode(node) && node.images.length === 1){
+            // A one-item history group behaves as a standalone output. Restore
+            // the exact prompt/settings snapshot embedded in the remaining image,
+            // just as when an item is dragged out of a two-item history group.
+            delete node.w;
+            delete node.h;
+            inheritNodeMetaFromImage(node);
+            syncHistoryNodePromptFromImages(node);
+        }
+    }
     if(selectedImage.nodeId === id) selectedImage = {nodeId:id, index:Math.min(selectedImage.index, node.images.length - 1)};
     if(selectedImage.index < 0) selectedImage = {nodeId:'', index:-1};
     render();
