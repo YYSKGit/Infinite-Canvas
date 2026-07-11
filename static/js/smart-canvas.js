@@ -18121,6 +18121,10 @@ window.onmouseup = e => {
         clearDropHighlight();
         loopInsertPreview = null;
         dragState = null;
+        // A media detached from a group is rendered once while dragState is
+        // active, so its DOM keeps the `dragging` class after mouseup unless we
+        // clear it explicitly. That stale class suppresses ports and hover tools.
+        world.querySelectorAll('.image-node.dragging').forEach(el => el.classList.remove('dragging'));
         finishSmartVideoAltCopyDrag();
         requestAnimationFrame(() => syncSmartCanvasVideoSelection());
         scheduleSave();
