@@ -17265,7 +17265,7 @@ function groupSelectedNodes(){
         const fitted = smartGroupThumbLayout(group);
         const rows = Math.max(1, Number(fitted?.visibleRows || fitted?.rows) || 1);
         const thumb = Math.max(28, Number(fitted?.thumb) || 96);
-        group.h = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(rows * thumb + Math.max(0, rows - 1) * 8 + 60));
+        group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(rows * thumb + Math.max(0, rows - 1) * 8 + 60));
     }
     arrangeSmartGroupMembers(group, {skipUndo:true});
     // Non-thumbnail member layouts size themselves from their contents. Keep
@@ -17418,7 +17418,13 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
         ? Math.max(96, Math.round(Number(beforeLayout?.innerW) || (Number(beforeRect.width) || 0) - 32))
         : Math.max(96, Math.round(Number(beforeLayout?.thumb) || 0));
     const draggedImageCell = Math.max(0, ...list.filter(isSmartImageNode).map(node => Math.round(Number(nodeRect(node).width) || 0)));
-    const preservedCell = Math.max(existingCell, draggedImageCell);
+    // Existing groups own their thumbnail scale. A large node dropped into a
+    // small group must adapt to that scale instead of enlarging every existing
+    // item and the container. Only an empty group derives its first cell size
+    // from the incoming node.
+    const preservedCell = beforeRefs.length
+        ? existingCell
+        : Math.max(96, draggedImageCell);
     let preservedWidth = Math.max(SMART_GROUP_DEFAULT_WIDTH, Math.round(Number(beforeRect.width) || 0));
     const preservedHeight = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(Number(beforeRect.height) || 0));
     let added = false;
@@ -17443,7 +17449,7 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
         const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
         preservedWidth = Math.round(cols * preservedCell + Math.max(0, cols - 1) * 8 + 32);
         group.w = preservedWidth;
-        group.h = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(visibleRows * preservedCell + Math.max(0, visibleRows - 1) * 8 + 60));
+        group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(visibleRows * preservedCell + Math.max(0, visibleRows - 1) * 8 + 60));
     }
     // 提示词/循环成员入组后自动整理成网格（图片已收进卡片网格，自动平铺）。
     arrangeSmartGroupMembers(group, {skipUndo:true});
@@ -17862,7 +17868,7 @@ window.onmousemove = e => {
                             const rows = Math.ceil(remainingCount / cols);
                             const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
                             source.w = Math.round(cols * sourceGroupCell + Math.max(0, cols - 1) * 8 + 32);
-                            source.h = Math.max(SMART_GROUP_DEFAULT_HEIGHT, Math.round(visibleRows * sourceGroupCell + Math.max(0, visibleRows - 1) * 8 + 60));
+                            source.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(visibleRows * sourceGroupCell + Math.max(0, visibleRows - 1) * 8 + 60));
                         }
                         arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
                     } else if(source.images.length <= 1){
