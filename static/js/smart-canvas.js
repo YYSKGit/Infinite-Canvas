@@ -17325,12 +17325,26 @@ function ungroupNode(groupId){
             const pad = 16, gap = 8;
             const cell = Math.max(28, Math.round(layout.thumb || 96));
             const cols = Math.max(1, layout.cols || 1);
+            const isSingleImageGroup = groupImages.length === 1;
             created = groupImages.map((img, index) => {
                 const col = index % cols;
                 const row = Math.floor(index / cols);
-                const size = thumbDisplaySize(img, cell);
-                const x = Math.round(Number(group.x || 0) + pad + col * (cell + gap) + Math.max(0, (cell - size.width) / 2));
-                const y = Math.round(Number(group.y || 0) + pad + row * (cell + gap) + Math.max(0, (cell - size.height) / 2));
+                // A one-image smart group renders the image in its full inner
+                // area; `layout.thumb` is only a generic thumbnail hint (often
+                // 77-96px). Reusing that hint on ungroup shrinks every single
+                // member regardless of the group's displayed size.
+                const size = isSingleImageGroup
+                    ? {
+                        width:Math.max(40, Math.round(Number(layout.innerW) || Number(layout.width) - 32 || cell)),
+                        height:Math.max(40, Math.round(Number(layout.innerH) || Number(layout.height) - 60 || cell))
+                    }
+                    : thumbDisplaySize(img, cell);
+                const x = isSingleImageGroup
+                    ? Math.round(Number(group.x || 0) + pad)
+                    : Math.round(Number(group.x || 0) + pad + col * (cell + gap) + Math.max(0, (cell - size.width) / 2));
+                const y = isSingleImageGroup
+                    ? Math.round(Number(group.y || 0) + 44)
+                    : Math.round(Number(group.y || 0) + pad + row * (cell + gap) + Math.max(0, (cell - size.height) / 2));
                 const node = {id:uid('smart'), type:'smart-image', x, y, w:size.width, h:size.height, title:'Image', images:[stripImageGenerationMeta({...img})], scale:MEDIA_NODE_DEFAULT_SCALE, created_at:Date.now()};
                 inheritNodeMetaFromImage(node);
                 clearDetachedRunInputRefs(node);
@@ -17450,7 +17464,9 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
     const existingCell = beforeRefs.length === 1
         ? Math.max(96, Math.round(Number(beforeLayout?.innerW) || (Number(beforeRect.width) || 0) - 32))
         : Math.max(96, Math.round(Number(beforeLayout?.thumb) || 0));
-    const draggedImageCell = Math.max(0, ...list.filter(isSmartImageNode).map(node => Math.round(Number(nodeRect(node).width) || 0)));
+    const draggedImageRects = list.filter(isSmartImageNode).map(nodeRect);
+    const draggedImageCell = Math.max(0, ...draggedImageRects.map(rect => Math.round(Number(rect.width) || 0)));
+    const draggedImageHeight = Math.max(0, ...draggedImageRects.map(rect => Math.round(Number(rect.height) || 0)));
     // Existing groups own their thumbnail scale. A large node dropped into a
     // small group must adapt to that scale instead of enlarging every existing
     // item and the container. Only an empty group derives its first cell size
@@ -17471,7 +17487,13 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
     group.w = preservedWidth;
     group.h = preservedHeight;
     const groupedRefs = smartGroupImageRefs(group).filter(ref => ref.item?.url);
-    if(groupedRefs.length > 1){
+    if(!beforeRefs.length && groupedRefs.length === 1){
+        // The first image defines an empty group's content size. Do not write
+        // the empty 340x286 defaults back as an explicit single-image size.
+        preservedWidth = Math.max(SMART_GROUP_MIN_WIDTH, draggedImageCell + 32);
+        group.w = preservedWidth;
+        group.h = Math.max(SMART_GROUP_MIN_HEIGHT, draggedImageHeight + 60);
+    } else if(groupedRefs.length > 1){
         // Follow the original automatic grid rule directly: choose columns from
         // sqrt(item count), keep one stable cell size, then derive both container
         // dimensions. Do not feed an oversized width back into the fitter, since
