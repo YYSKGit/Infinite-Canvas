@@ -420,6 +420,62 @@ let panoramaState = {
 };
 window.__smartCanvasPanoramaState = panoramaState;
 let viewport = {x:0, y:0, scale:1};
+const SMART_EDGE_PAN_SIZE = 72;
+const SMART_EDGE_PAN_MAX_SPEED = 8;
+let smartEdgePanFrame = 0;
+let smartEdgePanPointer = null;
+
+function stopSmartEdgePan(){
+    if(smartEdgePanFrame) cancelAnimationFrame(smartEdgePanFrame);
+    smartEdgePanFrame = 0;
+    smartEdgePanPointer = null;
+}
+function smartEdgePanSpeed(distance){
+    if(distance >= SMART_EDGE_PAN_SIZE) return 0;
+    const strength = 1 - Math.max(0, distance) / SMART_EDGE_PAN_SIZE;
+    return Math.max(2, SMART_EDGE_PAN_MAX_SPEED * strength * strength);
+}
+function runSmartEdgePan(){
+    smartEdgePanFrame = 0;
+    if(!smartEdgePanPointer || (!dragState && !portDragState)) return;
+    const rect = shell.getBoundingClientRect();
+    const x = smartEdgePanPointer.x;
+    const y = smartEdgePanPointer.y;
+    let dx = 0, dy = 0;
+    if(x < rect.left + SMART_EDGE_PAN_SIZE) dx = smartEdgePanSpeed(x - rect.left);
+    else if(x > rect.right - SMART_EDGE_PAN_SIZE) dx = -smartEdgePanSpeed(rect.right - x);
+    if(y < rect.top + SMART_EDGE_PAN_SIZE) dy = smartEdgePanSpeed(y - rect.top);
+    else if(y > rect.bottom - SMART_EDGE_PAN_SIZE) dy = -smartEdgePanSpeed(rect.bottom - y);
+    if(dx || dy){
+        viewport.x += dx;
+        viewport.y += dy;
+        // Node movement is based on its drag-start origin. Shift that origin as
+        // the viewport pans so the dragged node remains underneath the pointer.
+        if(dragState){
+            const wx = dx / viewport.scale, wy = dy / viewport.scale;
+            dragState.ox -= wx; dragState.oy -= wy;
+            (dragState.group || []).forEach(item => { item.ox -= wx; item.oy -= wy; });
+            const moveDx = (x - dragState.startX) / viewport.scale;
+            const moveDy = (y - dragState.startY) / viewport.scale;
+            (dragState.group || [{id:dragState.id, ox:dragState.ox, oy:dragState.oy}]).forEach(item => {
+                const node = nodes.find(n => n.id === item.id);
+                if(node){ node.x = item.ox + moveDx; node.y = item.oy + moveDy; }
+            });
+            moveNodeElementsDuringDrag();
+            updateLoopInsertPreview();
+        }
+        if(portDragState){
+            portDragState.currentWorld = screenToWorld({clientX:x, clientY:y});
+            updatePortDragVisual();
+        }
+        applyViewport();
+    }
+    smartEdgePanFrame = requestAnimationFrame(runSmartEdgePan);
+}
+function updateSmartEdgePan(event){
+    smartEdgePanPointer = {x:event.clientX, y:event.clientY};
+    if(!smartEdgePanFrame) smartEdgePanFrame = requestAnimationFrame(runSmartEdgePan);
+}
 let settings = {
     engine:'api',
     apiKind:'image',
@@ -17739,6 +17795,7 @@ smartArrangeBtn?.addEventListener('click', e => {
 });
 window.onmousemove = e => {
     lastMouseWorld = screenToWorld(e);
+    if(portDragState || dragState) updateSmartEdgePan(e);
     if(smartMinimapDrag){
         e.preventDefault();
         centerViewportOnWorldPoint(minimapEventToWorld(e));
@@ -18046,6 +18103,7 @@ window.onmousemove = e => {
     if(target) setDropHighlight(target.id);
 };
 window.onmouseup = e => {
+    stopSmartEdgePan();
     document.body.classList.remove('smart-node-drag');
     document.body.classList.remove('smart-node-resize');
     if(portDragState){
