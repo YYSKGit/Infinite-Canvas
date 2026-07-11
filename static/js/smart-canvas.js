@@ -252,9 +252,45 @@ function commitPendingUndo(){
     }
 }
 function discardPendingUndo(){ pendingUndoSnapshot = null; }
+function nodesForUndoSnapshot(list=nodes){
+    return JSON.parse(JSON.stringify(list || [])).map(node => clearSmartNodeTransientRunState(node));
+}
+function nodeHasLiveRunState(node){
+    return Boolean(node && (node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
+}
+function restoreNodesPreservingLiveRuns(snapshotNodes){
+    const liveById = new Map((nodes || []).filter(nodeHasLiveRunState).map(node => [node.id, node]));
+    const restored = nodesForUndoSnapshot(snapshotNodes).map(snapshotNode => {
+        const liveNode = liveById.get(snapshotNode.id);
+        if(!liveNode) return snapshotNode;
+        liveById.delete(snapshotNode.id);
+        const liveState = {
+            running:liveNode.running,
+            pending:liveNode.pending,
+            queued:liveNode.queued,
+            jimengPending:liveNode.jimengPending,
+            pendingTasks:liveNode.pendingTasks,
+            _runMetaTargetId:liveNode._runMetaTargetId,
+            runStartedAt:liveNode.runStartedAt,
+            runFinishedAt:liveNode.runFinishedAt,
+            runElapsedMs:liveNode.runElapsedMs,
+            runTimerHidden:liveNode.runTimerHidden
+        };
+        // Keep the object identity used by the active async task, while applying
+        // the undoable content from the snapshot around its live run state.
+        Object.keys(liveNode).forEach(key => delete liveNode[key]);
+        Object.assign(liveNode, snapshotNode, liveState);
+        return liveNode;
+    });
+    // A run may have created its output node after the undo snapshot. Removing
+    // that live node would detach the async completion from the canvas.
+    return [...restored, ...liveById.values()];
+}
 function snapshotForUndo(){
     return {
-        nodes: JSON.parse(JSON.stringify(nodes)),
+        // Async task state is not a user-editable canvas state. Keeping it in
+        // history can resurrect a completed node as permanently "generating".
+        nodes: nodesForUndoSnapshot(),
         connections: JSON.parse(JSON.stringify(canvas?.connections || [])),
         selectedId,
         selectedIds: selectedIds.slice(),
@@ -272,7 +308,9 @@ function restoreUndoSnapshot(snap){
     if(!snap) return;
     undoSuppressed = true;
     try {
-        nodes = snap.nodes;
+        // Sanitize historical task state, but keep tasks that are genuinely
+        // running now (including their object identity for async completion).
+        nodes = restoreNodesPreservingLiveRuns(snap.nodes);
         if(canvas) canvas.connections = snap.connections;
         selectedId = snap.selectedId;
         selectedIds = snap.selectedIds;
