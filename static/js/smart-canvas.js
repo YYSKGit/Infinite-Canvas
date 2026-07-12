@@ -678,18 +678,108 @@ function smartVideoPlayerHtml(url, attrs=''){
 function smartCanvasVideoHtml(url, attrs=''){
     const original = smartOriginalMediaUrl(url);
     const safe = escapeHtml(displayMediaUrl({url:original}));
-    return `<video class="smart-canvas-video" src="${safe}" data-url="${escapeAttr(original)}" preload="metadata" playsinline loop disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video>`;
+    return `<video class="smart-canvas-video" src="${safe}" data-url="${escapeAttr(original)}" preload="metadata" playsinline loop disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video>
+        <div class="smart-video-controls" role="group" aria-label="视频播放控件">
+            <button class="smart-video-control smart-video-toggle" type="button" title="播放" aria-label="播放" data-icon="play"><i data-lucide="play" data-smart-icon="play"></i><i data-lucide="pause" data-smart-icon="pause" hidden></i></button>
+            <span class="smart-video-time smart-video-current">0:00</span>
+            <input class="smart-video-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="视频进度">
+            <span class="smart-video-time smart-video-duration">0:00</span>
+            <div class="smart-video-volume-wrap">
+                <button class="smart-video-control smart-video-mute" type="button" title="静音" aria-label="静音" data-icon="volume-2"><i data-lucide="volume-2" data-smart-icon="volume-2"></i><i data-lucide="volume-1" data-smart-icon="volume-1" hidden></i><i data-lucide="volume-x" data-smart-icon="volume-x" hidden></i></button>
+                <input class="smart-video-volume" type="range" min="0" max="1" value="1" step="0.02" aria-label="音量">
+            </div>
+            <div class="smart-video-capture-wrap">
+                <button class="smart-video-control smart-video-capture" type="button" title="截取视频帧" aria-label="截取视频帧" aria-haspopup="menu"><i data-lucide="camera"></i></button>
+            </div>
+            <span class="smart-video-spinner" aria-hidden="true"></span>
+        </div>
+        <div class="smart-video-capture-menu" role="menu" aria-label="选择截取位置">
+            <button type="button" role="menuitem" data-capture-kind="first">截取首帧</button>
+            <button type="button" role="menuitem" data-capture-kind="last">截取尾帧</button>
+            <button type="button" role="menuitem" data-capture-kind="current">截取当前帧</button>
+        </div>`;
+}
+function smartVideoTimeText(value){
+    const seconds = Number(value);
+    if(!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const whole = Math.floor(seconds);
+    const hours = Math.floor(whole / 3600);
+    const minutes = Math.floor((whole % 3600) / 60);
+    const rest = whole % 60;
+    return hours > 0
+        ? `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+        : `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+function smartVideoSetIcon(button, name){
+    if(!button || button.dataset.icon === name) return;
+    button.dataset.icon = name;
+    button.querySelectorAll('[data-smart-icon]').forEach(icon => {
+        icon.hidden = icon.getAttribute('data-smart-icon') !== name;
+    });
+}
+function syncSmartVideoControls(host, video){
+    if(!host || !video) return;
+    const toggle = host.querySelector('.smart-video-toggle');
+    const mute = host.querySelector('.smart-video-mute');
+    const progress = host.querySelector('.smart-video-progress');
+    const volume = host.querySelector('.smart-video-volume');
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const current = Math.max(0, Number(video.currentTime) || 0);
+    host.querySelector('.smart-video-current')?.replaceChildren(document.createTextNode(smartVideoTimeText(current)));
+    host.querySelector('.smart-video-duration')?.replaceChildren(document.createTextNode(smartVideoTimeText(duration)));
+    if(progress && progress.dataset.scrubbing !== '1'){
+        progress.value = duration ? String(Math.round(Math.min(1, current / duration) * 1000)) : '0';
+        progress.style.setProperty('--smart-video-progress', `${duration ? Math.min(100, current / duration * 100) : 0}%`);
+        progress.disabled = !duration;
+    }
+    if(volume && volume.dataset.adjusting !== '1'){
+        volume.value = String(video.muted ? 0 : video.volume);
+        volume.style.setProperty('--smart-video-volume', `${(video.muted ? 0 : video.volume) * 100}%`);
+    }
+    const playing = !video.paused && !video.ended;
+    smartVideoSetIcon(toggle, playing ? 'pause' : 'play');
+    if(toggle){ toggle.title = playing ? '暂停' : '播放'; toggle.setAttribute('aria-label', toggle.title); }
+    const volumeIcon = video.muted || video.volume === 0 ? 'volume-x' : (video.volume < .5 ? 'volume-1' : 'volume-2');
+    smartVideoSetIcon(mute, volumeIcon);
+    if(mute){ mute.title = video.muted ? '取消静音' : '静音'; mute.setAttribute('aria-label', mute.title); }
+    host.classList.toggle('is-playing', playing);
+    host.classList.toggle('is-waiting', Boolean(video.dataset.smartWaiting === '1'));
 }
 function resetSmartCanvasVideo(video){
     if(!video) return;
+    if(video.dataset.smartReset === '1') return;
+    const host = video.closest('.smart-canvas-video-host');
+    const desiredMuted = video.dataset.smartUserMuted === '1';
+    const hasTransientState = video.dataset.smartPlaybackWanted === '1'
+        || video.dataset.smartUserPaused === '1'
+        || video.dataset.smartSelectionActive === '1'
+        || video.dataset.smartHasPlayed === '1'
+        || video.dataset.smartSeeking === '1'
+        || video.dataset.smartWaiting === '1';
+    const hostIsActive = host?.classList.contains('is-playing')
+        || host?.classList.contains('autoplay-blocked')
+        || host?.classList.contains('is-controls-visible')
+        || host?.classList.contains('is-controls-pinned');
+    if(!hasTransientState && !hostIsActive && video.paused && (video.currentTime || 0) === 0
+        && !video.controls && video.muted === desiredMuted){
+        video.dataset.smartReset = '1';
+        return;
+    }
     const epoch = Number(video.dataset.smartPlaybackEpoch || 0) + 1;
     video.dataset.smartPlaybackEpoch = String(epoch);
     video.dataset.smartPlaybackWanted = '0';
+    delete video.dataset.smartUserPaused;
+    delete video.dataset.smartSelectionActive;
+    delete video.dataset.smartHasPlayed;
+    delete video.dataset.smartSeeking;
+    video.dataset.smartSeekEpoch = String(Number(video.dataset.smartSeekEpoch || 0) + 1);
+    delete video.dataset.smartWaiting;
     video.pause?.();
     try { video.currentTime = 0; } catch(e) {}
     video.controls = false;
-    video.muted = false;
-    video.closest('.smart-canvas-video-host')?.classList.remove('is-playing', 'autoplay-blocked');
+    video.muted = desiredMuted;
+    host?.classList.remove('is-playing', 'autoplay-blocked', 'is-controls-visible', 'is-controls-pinned');
+    video.dataset.smartReset = '1';
 }
 let smartVideoAltCopyDragActive = false;
 function stopAllSmartCanvasVideos(){
@@ -724,12 +814,20 @@ function smartVideoContainerIsGroup(node){
 function playSmartCanvasVideo(video){
     if(!video) return;
     if(smartVideoAltCopyDragActive){ resetSmartCanvasVideo(video); return; }
+    if(video.dataset.smartUserPaused === '1') return;
+    delete video.dataset.smartReset;
     const host = video.closest('.smart-canvas-video-host');
+    const desiredMuted = video.dataset.smartUserMuted === '1';
+    if(video.dataset.smartPlaybackWanted === '1' && !video.paused && video.muted === desiredMuted){
+        host?.classList.add('is-playing');
+        host?.classList.remove('autoplay-blocked');
+        return;
+    }
     const epoch = Number(video.dataset.smartPlaybackEpoch || 0) + 1;
     video.dataset.smartPlaybackEpoch = String(epoch);
     video.dataset.smartPlaybackWanted = '1';
-    video.controls = true;
-    video.muted = false;
+    video.controls = false;
+    video.muted = desiredMuted;
     host?.classList.add('is-playing');
     host?.classList.remove('autoplay-blocked');
     const attempt = video.play?.();
@@ -740,23 +838,133 @@ function playSmartCanvasVideo(video){
         video.play?.().catch(() => {});
     });
 }
+function userPlaySmartCanvasVideo(video){
+    if(!video) return;
+    delete video.dataset.smartUserPaused;
+    playSmartCanvasVideo(video);
+}
+function userPauseSmartCanvasVideo(video){
+    if(!video) return;
+    video.dataset.smartPlaybackWanted = '0';
+    video.dataset.smartUserPaused = '1';
+    video.pause?.();
+}
+async function exportSmartCanvasVideoFrame(video, nodeId, which='current'){
+    if(!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight){ toast('视频画面尚未加载完成'); return; }
+    const host = video.closest('.smart-canvas-video-host');
+    host?.classList.add('is-capturing');
+    const originalTime = Number(video.currentTime || 0);
+    const wasPlaying = !video.paused && !video.ended;
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const frameStep = 1 / 30;
+    const targetTime = which === 'first'
+        ? 0
+        : which === 'last'
+            ? Math.max(0, duration - frameStep / 2)
+            : originalTime;
+    let sourceRestored = false;
+    try {
+        video.dataset.smartSeeking = '1';
+        delete video.dataset.smartWaiting;
+        video.pause?.();
+        if(Math.abs(originalTime - targetTime) > .002) await seekVideoForFrame(video, targetTime);
+        const canvasEl = document.createElement('canvas');
+        canvasEl.width = video.videoWidth;
+        canvasEl.height = video.videoHeight;
+        canvasEl.getContext('2d').drawImage(video, 0, 0, canvasEl.width, canvasEl.height);
+        const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+        if(!blob) throw new Error('当前帧导出失败');
+        const raw = fileNameFromUrl(video.dataset.url || video.currentSrc || '') || 'video';
+        const base = String(raw).replace(/\.[a-z0-9]{2,8}$/i, '') || 'video';
+        const suffix = which === 'first' ? 'first-frame' : which === 'last' ? 'last-frame' : `frame-${smartVideoTimeText(targetTime).replace(/:/g, '-')}`;
+        const filename = safeExportFileName(`${base}-${suffix}.png`, 'video-frame.png');
+        if(Math.abs(Number(video.currentTime || 0) - originalTime) > .002) await seekVideoForFrame(video, originalTime);
+        delete video.dataset.smartSeeking;
+        if(wasPlaying) playSmartCanvasVideo(video);
+        sourceRestored = true;
+        const uploaded = await uploadFiles([new File([blob], filename, {type:'image/png'})]);
+        const frame = uploaded[0];
+        if(!frame?.url) throw new Error('当前帧上传失败');
+        frame.kind = 'image';
+        frame.natural_w = video.videoWidth;
+        frame.natural_h = video.videoHeight;
+        const owner = nodes.find(node => node.id === nodeId);
+        const rect = owner ? nodeRect(owner) : null;
+        const point = rect ? {x:rect.x + rect.width + 240, y:rect.y + rect.height / 2} : viewportCenter();
+        pushUndo();
+        const newNode = createImageNodeAt(point, [frame], {select:true, skipUndo:true});
+        selectedIds = [];
+        selectedImage = {nodeId:newNode.id, index:0};
+        render();
+        scheduleSave();
+        toast('当前帧已导出到画布');
+    } catch(e) {
+        toast((e.message || '当前帧导出失败').slice(0, 120));
+    } finally {
+        if(!sourceRestored && video.isConnected){
+            try {
+                if(Math.abs(Number(video.currentTime || 0) - originalTime) > .002) await seekVideoForFrame(video, originalTime);
+                if(wasPlaying) playSmartCanvasVideo(video);
+            } catch(e) {}
+        }
+        delete video.dataset.smartSeeking;
+        delete video.dataset.smartWaiting;
+        host?.classList.remove('is-capturing');
+    }
+}
 function bindSmartCanvasVideo(host, nodeId){
     if(!host || host.dataset.smartPlaybackBound === '1') return;
     const video = host.querySelector('.smart-canvas-video');
     if(!video) return;
+    video._smartCanvasBinding?.abort?.();
+    const binding = new AbortController();
+    const {signal} = binding;
+    video._smartCanvasBinding = binding;
     host.dataset.smartPlaybackBound = '1';
     let hoverTimer = 0;
+    let controlsTimer = 0;
     const clearTimer = () => { if(hoverTimer) clearTimeout(hoverTimer); hoverTimer = 0; };
     const hoverOnly = smartVideoContainerIsGroup(nodes.find(node => node.id === nodeId));
     const nodeSelected = () => !hoverOnly && isNodeSelected(nodeId);
-    const inControlStrip = event => {
-        if(!video.controls) return false;
-        const rect = video.getBoundingClientRect();
-        const height = Math.min(48, Math.max(32, rect.height * .28));
-        return event.clientY >= rect.bottom - height;
+    const inControlStrip = event => Boolean(event.target?.closest?.('.smart-video-controls'));
+    const on = (target, name, listener, options={}) => target?.addEventListener(name, listener, {...options, signal});
+    const stopControlEvent = event => event.stopPropagation();
+    const clearControlsTimer = () => { if(controlsTimer) clearTimeout(controlsTimer); controlsTimer = 0; };
+    const controlsPlaybackStarted = () => video.dataset.smartHasPlayed === '1';
+    const hideControls = () => {
+        clearControlsTimer();
+        if((nodeSelected() && controlsPlaybackStarted()) || host.classList.contains('is-controls-interacting')) return;
+        host.classList.remove('is-controls-visible');
     };
+    const showControlsTemporarily = () => {
+        if(!controlsPlaybackStarted()){
+            hideControls();
+            return;
+        }
+        host.classList.add('is-controls-visible');
+        clearControlsTimer();
+        if(nodeSelected() || host.classList.contains('is-controls-interacting')) return;
+        controlsTimer = setTimeout(hideControls, 1000);
+    };
+    const syncControlsPinned = () => {
+        const pinned = nodeSelected() && controlsPlaybackStarted();
+        if(pinned){
+            if(host.classList.contains('is-controls-pinned') && host.classList.contains('is-controls-visible')) return;
+            host.classList.add('is-controls-pinned');
+            clearControlsTimer();
+            host.classList.add('is-controls-visible');
+            return;
+        }
+        const wasPinned = host.classList.contains('is-controls-pinned');
+        if(wasPinned) host.classList.remove('is-controls-pinned');
+        if(!wasPinned && !host.classList.contains('is-controls-visible')) return;
+        if(host.matches(':hover')) showControlsTemporarily(); else hideControls();
+    };
+    host._smartShowControls = showControlsTemporarily;
+    host._smartSyncControlsPinned = syncControlsPinned;
     video.loop = true;
-    host.addEventListener('mouseenter', () => {
+    video.controls = false;
+    on(host, 'mouseenter', () => {
         clearTimer();
         if(smartVideoAltCopyDragActive) return;
         if(nodeSelected()) { playSmartCanvasVideo(video); return; }
@@ -765,23 +973,30 @@ function bindSmartCanvasVideo(host, nodeId){
             if(host.matches(':hover') || nodeSelected()) playSmartCanvasVideo(video);
         }, 500);
     });
-    host.addEventListener('mouseleave', () => {
+    on(host, 'mousemove', showControlsTemporarily);
+    on(host, 'mouseleave', () => {
+        host._smartCloseCaptureMenu?.();
+        hideControls();
         clearTimer();
         const draggingThisNode = dragState?.id === nodeId || dragState?.groupIds?.includes?.(nodeId);
         if(!nodeSelected() && !draggingThisNode) resetSmartCanvasVideo(video);
     });
-    video.addEventListener('mousedown', e => {
+    on(video, 'mousedown', e => {
         // The native control strip must not move the node. The video surface
         // intentionally bubbles into the node's normal drag handler.
         if(inControlStrip(e)) e.stopPropagation();
     });
-    video.addEventListener('click', e => {
+    on(video, 'click', e => {
         if(inControlStrip(e)) return;
         e.preventDefault();
         if(hoverOnly) return;
         e.stopPropagation();
         e.stopImmediatePropagation();
         if(!nodeSelected()){
+            // Promote an already-visible hover player directly to the selected
+            // state so the controls never pass through their hidden style.
+            clearControlsTimer();
+            host.classList.add('is-controls-visible', 'is-controls-pinned');
             selectedId = nodeId;
             selectedIds = [];
             selectedImage = {nodeId:'', index:-1};
@@ -789,11 +1004,190 @@ function bindSmartCanvasVideo(host, nodeId){
             updateComposer();
         }
         clearTimer();
-        playSmartCanvasVideo(video);
+        userPlaySmartCanvasVideo(video);
     }, true);
-    video.addEventListener('play', () => host.classList.add('is-playing'));
-    video.addEventListener('pause', () => host.classList.remove('is-playing'));
-    if(nodeSelected()) playSmartCanvasVideo(video); else resetSmartCanvasVideo(video);
+    const toggle = host.querySelector('.smart-video-toggle');
+    const mute = host.querySelector('.smart-video-mute');
+    const progress = host.querySelector('.smart-video-progress');
+    const volume = host.querySelector('.smart-video-volume');
+    const capture = host.querySelector('.smart-video-capture');
+    const captureWrap = host.querySelector('.smart-video-capture-wrap');
+    const captureMenu = host.querySelector('.smart-video-capture-menu');
+    let captureCloseTimer = 0;
+    const closeCaptureMenuImmediately = () => {
+        const menuActive = Boolean(captureCloseTimer)
+            || captureWrap?.classList.contains('is-open')
+            || captureWrap?.classList.contains('is-hover-open')
+            || captureMenu?.classList.contains('is-visible');
+        if(!menuActive) return false;
+        if(captureCloseTimer) clearTimeout(captureCloseTimer);
+        captureCloseTimer = 0;
+        captureWrap?.classList.remove('is-open', 'is-hover-open');
+        captureMenu?.classList.remove('is-visible');
+        capture?.setAttribute('aria-expanded', 'false');
+        host.classList.remove('is-controls-interacting');
+        return true;
+    };
+    host._smartCloseCaptureMenu = closeCaptureMenuImmediately;
+    const controls = host.querySelector('.smart-video-controls');
+    ['pointerdown', 'mousedown', 'click', 'dblclick'].forEach(name => on(controls, name, stopControlEvent));
+    ['pointerdown', 'mousedown', 'click', 'dblclick'].forEach(name => on(captureMenu, name, stopControlEvent));
+    on(controls, 'wheel', e => e.stopPropagation(), {passive:true});
+    on(controls, 'pointerdown', () => {
+        host.classList.add('is-controls-interacting');
+        showControlsTemporarily();
+    });
+    const finishControlsInteraction = () => {
+        host.classList.remove('is-controls-interacting');
+        showControlsTemporarily();
+    };
+    on(controls, 'pointerup', finishControlsInteraction);
+    on(controls, 'pointercancel', finishControlsInteraction);
+    on(controls, 'focusin', showControlsTemporarily);
+    on(controls, 'focusout', () => requestAnimationFrame(() => {
+        if(!controls.contains(document.activeElement)) showControlsTemporarily();
+    }));
+    on(toggle, 'click', e => { e.preventDefault(); video.paused ? userPlaySmartCanvasVideo(video) : userPauseSmartCanvasVideo(video); });
+    on(mute, 'click', e => {
+        e.preventDefault();
+        video.muted = !video.muted;
+        if(video.muted) video.dataset.smartUserMuted = '1'; else delete video.dataset.smartUserMuted;
+        if(!video.muted && video.volume === 0) video.volume = .7;
+    });
+    const seekFromProgress = () => {
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
+        if(duration > 0) video.currentTime = duration * (Number(progress.value) / 1000);
+    };
+    let resumeAfterScrub = false;
+    let scrubFinishTimer = 0;
+    const beginProgressScrub = () => {
+        if(progress.dataset.scrubbing === '1') return;
+        resumeAfterScrub = !video.paused && !video.ended;
+        progress.dataset.scrubbing = '1';
+        video.dataset.smartSeeking = '1';
+        delete video.dataset.smartWaiting;
+        host.classList.remove('is-waiting');
+        video.pause?.();
+    };
+    const finishProgressScrub = () => {
+        if(progress.dataset.scrubbing !== '1') return;
+        seekFromProgress();
+        delete progress.dataset.scrubbing;
+        syncSmartVideoControls(host, video);
+        const shouldResume = resumeAfterScrub;
+        resumeAfterScrub = false;
+        const seekEpoch = String(Number(video.dataset.smartSeekEpoch || 0) + 1);
+        video.dataset.smartSeekEpoch = seekEpoch;
+        if(scrubFinishTimer) clearTimeout(scrubFinishTimer);
+        const complete = () => {
+            if(video.dataset.smartSeekEpoch !== seekEpoch) return;
+            if(scrubFinishTimer) clearTimeout(scrubFinishTimer);
+            scrubFinishTimer = 0;
+            delete video.dataset.smartSeeking;
+            delete video.dataset.smartWaiting;
+            syncSmartVideoControls(host, video);
+            if(shouldResume) playSmartCanvasVideo(video);
+        };
+        if(video.seeking){
+            on(video, 'seeked', complete, {once:true});
+            scrubFinishTimer = setTimeout(complete, 1200);
+        } else complete();
+    };
+    on(progress, 'pointerdown', beginProgressScrub);
+    on(progress, 'input', () => {
+        seekFromProgress();
+        progress.style.setProperty('--smart-video-progress', `${Number(progress.value) / 10}%`);
+        host.querySelector('.smart-video-current')?.replaceChildren(document.createTextNode(smartVideoTimeText(video.currentTime)));
+    });
+    on(progress, 'change', finishProgressScrub);
+    on(progress, 'pointerup', finishProgressScrub);
+    on(progress, 'pointercancel', finishProgressScrub);
+    on(volume, 'pointerdown', () => { volume.dataset.adjusting = '1'; });
+    on(volume, 'input', () => {
+        video.volume = Math.max(0, Math.min(1, Number(volume.value)));
+        video.muted = video.volume === 0;
+        if(video.muted) video.dataset.smartUserMuted = '1'; else delete video.dataset.smartUserMuted;
+        volume.style.setProperty('--smart-video-volume', `${video.volume * 100}%`);
+    });
+    on(volume, 'change', () => { delete volume.dataset.adjusting; syncSmartVideoControls(host, video); });
+    on(volume, 'pointerup', () => { delete volume.dataset.adjusting; syncSmartVideoControls(host, video); });
+    const volumeWrap = host.querySelector('.smart-video-volume-wrap');
+    on(volumeWrap, 'mouseleave', () => {
+        delete volume.dataset.adjusting;
+        if(document.activeElement === volume) volume.blur();
+        syncSmartVideoControls(host, video);
+    });
+    on(capture, 'click', e => {
+        e.preventDefault();
+        if(captureCloseTimer) clearTimeout(captureCloseTimer);
+        captureCloseTimer = 0;
+        captureWrap?.classList.toggle('is-open');
+        const open = captureWrap?.classList.contains('is-open');
+        captureMenu?.classList.toggle('is-visible', Boolean(open));
+        capture?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    host.querySelectorAll('.smart-video-capture-menu [data-capture-kind]').forEach(button => {
+        on(button, 'click', e => {
+            e.preventDefault();
+            if(host.classList.contains('is-capturing')) return;
+            if(captureCloseTimer) clearTimeout(captureCloseTimer);
+            captureCloseTimer = 0;
+            captureWrap?.classList.remove('is-open');
+            captureWrap?.classList.remove('is-hover-open');
+            captureMenu?.classList.remove('is-visible');
+            capture?.setAttribute('aria-expanded', 'false');
+            exportSmartCanvasVideoFrame(video, nodeId, button.dataset.captureKind || 'current');
+        });
+    });
+    on(captureWrap, 'mouseenter', () => {
+        if(captureCloseTimer) clearTimeout(captureCloseTimer);
+        captureCloseTimer = 0;
+        captureWrap?.classList.add('is-hover-open');
+        captureMenu?.classList.add('is-visible');
+        host.classList.add('is-controls-interacting');
+        showControlsTemporarily();
+    });
+    const scheduleCaptureMenuClose = () => {
+        if(captureCloseTimer) clearTimeout(captureCloseTimer);
+        captureCloseTimer = setTimeout(() => {
+            closeCaptureMenuImmediately();
+            showControlsTemporarily();
+        }, 320);
+    };
+    on(captureWrap, 'mouseleave', scheduleCaptureMenuClose);
+    on(captureMenu, 'mouseenter', () => {
+        if(captureCloseTimer) clearTimeout(captureCloseTimer);
+        captureCloseTimer = 0;
+        captureMenu?.classList.add('is-visible');
+        host.classList.add('is-controls-interacting');
+    });
+    on(captureMenu, 'mouseleave', scheduleCaptureMenuClose);
+    on(video, 'play', () => {
+        video.dataset.smartHasPlayed = '1';
+        delete video.dataset.smartWaiting;
+        syncSmartVideoControls(host, video);
+        syncControlsPinned();
+        if(!nodeSelected()) showControlsTemporarily();
+    });
+    on(video, 'playing', () => { delete video.dataset.smartWaiting; syncSmartVideoControls(host, video); });
+    on(video, 'pause', () => syncSmartVideoControls(host, video));
+    on(video, 'timeupdate', () => syncSmartVideoControls(host, video));
+    on(video, 'durationchange', () => syncSmartVideoControls(host, video));
+    on(video, 'loadedmetadata', () => syncSmartVideoControls(host, video));
+    on(video, 'volumechange', () => syncSmartVideoControls(host, video));
+    on(video, 'waiting', () => {
+        if(video.dataset.smartSeeking === '1') return;
+        video.dataset.smartWaiting = '1';
+        syncSmartVideoControls(host, video);
+    });
+    on(video, 'error', () => { delete video.dataset.smartWaiting; host.classList.add('has-error'); syncSmartVideoControls(host, video); });
+    syncSmartVideoControls(host, video);
+    syncControlsPinned();
+    if(nodeSelected()){
+        if(video.dataset.smartSelectionActive !== '1') delete video.dataset.smartUserPaused;
+        video.dataset.smartSelectionActive = '1';
+        playSmartCanvasVideo(video);
+    } else resetSmartCanvasVideo(video);
 }
 function syncSmartCanvasVideoSelection(){
     world?.querySelectorAll?.('.smart-canvas-video-host').forEach(host => {
@@ -806,15 +1200,22 @@ function syncSmartCanvasVideoSelection(){
             return;
         }
         if(isNodeSelected(nodeId)){
+            host._smartSyncControlsPinned?.();
+            if(video.dataset.smartSelectionActive !== '1') delete video.dataset.smartUserPaused;
+            video.dataset.smartSelectionActive = '1';
             host.dataset.selectionPlayback = '1';
             playSmartCanvasVideo(video);
             return;
         }
         if(host.dataset.selectionPlayback === '1'){
             delete host.dataset.selectionPlayback;
+            host._smartCloseCaptureMenu?.();
             resetSmartCanvasVideo(video);
+            host._smartSyncControlsPinned?.();
             return;
         }
+        host._smartCloseCaptureMenu?.();
+        host._smartSyncControlsPinned?.();
         if(!host.matches(':hover')) resetSmartCanvasVideo(video);
     });
 }
@@ -7786,7 +8187,10 @@ function captureMediaPlaybackState(media){
         playbackRate:Number.isFinite(media.playbackRate) ? media.playbackRate : 1,
         muted:Boolean(media.muted),
         volume:Number.isFinite(media.volume) ? media.volume : 1,
-        smartPlaybackEpoch:media.matches?.('.smart-canvas-video') ? String(media.dataset.smartPlaybackEpoch || '0') : ''
+        smartPlaybackEpoch:media.matches?.('.smart-canvas-video') ? String(media.dataset.smartPlaybackEpoch || '0') : '',
+        smartUserPaused:media.matches?.('.smart-canvas-video') && media.dataset.smartUserPaused === '1',
+        smartUserMuted:media.matches?.('.smart-canvas-video') && media.dataset.smartUserMuted === '1',
+        smartSelectionActive:media.matches?.('.smart-canvas-video') && media.dataset.smartSelectionActive === '1'
     };
 }
 function restoreMediaPlaybackState(media, state){
@@ -7798,6 +8202,11 @@ function restoreMediaPlaybackState(media, state){
     try { media.playbackRate = state.playbackRate || 1; } catch(e) {}
     try { media.muted = state.muted; } catch(e) {}
     try { media.volume = state.volume; } catch(e) {}
+    if(media.matches?.('.smart-canvas-video')){
+        if(state.smartUserPaused) media.dataset.smartUserPaused = '1'; else delete media.dataset.smartUserPaused;
+        if(state.smartUserMuted) media.dataset.smartUserMuted = '1'; else delete media.dataset.smartUserMuted;
+        if(state.smartSelectionActive) media.dataset.smartSelectionActive = '1'; else delete media.dataset.smartSelectionActive;
+    }
     const applyTime = () => {
         if(!smartStateIsCurrent()) return;
         if(Number.isFinite(state.currentTime) && state.currentTime > 0 && Math.abs((media.currentTime || 0) - state.currentTime) > 0.2){
