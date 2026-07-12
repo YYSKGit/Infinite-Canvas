@@ -5,6 +5,8 @@ const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
 const shell = document.getElementById('shell');
 const world = document.getElementById('world');
 const composer = document.getElementById('composer');
+const composerExpandBackdrop = document.getElementById('composerExpandBackdrop');
+if(composerExpandBackdrop?.parentElement !== shell) shell.appendChild(composerExpandBackdrop);
 const createMenu = document.getElementById('createMenu');
 const smartCanvasSwitcher = document.getElementById('smartCanvasSwitcher');
 const smartCanvasSwitcherBtn = document.getElementById('smartCanvasSwitcherBtn');
@@ -86,6 +88,8 @@ const promptTemplateLibrarySelect = document.getElementById('promptTemplateLibra
 const promptTemplateCats = document.getElementById('promptTemplateCats');
 const promptTemplateBody = document.getElementById('promptTemplateBody');
 const composerTemplateBtn = document.getElementById('composerTemplateBtn');
+const composerExpandBtn = document.getElementById('composerExpandBtn');
+let composerExpanded = false;
 let minimapViewport = document.getElementById('minimapViewport');
 let canvas = null;
 let canvasUsesConnections = true;
@@ -9311,7 +9315,7 @@ function render(){
     });
     // 用户正在提示词框输入时不要移动 composer:移动 DOM 会打断输入法合成、中断输入。
     // composer 已在 keepEls 中(未被移除),不重排也不影响显示(z-index 固定)。
-    if(composerEl && !promptHadFocus) world.appendChild(composerEl);
+    if(composerEl && !promptHadFocus && !composerExpanded) world.appendChild(composerEl);
     world.insertAdjacentHTML('beforeend', renderConnections());
     nodeHtmlEntries.forEach(entry => {
         const fresh = renderedNodeEls.get(entry.node.id);
@@ -13215,6 +13219,7 @@ function loadPromptDraft(subject){
 }
 function positionComposerForNode(node){
     if(!node) return;
+    if(composerExpanded) return;
     const rect = nodeRect(node);
     const gap = 14;
     const cardW = 520;
@@ -13222,12 +13227,39 @@ function positionComposerForNode(node){
     composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;
 }
+function setComposerExpanded(expanded){
+    composerExpanded = Boolean(expanded && selectedNode());
+    if(composerExpanded){
+        shell.appendChild(composer);
+        composer.style.removeProperty('width');
+        composer.style.removeProperty('left');
+        composer.style.removeProperty('top');
+    } else if(composer?.parentElement !== world){
+        world.appendChild(composer);
+    }
+    composer?.classList.toggle('expanded', composerExpanded);
+    composerExpandBackdrop?.classList.toggle('open', composerExpanded);
+    composerExpandBtn?.classList.toggle('active', composerExpanded);
+    composerExpandBtn?.setAttribute('aria-pressed', composerExpanded ? 'true' : 'false');
+    composerExpandBtn?.setAttribute('title', composerExpanded ? '收起输入框' : '放大输入框');
+    composerExpandBtn?.setAttribute('aria-label', composerExpanded ? '收起输入框' : '放大输入框');
+    if(composerExpandBtn) composerExpandBtn.innerHTML = `<i data-lucide="${composerExpanded ? 'minimize-2' : 'maximize-2'}"></i><span>${composerExpanded ? '收起输入框' : '放大输入框'}</span>`;
+    if(composerExpanded){
+        closeAllSmartPopovers();
+        closePromptTemplatePanel();
+    }
+    const node = selectedNode();
+    if(node) positionComposerForNode(node);
+    refreshIcons();
+    if(composerExpanded) promptInput?.focus({preventScroll:true});
+}
 function setComposerOpen(open){
     if(!composer) return;
     const isOpen = Boolean(open);
     composer.classList.toggle('open', isOpen);
     composer.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
     if('inert' in composer) composer.inert = !isOpen;
+    if(!isOpen && composerExpanded) setComposerExpanded(false);
 }
 function updateComposer(){
     const node = selectedNode();
@@ -19180,6 +19212,12 @@ if(composerTemplateBtn) composerTemplateBtn.onclick = event => {
     }
     openPromptTemplatePanel(activeComposerNode()?.id || selectedNode()?.id || '', promptTemplateSelectedId, {target:'composer'});
 };
+if(composerExpandBtn) composerExpandBtn.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
+    setComposerExpanded(!composerExpanded);
+};
+composerExpandBackdrop?.addEventListener('click', () => setComposerExpanded(false));
 if(promptPresetSelect) promptPresetSelect.onchange = () => renderPromptPresetPanel(promptPresetSelect.value);
 [promptPresetName, promptPresetText].forEach(input => {
     input?.addEventListener('input', () => {
@@ -19845,8 +19883,15 @@ document.getElementById('imageEditStage').addEventListener('wheel', event => {
     stage.scrollTop = contentY * scale - my;
 }, {passive:false});
 window.addEventListener('resize', () => {
+    if(composerExpanded && selectedNode()) positionComposerForNode(selectedNode());
     if(cropState) syncImageEditOverflow();
     if(panoramaState.enabled) resizePanoramaViewer();
+});
+document.addEventListener('keydown', event => {
+    if(event.key === 'Escape' && composerExpanded){
+        event.preventDefault();
+        setComposerExpanded(false);
+    }
 });
 window.addEventListener('studio-theme-change', event => applyTheme(event.detail?.theme || 'light'));
 try {

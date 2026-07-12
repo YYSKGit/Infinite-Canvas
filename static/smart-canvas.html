@@ -20,11 +20,12 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1783387674"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1783861751">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1783862291">
 </head>
 <body>
     <div id="shell" class="shell">
         <div id="world" class="world">
+            <div id="composerExpandBackdrop" class="composer-expand-backdrop" aria-hidden="true"></div>
             <div id="composer" class="composer">
                 <div class="composer-card">
                     <div class="composer-head">
@@ -54,6 +55,9 @@
                             <div id="composerHeadQuickActions" class="composer-head-quick-actions"></div>
                             <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
                                 <i data-lucide="library"></i><span data-i18n="smart.promptTemplateLibrary">模板库</span>
+                            </button>
+                            <button id="composerExpandBtn" class="composer-template-btn composer-expand-btn" type="button" title="放大输入框" aria-label="放大输入框" aria-pressed="false">
+                                <i data-lucide="maximize-2"></i><span>放大输入框</span>
                             </button>
                         </div>
                     </div>
@@ -485,6 +489,6 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1783861484"></script>
+    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1783861487"></script>
 </body>
 </html>
