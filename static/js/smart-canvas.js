@@ -9453,6 +9453,12 @@ function measureSmartNodeImages(){
 function bindConnectionEvents(){
     world.querySelectorAll('[data-conn-index]').forEach(el => {
         if(el.classList.contains('conn-hit')){
+            // A native double-click emits click events first. Keep those clicks
+            // from reaching shell.onclick, which clears the current selection.
+            el.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
             el.addEventListener('dblclick', e => {
                 e.preventDefault(); e.stopPropagation();
                 disconnectConnections(el.dataset.connIndex);
