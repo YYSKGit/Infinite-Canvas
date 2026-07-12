@@ -100,16 +100,30 @@ class ConnectionManager:
         self.connection_clients[websocket] = client_id or f"anon-{id(websocket)}"
         if client_id:
             self.user_connections[client_id] = websocket
-        print(f"WS Connected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
+        SERVER_LOGGER.info(
+            "WebSocket connected. Total: %d, Online: %d",
+            len(self.active_connections),
+            self.online_count(),
+        )
         await self.broadcast_count()
 
-    async def disconnect(self, websocket: WebSocket, client_id: str = None):
-        if websocket in self.active_connections:
+    def _remove_connection(self, websocket: WebSocket):
+        """Remove a websocket from every index. Safe to call more than once."""
+        while websocket in self.active_connections:
             self.active_connections.remove(websocket)
-        self.connection_clients.pop(websocket, None)
+        mapped_client_id = self.connection_clients.pop(websocket, None)
+        if mapped_client_id and self.user_connections.get(mapped_client_id) is websocket:
+            self.user_connections.pop(mapped_client_id, None)
+
+    async def disconnect(self, websocket: WebSocket, client_id: str = None):
+        self._remove_connection(websocket)
         if client_id and self.user_connections.get(client_id) is websocket:
-            del self.user_connections[client_id]
-        print(f"WS Disconnected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
+            self.user_connections.pop(client_id, None)
+        SERVER_LOGGER.info(
+            "WebSocket disconnected. Total: %d, Online: %d",
+            len(self.active_connections),
+            self.online_count(),
+        )
         await self.broadcast_count()
 
     def online_count(self):
@@ -125,18 +139,16 @@ class ConnectionManager:
         for connection in self.active_connections[:]:
             try:
                 await connection.send_text(data)
-            except Exception as e:
-                print(f"Broadcast error: {e}")
-                self.active_connections.remove(connection)
+            except Exception:
+                self._remove_connection(connection)
 
     async def broadcast_new_image(self, image_data: dict):
         data = json.dumps({"type": "new_image", "data": image_data})
         for connection in self.active_connections[:]:
             try:
                 await connection.send_text(data)
-            except Exception as e:
-                print(f"Broadcast image error: {e}")
-                self.active_connections.remove(connection)
+            except Exception:
+                self._remove_connection(connection)
 
     async def broadcast_canvas_updated(self, canvas_id: str, updated_at: int, client_id: str = ""):
         data = json.dumps({
@@ -148,9 +160,8 @@ class ConnectionManager:
         for connection in self.active_connections[:]:
             try:
                 await connection.send_text(data)
-            except Exception as e:
-                print(f"Broadcast canvas error: {e}")
-                self.active_connections.remove(connection)
+            except Exception:
+                self._remove_connection(connection)
 
     async def broadcast_asset_library_updated(self, updated_at: int = 0):
         data = json.dumps({
@@ -160,17 +171,16 @@ class ConnectionManager:
         for connection in self.active_connections[:]:
             try:
                 await connection.send_text(data)
-            except Exception as e:
-                print(f"Broadcast asset library error: {e}")
-                self.active_connections.remove(connection)
+            except Exception:
+                self._remove_connection(connection)
 
     async def send_personal_message(self, message: dict, client_id: str):
         ws = self.user_connections.get(client_id)
         if ws:
             try:
                 await ws.send_text(json.dumps(message))
-            except Exception as e:
-                print(f"Personal message error for {client_id}: {e}")
+            except Exception:
+                self._remove_connection(ws)
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None

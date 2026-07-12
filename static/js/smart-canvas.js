@@ -745,8 +745,21 @@ function syncSmartVideoControls(host, video){
     host.classList.toggle('is-playing', playing);
     host.classList.toggle('is-waiting', Boolean(video.dataset.smartWaiting === '1'));
 }
+const smartVideoUserPausedKeys = new Set();
+function smartVideoPlaybackKey(video){
+    if(!video) return '';
+    const nodeId = video.closest('.image-node')?.dataset?.id || '';
+    const url = video.dataset?.url || video.currentSrc || video.getAttribute?.('src') || '';
+    return nodeId && url ? `${nodeId}\n${url}` : '';
+}
+function smartVideoHasUserPause(video){
+    const key = smartVideoPlaybackKey(video);
+    return video?.dataset?.smartUserPaused === '1' || Boolean(key && smartVideoUserPausedKeys.has(key));
+}
 function resetSmartCanvasVideo(video){
     if(!video) return;
+    const playbackKey = smartVideoPlaybackKey(video);
+    if(playbackKey) smartVideoUserPausedKeys.delete(playbackKey);
     if(video.dataset.smartReset === '1') return;
     const host = video.closest('.smart-canvas-video-host');
     const desiredMuted = video.dataset.smartUserMuted === '1';
@@ -804,7 +817,7 @@ function finishSmartVideoAltCopyDrag(){
             const video = host.querySelector('.smart-canvas-video');
             setTimeout(() => {
                 if(host.isConnected && host.matches(':hover')) playSmartCanvasVideo(video);
-            }, 500);
+            }, 400);
         });
     });
 }
@@ -814,7 +827,10 @@ function smartVideoContainerIsGroup(node){
 function playSmartCanvasVideo(video){
     if(!video) return;
     if(smartVideoAltCopyDragActive){ resetSmartCanvasVideo(video); return; }
-    if(video.dataset.smartUserPaused === '1') return;
+    if(smartVideoHasUserPause(video)){
+        video.dataset.smartUserPaused = '1';
+        return;
+    }
     delete video.dataset.smartReset;
     const host = video.closest('.smart-canvas-video-host');
     const desiredMuted = video.dataset.smartUserMuted === '1';
@@ -840,11 +856,15 @@ function playSmartCanvasVideo(video){
 }
 function userPlaySmartCanvasVideo(video){
     if(!video) return;
+    const playbackKey = smartVideoPlaybackKey(video);
+    if(playbackKey) smartVideoUserPausedKeys.delete(playbackKey);
     delete video.dataset.smartUserPaused;
     playSmartCanvasVideo(video);
 }
 function userPauseSmartCanvasVideo(video){
     if(!video) return;
+    const playbackKey = smartVideoPlaybackKey(video);
+    if(playbackKey) smartVideoUserPausedKeys.add(playbackKey);
     video.dataset.smartPlaybackWanted = '0';
     video.dataset.smartUserPaused = '1';
     video.pause?.();
@@ -935,7 +955,9 @@ function bindSmartCanvasVideo(host, nodeId){
     const controlsPlaybackStarted = () => video.dataset.smartHasPlayed === '1';
     const hideControls = () => {
         clearControlsTimer();
-        if((nodeSelected() && controlsPlaybackStarted()) || host.classList.contains('is-controls-interacting')) return;
+        if((nodeSelected() && controlsPlaybackStarted())
+            || host.classList.contains('is-controls-interacting')
+            || host.classList.contains('is-controls-hovered')) return;
         host.classList.remove('is-controls-visible');
     };
     const showControlsTemporarily = () => {
@@ -973,11 +995,12 @@ function bindSmartCanvasVideo(host, nodeId){
         hoverTimer = setTimeout(() => {
             hoverTimer = 0;
             if(host.matches(':hover') || nodeSelected()) playSmartCanvasVideo(video);
-        }, 500);
+        }, 400);
     });
     on(host, 'mousemove', showControlsTemporarily);
     on(host, 'mouseleave', () => {
         host._smartCloseCaptureMenu?.();
+        host.classList.remove('is-controls-hovered');
         hideControls();
         clearTimer();
         const draggingThisNode = dragState?.id === nodeId || dragState?.groupIds?.includes?.(nodeId);
@@ -1035,6 +1058,14 @@ function bindSmartCanvasVideo(host, nodeId){
     ['pointerdown', 'mousedown', 'click', 'dblclick'].forEach(name => on(controls, name, stopControlEvent));
     ['pointerdown', 'mousedown', 'click', 'dblclick'].forEach(name => on(captureMenu, name, stopControlEvent));
     on(controls, 'wheel', e => e.stopPropagation(), {passive:true});
+    on(controls, 'mouseenter', () => {
+        host.classList.add('is-controls-hovered', 'is-controls-visible');
+        clearControlsTimer();
+    });
+    on(controls, 'mouseleave', () => {
+        host.classList.remove('is-controls-hovered');
+        if(host.matches(':hover')) showControlsTemporarily(); else hideControls();
+    });
     on(controls, 'pointerdown', () => {
         host.classList.add('is-controls-interacting');
         showControlsTemporarily();
