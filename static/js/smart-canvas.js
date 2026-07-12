@@ -893,6 +893,8 @@ async function exportSmartCanvasVideoFrame(video, nodeId, which='current'){
         const point = rect ? {x:rect.x + rect.width + 240, y:rect.y + rect.height / 2} : viewportCenter();
         pushUndo();
         const newNode = createImageNodeAt(point, [frame], {select:true, skipUndo:true});
+        newNode.originalMediaSource = 'video-frame';
+        addConnection(nodeId, newNode.id, 'video-frame');
         selectedIds = [];
         selectedImage = {nodeId:newNode.id, index:0};
         render();
@@ -7706,6 +7708,7 @@ function pasteAssetsFromInbox(){
         const r = Math.floor(i / cols), c = i % cols;
         const p = {x: startX + c * cell, y: startY + r * cell};
         const node = createImageNodeAt(p, [assetNodeImageFromItem(it)], {skipUndo:true, select:false});
+        if(node) node.originalMediaSource = 'upload';
         if(node) created.push(node.id);
     });
     selectedId = created.length === 1 ? created[0] : '';
@@ -7803,6 +7806,7 @@ function renderConnections(){
         const fr = nodeConnectionRect(fromNode), tr = nodeConnectionRect(toNode);
         const kind = item.kind;
         const isHistory = kind === 'history';
+        const isDashedRelation = isHistory || kind === 'video-frame';
         const dataIndex = item.indices.join(',');
         const isInsertPreview = item.indices.some(i => loopInsertPreview?.index === i);
         const edgeKeys = item.targets.map(t => `${item.from}->${t}`);
@@ -7830,7 +7834,7 @@ function renderConnections(){
             isCascade && cascadeState === 'done' ? 'conn-cascade-done' : '',
             isCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
             isCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
-            isHistory ? 'conn-history' : '',
+            isDashedRelation ? 'conn-history' : '',
             isSelectedLine ? 'conn-selected' : ''
         ].filter(Boolean).join(' ');
         const color = isCascade ? '#16a34a' : isHistory ? 'rgba(100,116,139,0.46)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
@@ -10343,6 +10347,7 @@ function clearNodeMediaBeforeDelete(id){
     node.pending = 0;
     node.running = false;
     node.title = tr('smart.createImportNode');
+    delete node.originalMediaSource;
     delete node.w;
     delete node.h;
     const history = historyGroupForNode(node);
@@ -10449,6 +10454,9 @@ function deleteImage(id, imageIndex){
     if(!node || imageIndex < 0) return;
     pushUndo();
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
+    if(!node.images.some(image => image?.url)){
+        delete node.originalMediaSource;
+    }
     if(node.images.length <= 1){
         node.title = 'Image';
         if(isSmartGroupNode(node)){
@@ -11605,6 +11613,8 @@ async function exportVideoFrame(which='current'){
             : viewportCenter();
         pushUndo();
         const newNode = createImageNodeAt(point, [frame], {select:true, skipUndo:true});
+        newNode.originalMediaSource = 'video-frame';
+        if(editing.node?.id) addConnection(editing.node.id, newNode.id, 'video-frame');
         selectedIds = [];
         selectedImage = {nodeId:newNode.id, index:0};
         render();
@@ -13199,7 +13209,8 @@ function updateComposer(){
         return;
     }
     setComposerOpen(!!node);
-    if(!isSmartRunnableNode(node)){
+    const blocksOriginalMediaEditing = node?.originalMediaSource === 'video-frame' || node?.originalMediaSource === 'upload';
+    if(!isSmartRunnableNode(node) || blocksOriginalMediaEditing){
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         savePromptDraftForCurrent();
         setComposerOpen(false);
@@ -13918,6 +13929,9 @@ function appendImagesToSmartNode(uploaded, targetId='', opts={}){
     }
     const previousCount = (node.images || []).length;
     node.images = [...(node.images || []), ...images.map(file => ({...file, kind:file.kind || mediaKindForItem(file)}))];
+    if(opts.originalMediaSource && (previousCount === 0 || !isGeneratedSmartOutputNode(node))){
+        node.originalMediaSource = opts.originalMediaSource;
+    }
     if(node.images.length > 1){
         node.title = uploadTitleForItems(node.images, 'Group');
         if(previousCount <= 1 && (!Number.isFinite(Number(node.scale)) || Number(node.scale) === MEDIA_NODE_DEFAULT_SCALE || Number(node.scale) === MEDIA_GROUP_PREVIOUS_DEFAULT_SCALE)){
@@ -13940,7 +13954,7 @@ async function handleFiles(files, targetId='', opts={}){
         const uploaded = await uploadFiles(fileList);
         if(!uploaded.length) return;
         if(!opts.skipUndo) pushUndo();
-        appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(fileList[index])})), targetId, opts);
+        appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(fileList[index])})), targetId, {...opts, originalMediaSource:opts.originalMediaSource || 'upload'});
     } catch(e) { toast(e.message || tr('smart.toastUploadFail')); }
 }
 async function importSmartLocalImages(paths){
@@ -13956,13 +13970,14 @@ async function importSmartLocalImages(paths){
 }
 async function handleSmartImageDropPayload(payload, targetId='', opts={}){
     try {
-        if(payload.type === 'files') await handleFiles(payload.files, targetId, opts);
+        const uploadOpts = {...opts, originalMediaSource:opts.originalMediaSource || 'upload'};
+        if(payload.type === 'files') await handleFiles(payload.files, targetId, uploadOpts);
         else if(payload.type === 'localPaths') {
             if(!opts.skipUndo) pushUndo();
-            appendImagesToSmartNode(await importSmartLocalImages(payload.localPaths), targetId, opts);
+            appendImagesToSmartNode(await importSmartLocalImages(payload.localPaths), targetId, uploadOpts);
         } else if(payload.type === 'url') {
             if(!opts.skipUndo) pushUndo();
-            appendImagesToSmartNode([{url:payload.url, name:smartImageNameFromUrl(payload.url), kind:'image'}], targetId, opts);
+            appendImagesToSmartNode([{url:payload.url, name:smartImageNameFromUrl(payload.url), kind:'image'}], targetId, uploadOpts);
         }
     } catch(e) {
         toast(e.message || tr('smart.toastUploadFail'));
@@ -18756,7 +18771,8 @@ shell.ondrop = async e => {
             const asset = JSON.parse(assetRaw);
             if(asset?.url) {
                 pushUndo();
-                createImageNodeAt(p, [assetNodeImageFromItem(asset)], {skipUndo:true});
+                const node = createImageNodeAt(p, [assetNodeImageFromItem(asset)], {skipUndo:true});
+                if(node) node.originalMediaSource = 'upload';
             }
             return;
         } catch {}
