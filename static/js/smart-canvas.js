@@ -13227,18 +13227,97 @@ function positionComposerForNode(node){
     composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;
 }
+let composerExpandAnimationSeq = 0;
+function capturePromptSelection(){
+    const selection = window.getSelection?.();
+    if(!selection?.rangeCount || !promptInput) return null;
+    const anchorNode = selection.anchorNode;
+    const focusNode = selection.focusNode;
+    if(!anchorNode || !focusNode || !promptInput.contains(anchorNode) || !promptInput.contains(focusNode)) return null;
+    return {
+        anchorNode,
+        anchorOffset:selection.anchorOffset,
+        focusNode,
+        focusOffset:selection.focusOffset
+    };
+}
+function restorePromptSelection(snapshot){
+    if(!snapshot || !promptInput?.isConnected) return false;
+    const {anchorNode, anchorOffset, focusNode, focusOffset} = snapshot;
+    if(!anchorNode?.isConnected || !focusNode?.isConnected || !promptInput.contains(anchorNode) || !promptInput.contains(focusNode)) return false;
+    const selection = window.getSelection?.();
+    if(!selection) return false;
+    promptInput.focus({preventScroll:true});
+    try {
+        if(typeof selection.setBaseAndExtent === 'function'){
+            selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+        } else {
+            const range = document.createRange();
+            range.setStart(anchorNode, anchorOffset);
+            range.setEnd(focusNode, focusOffset);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+        return true;
+    } catch(e){
+        return false;
+    }
+}
 function setComposerExpanded(expanded){
-    composerExpanded = Boolean(expanded && selectedNode());
+    const nextExpanded = Boolean(expanded && selectedNode());
+    if(nextExpanded === composerExpanded) return;
+    const promptSelection = capturePromptSelection();
+    composerExpanded = nextExpanded;
+    const animationSeq = ++composerExpandAnimationSeq;
+    const composerCard = composer.querySelector('.composer-card');
+    composer.getAnimations?.().forEach(animation => animation.cancel());
+    composerCard?.getAnimations?.().forEach(animation => animation.cancel());
+    composerExpandBackdrop?.getAnimations?.().forEach(animation => animation.cancel());
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     if(composerExpanded){
         shell.appendChild(composer);
         composer.style.removeProperty('width');
         composer.style.removeProperty('left');
         composer.style.removeProperty('top');
-    } else if(composer?.parentElement !== world){
-        world.appendChild(composer);
+        restorePromptSelection(promptSelection);
+        composer.classList.add('expanded');
+        composerExpandBackdrop?.classList.add('open');
+        if(!reduceMotion){
+            composer.animate([{opacity:0}, {opacity:1}], {duration:200, easing:'ease-out'});
+            composerCard?.animate([
+                {transform:'scale(.96)'},
+                {transform:'scale(1)'}
+            ], {duration:220, easing:'cubic-bezier(.2,.8,.2,1)'});
+            composerExpandBackdrop?.animate([{opacity:0}, {opacity:1}], {duration:190, easing:'ease-out'});
+        }
+    } else {
+        const finishCollapse = () => {
+            if(animationSeq !== composerExpandAnimationSeq || composerExpanded) return;
+            composer.getAnimations?.().forEach(animation => animation.cancel());
+            composerCard?.getAnimations?.().forEach(animation => animation.cancel());
+            composerExpandBackdrop?.getAnimations?.().forEach(animation => animation.cancel());
+            composer.classList.add('expansion-repositioning');
+            composer.classList.remove('expanded');
+            composerExpandBackdrop?.classList.remove('open');
+            if(composer?.parentElement !== world) world.appendChild(composer);
+            const node = selectedNode();
+            if(node) positionComposerForNode(node);
+            restorePromptSelection(promptSelection);
+            requestAnimationFrame(() => composer.classList.remove('expansion-repositioning'));
+        };
+        if(reduceMotion){
+            finishCollapse();
+        } else {
+            composer.animate([{opacity:1}, {opacity:0}], {duration:170, easing:'ease-in', fill:'both'}).finished
+                .then(finishCollapse)
+                .catch(() => {});
+            composerCard?.animate([
+                {transform:'scale(1)'},
+                {transform:'scale(.96)'}
+            ], {duration:170, easing:'cubic-bezier(.4,0,1,1)', fill:'both'});
+            composerExpandBackdrop?.animate([{opacity:1}, {opacity:0}], {duration:170, easing:'ease-in', fill:'both'});
+        }
     }
-    composer?.classList.toggle('expanded', composerExpanded);
-    composerExpandBackdrop?.classList.toggle('open', composerExpanded);
     composerExpandBtn?.classList.toggle('active', composerExpanded);
     composerExpandBtn?.setAttribute('aria-pressed', composerExpanded ? 'true' : 'false');
     composerExpandBtn?.setAttribute('title', composerExpanded ? '收起输入框' : '放大输入框');
@@ -13248,10 +13327,8 @@ function setComposerExpanded(expanded){
         closeAllSmartPopovers();
         closePromptTemplatePanel();
     }
-    const node = selectedNode();
-    if(node) positionComposerForNode(node);
     refreshIcons();
-    if(composerExpanded) promptInput?.focus({preventScroll:true});
+    if(composerExpanded && !promptSelection) promptInput?.focus({preventScroll:true});
 }
 function setComposerOpen(open){
     if(!composer) return;
@@ -19012,15 +19089,21 @@ if(promptResize){
         };
     });
 }
-runBtn.onclick = runGeneration;
+runBtn.onclick = event => {
+    const result = runGeneration(event);
+    if(composerExpanded) setComposerExpanded(false);
+    return result;
+};
 cascadeRunBtn.onclick = () => {
     const node = selectedNode();
     const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
     if(loopId && smartCascadeIsLoopRunning(loopId)) {
         requestSmartCascadeStop(loopId);
+        if(composerExpanded) setComposerExpanded(false);
         return;
     }
     runSmartCascade();
+    if(composerExpanded) setComposerExpanded(false);
 };
 fileInput.onchange = () => {
     const groupPoint = pendingGroupUploadPoint;
@@ -19217,7 +19300,56 @@ if(composerExpandBtn) composerExpandBtn.onclick = event => {
     event.stopPropagation();
     setComposerExpanded(!composerExpanded);
 };
-composerExpandBackdrop?.addEventListener('click', () => setComposerExpanded(false));
+let composerBackdropPointer = null;
+composerExpandBackdrop?.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    composerBackdropPointer = {
+        id:event.pointerId,
+        x:event.clientX,
+        y:event.clientY,
+        moved:event.button !== 0
+    };
+    composerExpandBackdrop.setPointerCapture?.(event.pointerId);
+});
+composerExpandBackdrop?.addEventListener('pointermove', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if(!composerBackdropPointer || composerBackdropPointer.id !== event.pointerId) return;
+    if(Math.hypot(event.clientX - composerBackdropPointer.x, event.clientY - composerBackdropPointer.y) > 5){
+        composerBackdropPointer.moved = true;
+    }
+});
+composerExpandBackdrop?.addEventListener('pointerup', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    composerExpandBackdrop.releasePointerCapture?.(event.pointerId);
+});
+composerExpandBackdrop?.addEventListener('pointercancel', event => {
+    event.stopPropagation();
+    composerBackdropPointer = null;
+});
+['mousedown','mousemove','mouseup'].forEach(type => {
+    composerExpandBackdrop?.addEventListener(type, event => {
+        event.preventDefault();
+        event.stopPropagation();
+    });
+});
+composerExpandBackdrop?.addEventListener('wheel', event => {
+    event.preventDefault();
+    event.stopPropagation();
+}, {passive:false});
+composerExpandBackdrop?.addEventListener('contextmenu', event => {
+    event.preventDefault();
+    event.stopPropagation();
+});
+composerExpandBackdrop?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const shouldCollapse = !composerBackdropPointer?.moved;
+    composerBackdropPointer = null;
+    if(shouldCollapse) setComposerExpanded(false);
+});
 if(promptPresetSelect) promptPresetSelect.onchange = () => renderPromptPresetPanel(promptPresetSelect.value);
 [promptPresetName, promptPresetText].forEach(input => {
     input?.addEventListener('input', () => {
