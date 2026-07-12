@@ -499,7 +499,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .smart-video-time { flex:0 0 auto; color:rgba(255,255,255,.92); font-size:10px; font-weight:650; line-height:1; font-variant-numeric:tabular-nums; text-shadow:0 1px 2px rgba(0,0,0,.45); pointer-events:none; }
 .smart-video-progress,.smart-video-volume { --smart-video-progress:0%; --smart-video-volume:100%; height:14px; padding:0; margin:0; border:0; outline:0; background:transparent; cursor:pointer; appearance:none; -webkit-appearance:none; }
 .smart-video-progress { min-width:34px; flex:1 1 auto; }
-.smart-video-volume { width:0; flex:0 0 0; opacity:0; pointer-events:none; transition:width .16s ease, flex-basis .16s ease, opacity .12s ease; }
+.smart-video-volume { width:0; flex:0 0 0; opacity:0; pointer-events:none; transition:width .26s cubic-bezier(.22,.61,.36,1),flex-basis .26s cubic-bezier(.22,.61,.36,1),opacity .22s ease; }
 .smart-video-volume-wrap { display:flex; align-items:center; gap:3px; flex:0 0 auto; }
 .smart-video-volume-wrap:hover .smart-video-volume,.smart-video-volume:focus { width:48px; flex-basis:48px; opacity:1; pointer-events:auto; }
 .smart-video-capture-wrap { position:relative; display:flex; align-items:center; flex:0 0 auto; }
