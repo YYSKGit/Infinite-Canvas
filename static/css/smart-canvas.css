@@ -982,10 +982,10 @@ video.node-img { object-fit:cover; background:#0f172a; }
     .prompt-template-list { max-height:220px; }
     .prompt-template-group-list { grid-template-columns:1fr; }
 }
-.run-btn { width:32px; height:32px; min-width:32px; padding:0; border-radius:11px; border:1px solid transparent; background:var(--strong); color:var(--strong-text); display:flex; align-items:center; justify-content:center; gap:0; white-space:nowrap; transition:transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease; }
+.run-btn { width:25px; height:25px; min-width:25px; padding:0; border-radius:8px; border:1px solid transparent; background:var(--strong); color:var(--strong-text); display:flex; align-items:center; justify-content:center; gap:0; white-space:nowrap; transition:transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease; }
 .run-btn:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 14px rgba(15,23,42,.18); }
 .composer-actions .run-btn span { display:none; }
-.run-btn i,.run-btn svg { width:13px !important; height:13px !important; stroke-width:2.2; flex:0 0 auto; }
+.run-btn i,.run-btn svg { width:11px !important; height:11px !important; stroke-width:2.2; flex:0 0 auto; }
 .run-btn:disabled { opacity:.55; cursor:default; }
 .cascade-run-btn { background:transparent; color:var(--muted); border:1px solid transparent; box-shadow:none; }
 .cascade-run-btn:hover:not(:disabled) { border-color:var(--text); }
