@@ -765,6 +765,60 @@ function syncSmartVideoControls(host, video){
     host.classList.toggle('is-waiting', Boolean(video.dataset.smartWaiting === '1'));
 }
 const smartVideoUserPausedKeys = new Set();
+const smartVideoPostPreviewFirstFrameKeys = new Set();
+let smartVideoPreviewHandoff = null;
+let smartVideoPreviewOpeningKey = '';
+function handoffSmartCanvasVideoToPreview(video, nodeId, imageIndex){
+    if(!video) return;
+    const playbackKey = smartVideoPlaybackKey(video);
+    if(playbackKey) smartVideoPostPreviewFirstFrameKeys.add(playbackKey);
+    smartVideoPreviewHandoff = {
+        nodeId,
+        imageIndex:Number(imageIndex) || 0,
+        currentTime:Math.max(0, Number(video.currentTime) || 0)
+    };
+    // The preview inherits the current position, while the covered canvas
+    // player is prepared immediately in its desired post-preview state.
+    userPauseSmartCanvasVideo(video);
+    const host = video.closest('.smart-canvas-video-host');
+    const progress = host?.querySelector('.smart-video-progress');
+    if(progress){
+        delete progress.dataset.scrubbing;
+        progress.value = '0';
+        progress.style.setProperty('--smart-video-progress', '0%');
+    }
+    const epoch = Number(video.dataset.smartPlaybackEpoch || 0) + 1;
+    video.dataset.smartPlaybackEpoch = String(epoch);
+    video.dataset.smartSeekEpoch = String(Number(video.dataset.smartSeekEpoch || 0) + 1);
+    delete video.dataset.smartSeeking;
+    delete video.dataset.smartWaiting;
+    host?.classList.remove('is-waiting');
+    const needsFirstFrameSeek = Math.abs(Number(video.currentTime) || 0) > .002;
+    try { video.currentTime = 0; } catch(e) {}
+    syncSmartVideoControls(host, video);
+    scheduleSmartVideoResetFrame(video, epoch);
+    if(needsFirstFrameSeek){
+        video.addEventListener('seeked', () => {
+            delete video.dataset.smartSeeking;
+            delete video.dataset.smartWaiting;
+            host?.classList.remove('is-waiting');
+            syncSmartVideoControls(host, video);
+            scheduleSmartVideoResetFrame(video, epoch);
+        }, {once:true});
+    }
+}
+async function applySmartVideoPreviewHandoff(video, nodeId, imageIndex){
+    const handoff = smartVideoPreviewHandoff;
+    if(!video || !handoff || handoff.nodeId !== nodeId || handoff.imageIndex !== Number(imageIndex)) return false;
+    smartVideoPreviewHandoff = null;
+    const duration = Number(video.duration);
+    let targetTime = Math.max(0, Number(handoff.currentTime) || 0);
+    if(Number.isFinite(duration) && duration > 0) targetTime = Math.min(targetTime, Math.max(0, duration - .001));
+    try { await seekVideoForFrame(video, targetTime); } catch(e) {
+        try { video.currentTime = targetTime; } catch(_) {}
+    }
+    return true;
+}
 function smartVideoPlaybackKey(video){
     if(!video) return '';
     const nodeId = video.closest('.image-node')?.dataset?.id || '';
@@ -926,6 +980,12 @@ function smartVideoContainerIsGroup(node){
 function playSmartCanvasVideo(video){
     if(!video) return;
     if(smartVideoAltCopyDragActive){ resetSmartCanvasVideo(video); return; }
+    const playbackKey = smartVideoPlaybackKey(video);
+    if(playbackKey && smartVideoPostPreviewFirstFrameKeys.has(playbackKey)){
+        video.dataset.smartPlaybackWanted = '0';
+        video.pause?.();
+        return;
+    }
     if(smartVideoHasUserPause(video)){
         video.dataset.smartUserPaused = '1';
         return;
@@ -958,6 +1018,7 @@ function userPlaySmartCanvasVideo(video){
     if(!video) return;
     const playbackKey = smartVideoPlaybackKey(video);
     if(playbackKey) smartVideoUserPausedKeys.delete(playbackKey);
+    if(playbackKey) smartVideoPostPreviewFirstFrameKeys.delete(playbackKey);
     delete video.dataset.smartUserPaused;
     playSmartCanvasVideo(video);
 }
@@ -1054,6 +1115,25 @@ function bindSmartCanvasVideo(host, nodeId){
     const stopControlEvent = event => event.stopPropagation();
     const clearControlsTimer = () => { if(controlsTimer) clearTimeout(controlsTimer); controlsTimer = 0; };
     const controlsPlaybackStarted = () => video.dataset.smartHasPlayed === '1';
+    const openVideoPreview = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        clearTimer();
+        const item = video.closest('[data-image-index]');
+        const targetNodeId = item?.dataset?.refNodeId || nodeId;
+        const imageIndex = Number(item?.dataset?.refImageIndex ?? item?.dataset?.imageIndex ?? 0);
+        const owner = nodes.find(node => node.id === targetNodeId);
+        if(mediaKindForItem(owner?.images?.[imageIndex] || {}) !== 'video') return;
+        const openingKey = `${targetNodeId}:${imageIndex}`;
+        if(smartVideoPreviewOpeningKey === openingKey) return;
+        smartVideoPreviewOpeningKey = openingKey;
+        selectedId = nodeId;
+        selectedIds = [];
+        selectedImage = {nodeId:targetNodeId, index:imageIndex};
+        handoffSmartCanvasVideoToPreview(video, targetNodeId, imageIndex);
+        openImagePreviewSmart(targetNodeId, imageIndex);
+    };
     const hideControls = () => {
         clearControlsTimer();
         if((nodeSelected() && controlsPlaybackStarted())
@@ -1104,17 +1184,30 @@ function bindSmartCanvasVideo(host, nodeId){
         host.classList.remove('is-controls-hovered');
         hideControls();
         clearTimer();
+        const playbackKey = smartVideoPlaybackKey(video);
+        if(playbackKey && !imageEditModal.classList.contains('open')) smartVideoPostPreviewFirstFrameKeys.delete(playbackKey);
         const draggingThisNode = dragState?.id === nodeId || dragState?.groupIds?.includes?.(nodeId);
         if(!nodeSelected() && !draggingThisNode) resetSmartCanvasVideo(video);
     });
     on(video, 'mousedown', e => {
+        // Node dragging takes over on mousedown and temporarily disables pointer
+        // events for the whole node body. Resolve the second press here, before
+        // that drag gesture can make the video lose the ensuing dblclick.
+        if(!inControlStrip(e) && e.button === 0 && e.detail >= 2){
+            openVideoPreview(e);
+            return;
+        }
         // The native control strip must not move the node. The video surface
         // intentionally bubbles into the node's normal drag handler.
         if(inControlStrip(e)) e.stopPropagation();
-    });
+    }, {capture:true});
     on(video, 'click', e => {
         if(inControlStrip(e)) return;
         e.preventDefault();
+        if(e.detail >= 2){
+            openVideoPreview(e);
+            return;
+        }
         if(hoverOnly) return;
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -1131,7 +1224,7 @@ function bindSmartCanvasVideo(host, nodeId){
         }
         clearTimer();
         userPlaySmartCanvasVideo(video);
-    }, true);
+    }, {capture:true});
     const toggle = host.querySelector('.smart-video-toggle');
     const mute = host.querySelector('.smart-video-mute');
     const progress = host.querySelector('.smart-video-progress');
@@ -1297,6 +1390,11 @@ function bindSmartCanvasVideo(host, nodeId){
     });
     on(captureMenu, 'mouseleave', scheduleCaptureMenuClose);
     on(video, 'play', () => {
+        const playbackKey = smartVideoPlaybackKey(video);
+        if(playbackKey && smartVideoPostPreviewFirstFrameKeys.has(playbackKey)){
+            video.pause?.();
+            return;
+        }
         hideSmartVideoResetFrame(video);
         video.dataset.smartHasPlayed = '1';
         delete video.dataset.smartWaiting;
@@ -1311,7 +1409,14 @@ function bindSmartCanvasVideo(host, nodeId){
     on(video, 'loadedmetadata', () => syncSmartVideoControls(host, video));
     on(video, 'volumechange', () => syncSmartVideoControls(host, video));
     on(video, 'waiting', () => {
-        if(video.dataset.smartSeeking === '1') return;
+        const playbackKey = smartVideoPlaybackKey(video);
+        if(video.dataset.smartSeeking === '1'
+            || (playbackKey && smartVideoPostPreviewFirstFrameKeys.has(playbackKey))){
+            delete video.dataset.smartWaiting;
+            host.classList.remove('is-waiting');
+            syncSmartVideoControls(host, video);
+            return;
+        }
         video.dataset.smartWaiting = '1';
         syncSmartVideoControls(host, video);
     });
@@ -11921,6 +12026,8 @@ function refreshComparePanel(){
     const isVideoPreview = mediaKindForItem(editing.image || {}) === 'video';
     const isPreviewMode = imageEditMode === 'preview';
     const previewToken = `${editing.node?.id || ''}:${editing.index ?? 0}:${Date.now()}`;
+    let videoHandoffReady = Promise.resolve(false);
+    let currentLoadHandled = false;
     currentImg.dataset.previewSrcToken = previewToken;
     if(panoramaToggle){
         panoramaToggle.style.display = isPreviewMode && !isVideoPreview ? 'inline-flex' : 'none';
@@ -11941,8 +12048,20 @@ function refreshComparePanel(){
     }
     const onCurrentLoaded = async () => {
         if(currentImg.dataset.previewSrcToken !== previewToken) return;
+        if(!imageEditModal.classList.contains('open')) return;
+        if(currentLoadHandled) return;
+        currentLoadHandled = true;
         if(isVideoPreview){
-            if(currentVideo) currentVideo.style.visibility = '';
+            if(currentVideo){
+                currentVideo.style.visibility = '';
+                currentVideo.muted = false;
+                const playPromise = currentVideo.play?.();
+                if(playPromise?.catch) playPromise.catch(() => {
+                    if(currentImg.dataset.previewSrcToken !== previewToken) return;
+                    currentVideo.muted = true;
+                    currentVideo.play?.().catch(() => {});
+                });
+            }
         } else {
             try { if(currentImg.decode) await currentImg.decode(); } catch(e) {}
             if(currentImg.dataset.previewSrcToken !== previewToken) return;
@@ -11963,10 +12082,11 @@ function refreshComparePanel(){
             currentVideo.style.display = 'block';
             currentVideo.style.visibility = 'hidden';
             currentVideo.onloadedmetadata = () => {
+                videoHandoffReady = applySmartVideoPreviewHandoff(currentVideo, editing.node?.id || '', editing.index ?? 0);
                 syncPreviewFrameSize();
                 updatePreviewMetaHint();
             };
-            currentVideo.onloadeddata = onCurrentLoaded;
+            currentVideo.onloadeddata = () => { Promise.resolve(videoHandoffReady).then(onCurrentLoaded); };
             currentVideo.onerror = () => {
                 if(!imageEditModal.classList.contains('media-preparing')) return;
                 closeImageEditor();
@@ -11976,7 +12096,7 @@ function refreshComparePanel(){
                 currentVideo.src = previewSrc;
                 currentVideo.load?.();
             }
-            if(currentVideo.readyState >= 2) requestAnimationFrame(onCurrentLoaded);
+            if(currentVideo.readyState >= 2) requestAnimationFrame(() => { Promise.resolve(videoHandoffReady).then(onCurrentLoaded); });
         }
         previewCompareOn = false;
         previewCompareIndex = -1;
@@ -13376,6 +13496,8 @@ function openImageEditor(nodeId, imageIndex=0){
     refreshIcons();
 }
 function closeImageEditor(){
+    smartVideoPreviewHandoff = null;
+    smartVideoPreviewOpeningKey = '';
     cleanupSmartLogPreviewNode();
     previewCompareLoadToken++;
     previewComparePendingKey = '';
@@ -13398,7 +13520,7 @@ function closeImageEditor(){
         previewVideo.style.visibility = '';
     }
     const previewImg = document.getElementById('previewCurrentImage');
-    if(previewImg){ previewImg.onload = null; previewImg.onerror = null; previewImg.removeAttribute('src'); previewImg.style.visibility = ''; }
+    if(previewImg){ previewImg.onload = null; previewImg.onerror = null; previewImg.removeAttribute('src'); delete previewImg.dataset.previewSrcToken; previewImg.style.visibility = ''; }
     clearEditDrawing(true);
     cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
     previewNavState = {nodeId:'', index:0, count:0};
@@ -13417,6 +13539,14 @@ function closeImageEditor(){
     const textCanvas = editTextCanvas();
     if(textCanvas){ textCanvas.style.left = ''; textCanvas.style.top = ''; }
     updatePreviewNavButtons();
+    syncSmartCanvasVideoSelection();
+    requestAnimationFrame(() => {
+        world?.querySelectorAll?.('.smart-canvas-video').forEach(video => {
+            const host = video.closest('.smart-canvas-video-host');
+            const playbackKey = smartVideoPlaybackKey(video);
+            if(playbackKey && !host?.matches(':hover')) smartVideoPostPreviewFirstFrameKeys.delete(playbackKey);
+        });
+    });
 }
 function clampCrop(){
     if(!cropState) return;
