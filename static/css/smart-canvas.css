@@ -2,12 +2,12 @@
 :root {
     --page:#f8fafc; --grid:#d9e1ea; --panel:rgba(255,255,255,.9); --card:#fff;
     --text:#111827; --muted:#64748b; --faint:#94a3b8; --line:#e8edf3; --soft:#f8fafc;
-    --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff;
+    --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff; --connection-flow:#0ea5e9;
 }
 .theme-dark {
     --page:#0f141d; --grid:rgba(148,163,184,.18); --panel:rgba(23,29,41,.92); --card:#171d29;
     --text:#e5e9f0; --muted:#8f9aab; --faint:#657286; --line:#2a3444; --soft:#111722;
-    --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d;
+    --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d; --connection-flow:#38bdf8;
 }
 * { box-sizing:border-box; }
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
@@ -610,19 +610,28 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .connection-layer { position:absolute; left:0; top:0; width:6000px; height:4000px; pointer-events:none; z-index:0; overflow:visible; }
 .connection-layer path { transition:stroke-opacity .14s ease; }
 .connection-layer .conn-selected { stroke:var(--strong); opacity:1; }
+.connection-layer .conn-selected.conn-selected-dashed { opacity:0; }
+.connection-layer .conn-selection-flow { stroke:var(--connection-flow); stroke-width:2.8; stroke-linecap:round; stroke-dasharray:8 22; pointer-events:none; animation:connection-selection-flow 1.25s linear infinite; animation-delay:var(--connection-selection-delay, 0ms); }
+.connection-layer .conn-selection-flow-dashed { stroke-width:2.5; stroke-dasharray:6 5; animation-name:connection-selection-flow-dashed; animation-duration:1.25s; animation-delay:var(--connection-dashed-selection-delay, 0ms); }
 .connection-layer .conn-hit { pointer-events:stroke; cursor:pointer; }
 .connection-layer .conn-cut { pointer-events:auto; cursor:pointer; opacity:.55; transition:opacity .14s ease; }
 .connection-layer .conn-cut:hover { opacity:1; }
-.connection-layer .conn-pending { stroke-dasharray:5 4; animation:dash-flow-pending .9s linear infinite; }
+.connection-layer .conn-pending { stroke-dasharray:5 4; animation:dash-flow-pending .9s linear infinite; animation-delay:var(--connection-dash-delay, 0ms); }
 .connection-layer .conn-cascade { filter:none; }
 .connection-layer .conn-cascade-wait { stroke-dasharray:7 6; opacity:.58; }
-.connection-layer .conn-cascade-active { stroke-dasharray:7 6; animation:dash-flow .9s linear infinite; opacity:1; }
+.connection-layer .conn-cascade-active { stroke-dasharray:7 6; animation:dash-flow .9s linear infinite; animation-delay:var(--connection-dash-delay, 0ms); opacity:1; }
 .connection-layer.conn-reduce-motion .conn-pending,
-.connection-layer.conn-reduce-motion .conn-cascade-active { animation:none; stroke-dashoffset:0; }
+.connection-layer.conn-reduce-motion .conn-cascade-active,
+.connection-layer.conn-reduce-motion .conn-selection-flow { animation:none; stroke-dashoffset:0; }
 .connection-layer .conn-cascade-done { stroke-dasharray:none; opacity:1; }
 .connection-layer .conn-history { stroke-dasharray:6 5; }
 @keyframes dash-flow { to { stroke-dashoffset:-13; } }
 @keyframes dash-flow-pending { to { stroke-dashoffset:-9; } }
+@keyframes connection-selection-flow { to { stroke-dashoffset:-30; } }
+@keyframes connection-selection-flow-dashed { to { stroke-dashoffset:-44; } }
+@media (prefers-reduced-motion: reduce) {
+    .connection-layer .conn-selection-flow { animation:none; stroke-dashoffset:0; }
+}
 .image-node { z-index:2; }
 .image-node.smart-group-node { z-index:0; }
 .image-node.selected:not(.smart-group-node) { z-index:10; }
@@ -661,12 +670,12 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .run-time-pill.done { background:#10b981; color:#fff; }
 .theme-dark .run-time-pill { box-shadow:0 8px 18px rgba(0,0,0,.32); }
 .loading-skeleton { display:grid; gap:8px; }
-.loading-cell { border-radius:12px; background:linear-gradient(90deg, var(--soft) 0%, var(--card) 50%, var(--soft) 100%); background-size:200% 100%; animation:shimmer 1.5s infinite linear; border:1px solid var(--line); }
+.loading-cell { border-radius:12px; background:linear-gradient(90deg, var(--soft) 0%, var(--card) 50%, var(--soft) 100%); background-size:200% 100%; animation:shimmer 1.5s infinite linear; animation-delay:var(--loading-shimmer-delay, 0ms); border:1px solid var(--line); }
 .loading-cell.single { width:260px; height:180px; }
 @keyframes shimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
 .jimeng-pending-cell { position:relative; display:flex; align-items:center; justify-content:center; }
 .jimeng-pending-overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:14px; box-sizing:border-box; text-align:center; }
-.jimeng-pending-spinner i { width:26px; height:26px; color:var(--accent, #6366f1); animation:spin 1s linear infinite; }
+.jimeng-pending-spinner i { width:26px; height:26px; color:var(--accent, #6366f1); animation:spin 1s linear infinite; animation-delay:var(--loading-spin-delay, 0ms); }
 @keyframes spin { to { transform:rotate(360deg); } }
 .jimeng-pending-text { font-size:13px; font-weight:600; color:var(--text, #0f172a); line-height:1.3; }
 .jimeng-pending-sub { font-size:11px; color:var(--muted, #64748b); line-height:1.3; }
@@ -674,7 +683,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .jimeng-pending-query:hover:not(:disabled) { background:var(--soft); }
 .jimeng-pending-query:disabled { opacity:.6; cursor:default; }
 .jimeng-pending-query i { width:14px; height:14px; }
-.jimeng-pending-query:disabled i { animation:spin 1s linear infinite; }
+.jimeng-pending-query:disabled i { animation:spin 1s linear infinite; animation-delay:var(--loading-spin-delay, 0ms); }
 .image-edit-mode button[data-image-edit-mode="preview"] i { stroke-width:2; }
 .preview-stage { position:relative; display:inline-flex; align-items:center; justify-content:center; line-height:0; user-select:none; cursor:grab; }
 .preview-stage.panning { cursor:grabbing; }

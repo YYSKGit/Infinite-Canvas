@@ -94,9 +94,13 @@ let minimapViewport = document.getElementById('minimapViewport');
 let canvas = null;
 let canvasUsesConnections = true;
 let nodes = [];
+const SMART_ANIMATION_EPOCH = Date.now();
 let selectedId = '';
 let selectedIds = [];
 let selectedImage = {nodeId:'', index:-1};
+let selectedConnectionKey = '';
+let hoveredConnectionNodeId = '';
+let hoveredConnectionKey = '';
 let dragState = null;
 let loopInsertPreview = null;
 let selectionState = null;
@@ -7856,7 +7860,8 @@ function renderConnections(){
     const conns = (canvas?.connections || []).map((conn, index) => ({...conn, index})).filter(c => nodes.some(n => n.id === c.from) && nodes.some(n => n.id === c.to));
     const cascadeKeys = cascadeConnectionKeys();
     const activeCascadeCount = (smartCascadeRunPath?.states && Object.values(smartCascadeRunPath.states).filter(state => state && state !== 'done').length) || 0;
-    const reduceMotion = activeCascadeCount > 24;
+    let reduceMotion = activeCascadeCount > 24;
+    let selectedFlowCount = 0;
     const selectedConnIds = new Set(selectedNodeIds());
     // 合并连线：同一来源连到同一分组的多个成员，合成一条到分组的连线（A→A1/A2/A3 显示为 A→分组），
     // 减少“每张图都拖一条线”的杂乱。history 连线不合并。
@@ -7889,6 +7894,7 @@ function renderConnections(){
         const isHistory = kind === 'history';
         const isDashedRelation = isHistory || kind === 'video-frame';
         const dataIndex = item.indices.join(',');
+        const connectionSelectionKey = `${kind}:${item.from}:${item.toId}:${item.targets.join(',')}`;
         const isInsertPreview = item.indices.some(i => loopInsertPreview?.index === i);
         const edgeKeys = item.targets.map(t => `${item.from}->${t}`);
         const states = edgeKeys.map(smartCascadeEdgeState).filter(Boolean);
@@ -7898,7 +7904,20 @@ function renderConnections(){
         else if(states.length) cascadeState = 'done';
         const isCascade = !isHistory && (edgeKeys.some(k => cascadeKeys.has(k)) || Boolean(cascadeState) || isInsertPreview);
         const isPendingLine = !isCascade && item.targets.some(t => nodes.find(n => n.id === t)?.pending);
-        const isSelectedLine = selectedConnIds.size > 0 && (selectedConnIds.has(item.from) || selectedConnIds.has(item.toId) || item.targets.some(t => selectedConnIds.has(t)));
+        const isNodeHoveredLine = Boolean(hoveredConnectionNodeId && (
+            hoveredConnectionNodeId === item.from ||
+            hoveredConnectionNodeId === item.toId ||
+            item.targets.includes(hoveredConnectionNodeId)
+        ));
+        const isConnectionHoveredLine = hoveredConnectionKey === connectionSelectionKey;
+        const isNodeLinkedLine = selectedConnIds.size > 0 && (
+            selectedConnIds.has(item.from) ||
+            selectedConnIds.has(item.toId) ||
+            item.targets.some(targetId => selectedConnIds.has(targetId))
+        );
+        const isPersistentlySelectedLine = selectedConnectionKey === connectionSelectionKey;
+        const isSelectedLine = isPersistentlySelectedLine || isConnectionHoveredLine || isNodeHoveredLine || isNodeLinkedLine;
+        if(isSelectedLine) selectedFlowCount += 1;
         const fx = isHistory ? fr.x + fr.width / 2 : fr.x + fr.width;
         const fy = isHistory ? fr.y + fr.height : fr.y + fr.height / 2;
         const tx = isHistory ? tr.x + tr.width / 2 : tr.x;
@@ -7916,23 +7935,52 @@ function renderConnections(){
             isCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
             isCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
             isDashedRelation ? 'conn-history' : '',
-            isSelectedLine ? 'conn-selected' : ''
+            isSelectedLine ? 'conn-selected' : '',
+            isSelectedLine && isDashedRelation ? 'conn-selected-dashed' : ''
         ].filter(Boolean).join(' ');
         const color = isCascade ? '#16a34a' : isHistory ? 'rgba(100,116,139,0.46)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
         const opacity = isPendingLine ? '.82' : '1';
         const width = kind === 'input' ? '1.9' : '1.6';
-        return `<path class="${cls}" d="${curve}" stroke="${color}" stroke-width="${width}" fill="none" opacity="${opacity}"></path><path class="conn-hit" data-conn-index="${dataIndex}" d="${curve}" stroke="transparent" stroke-width="14" fill="none"></path><circle cx="${tx}" cy="${ty}" r="3.5" fill="${color}" opacity=".66"></circle><g class="conn-cut" data-conn-index="${dataIndex}" transform="translate(${mx} ${my})"><circle r="8" fill="var(--card)" stroke="${color}" stroke-width="1.4"></circle><path d="M-3 -3 L3 3 M3 -3 L-3 3" stroke="${color}" stroke-width="1.5" stroke-linecap="round"></path></g>`;
+        const selectedFlow = isSelectedLine
+            ? `<path class="conn-selection-flow${isDashedRelation ? ' conn-selection-flow-dashed' : ''}" data-conn-flow="${dataIndex}" d="${curve}"${isDashedRelation ? '' : ' pathLength="100"'} fill="none"></path>`
+            : '';
+        // Hovering a line itself is a visual preview only. Do not introduce the
+        // midpoint delete control under the pointer, which would steal hover.
+        const cutControl = (isPersistentlySelectedLine || isNodeHoveredLine || isNodeLinkedLine)
+            ? `<g class="conn-cut" data-conn-index="${dataIndex}" transform="translate(${mx} ${my})"><circle r="8" fill="var(--card)" stroke="var(--connection-flow)" stroke-width="1.4"></circle><path d="M-3 -3 L3 3 M3 -3 L-3 3" stroke="var(--connection-flow)" stroke-width="1.5" stroke-linecap="round"></path></g>`
+            : '';
+        return `<path class="${cls}" d="${curve}" stroke="${color}" stroke-width="${width}" fill="none" opacity="${opacity}"></path>${selectedFlow}<path class="conn-hit" data-conn-index="${dataIndex}" data-conn-selection-key="${escapeAttr(connectionSelectionKey)}" d="${curve}" stroke="transparent" stroke-width="14" fill="none"></path><circle cx="${tx}" cy="${ty}" r="3.5" fill="${color}" opacity=".66"></circle>${cutControl}`;
     }).join('');
-    return `<svg class="connection-layer ${reduceMotion ? 'conn-reduce-motion' : ''}" width="6000" height="4000" viewBox="0 0 6000 4000" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
+    // A large multi-selection should stay cheap: keep the selected styling and
+    // controls, but avoid running dozens of continuous SVG animations.
+    if(selectedFlowCount > 24) reduceMotion = true;
+    const selectionDelay = continuousAnimationDelay(1250);
+    const dashedSelectionDelay = continuousAnimationDelay(1250);
+    const dashDelay = continuousAnimationDelay(900);
+    return `<svg class="connection-layer ${reduceMotion ? 'conn-reduce-motion' : ''}" style="--connection-selection-delay:${selectionDelay}ms;--connection-dashed-selection-delay:${dashedSelectionDelay}ms;--connection-dash-delay:${dashDelay}ms" width="6000" height="4000" viewBox="0 0 6000 4000" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
 }
 function refreshConnectionLayer(){
     connectionLayerRaf = 0;
     const oldSvg = world.querySelector('svg.connection-layer');
     if(!oldSvg) return;
+    // Preserve the exact phase of pixel-based dashed animations when the SVG
+    // is replaced during drag and on the final mouseup refresh.
+    const dashedAnimationTimes = new Map();
+    oldSvg.querySelectorAll('.conn-selection-flow-dashed[data-conn-flow]').forEach(path => {
+        const animation = path.getAnimations?.()[0];
+        if(animation && animation.currentTime != null) dashedAnimationTimes.set(path.dataset.connFlow, animation.currentTime);
+    });
     const tpl = document.createElement('template');
     tpl.innerHTML = renderConnections().trim();
     const nextSvg = tpl.content.firstElementChild;
-    if(nextSvg) oldSvg.replaceWith(nextSvg);
+    if(nextSvg){
+        oldSvg.replaceWith(nextSvg);
+        nextSvg.querySelectorAll('.conn-selection-flow-dashed[data-conn-flow]').forEach(path => {
+            const currentTime = dashedAnimationTimes.get(path.dataset.connFlow);
+            const animation = path.getAnimations?.()[0];
+            if(animation && currentTime != null) animation.currentTime = currentTime;
+        });
+    }
     bindConnectionEvents();
 }
 function scheduleConnectionLayerRefresh(){
@@ -9242,6 +9290,12 @@ function runSmartGroupToolbarAction(nodeId, action){
     }
 }
 function nowMs(){ return Date.now(); }
+function continuousAnimationDelay(durationMs, startedAt = SMART_ANIMATION_EPOCH){
+    const duration = Math.max(1, Number(durationMs) || 1);
+    const start = Number(startedAt) || SMART_ANIMATION_EPOCH;
+    const elapsed = Math.max(0, nowMs() - start);
+    return -(elapsed % duration);
+}
 function formatRunDuration(ms){
     const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
     const min = Math.floor(total / 60);
@@ -9329,10 +9383,12 @@ function render(){
         const isHistory = isHistoryGroupNode(node);
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
+        const shimmerDelay = continuousAnimationDelay(1500, node.runStartedAt);
+        const pendingSpinDelay = continuousAnimationDelay(1000, node.runStartedAt);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isPending ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
@@ -9504,6 +9560,8 @@ function bindConnectionEvents(){
             el.addEventListener('click', e => {
                 e.preventDefault();
                 e.stopPropagation();
+                selectedConnectionKey = el.dataset.connSelectionKey || '';
+                scheduleConnectionLayerRefresh();
             });
             el.addEventListener('dblclick', e => {
                 e.preventDefault(); e.stopPropagation();
@@ -9516,6 +9574,18 @@ function bindConnectionEvents(){
             disconnectConnections(el.dataset.connIndex);
         });
     });
+}
+function setHoveredConnectionKey(nextKey){
+    const next = String(nextKey || '');
+    if(hoveredConnectionKey === next) return;
+    hoveredConnectionKey = next;
+    scheduleConnectionLayerRefresh();
+}
+function updateHoveredConnectionFromPointer(event){
+    const hit = event.buttons
+        ? null
+        : document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.conn-hit[data-conn-selection-key]');
+    setHoveredConnectionKey(hit?.dataset?.connSelectionKey || '');
 }
 function ensurePortDragPathElement(){
     const svg = world.querySelector('svg.connection-layer');
@@ -10046,6 +10116,16 @@ function bindNodeEvents(){
     world.querySelectorAll('.image-node').forEach(el => {
         const id = el.dataset.id;
         const nodeForControls = nodes.find(n => n.id === id);
+        el.addEventListener('mouseenter', () => {
+            if(hoveredConnectionNodeId === id) return;
+            hoveredConnectionNodeId = id;
+            scheduleConnectionLayerRefresh();
+        });
+        el.addEventListener('mouseleave', () => {
+            if(hoveredConnectionNodeId !== id) return;
+            hoveredConnectionNodeId = '';
+            scheduleConnectionLayerRefresh();
+        });
         if(nodeForControls?.type === 'smart-prompt') bindPromptNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-group') {
@@ -10483,6 +10563,9 @@ function deleteNode(id){
     if(selectedId === id) selectedId = '';
     selectedIds = selectedIds.filter(selected => !deleteIds.has(selected));
     if(deleteIds.has(selectedImage.nodeId)) selectedImage = {nodeId:'', index:-1};
+    selectedConnectionKey = '';
+    hoveredConnectionKey = '';
+    if(deleteIds.has(hoveredConnectionNodeId)) hoveredConnectionNodeId = '';
     render();
     scheduleSave();
 }
@@ -10529,6 +10612,8 @@ function disconnectConnections(spec){
     const removed = canvas.connections.filter((_, i) => set.has(i));
     if(!removed.length) return;
     pushUndo();
+    selectedConnectionKey = '';
+    hoveredConnectionKey = '';
     canvas.connections = canvas.connections.filter((_, i) => !set.has(i));
     removed.forEach(conn => {
         const toNode = nodes.find(n => n.id === conn.to);
@@ -18617,6 +18702,7 @@ shell.onclick = e => {
     if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     closeCreateMenu();
+    selectedConnectionKey = '';
     clearSelection();
     render();
 };
@@ -18635,6 +18721,7 @@ smartArrangeBtn?.addEventListener('click', e => {
     arrangeSelectedSmartNodes();
 });
 window.onmousemove = e => {
+    updateHoveredConnectionFromPointer(e);
     lastMouseWorld = screenToWorld(e);
     if(!portDragState && !dragState) updateMagneticPort(e);
     else resetMagneticPort();
@@ -19302,7 +19389,9 @@ window.addEventListener('keyup', e => {
 });
 window.addEventListener('blur', () => {
     isRKeyDown = false;
+    setHoveredConnectionKey('');
 });
+shell.addEventListener('mouseleave', () => setHoveredConnectionKey(''));
 if(engineSelect){
     const pill = engineSelect.querySelector('.engine-select-pill');
     if(pill){
