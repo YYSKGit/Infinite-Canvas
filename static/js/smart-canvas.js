@@ -13765,10 +13765,6 @@ function inputThumbHoverTitle(currentNode, img, index=0){
     const sourceImage = sourceNode?.images?.[Number(img?.imageIndex)] || img;
     const mediaName = imageNameLabel(sourceImage, fallback, sourceNode);
     if(currentNode && isSelfReferenceForNode(currentNode, img)) return `${mediaName} · ${tr('smart.inputSelf')}`;
-    if(!sourceNode){
-        const genericSource = smartImageMode(currentNode) === 'workflow' ? tr('smart.inputUpstreamWorkflow') : tr('smart.inputUpstream');
-        return `${mediaName} · ${genericSource}`;
-    }
     return `${mediaName} 输入`;
 }
 function renderInputThumbsRow(node){
