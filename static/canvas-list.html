@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1783387674"></script>
-    <link rel="stylesheet" href="/static/css/canvas-list.css?v=2027.01.1.1.1783154636">
+    <link rel="stylesheet" href="/static/css/canvas-list.css?v=2027.01.1.1.1783961041">
     <link rel="stylesheet" href="/static/css/theme.css?v=2027.01.1.1.1783674343">
 </head>
 <body>
@@ -58,6 +58,7 @@
                 </div>
                 <div class="ws-topbar-right">
                     <button id="pasteCanvasBtn" class="ws-paste-btn" type="button" title="粘贴到此项目" style="display:none"><i data-lucide="clipboard-paste" class="w-4 h-4"></i><span>粘贴到此项目</span></button>
+                    <button id="storageManagerBtn" class="ws-icon-btn" type="button" title="存储管理" aria-label="存储管理"><i data-lucide="hard-drive" class="w-4 h-4"></i></button>
                     <button id="boardResetView" class="ws-icon-btn" type="button" title="重置视图" aria-label="重置视图"><i data-lucide="locate-fixed" class="w-4 h-4"></i></button>
                     <button id="boardRefresh" class="ws-icon-btn" type="button" title="刷新" aria-label="刷新"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button>
                     <button id="newCanvasBtn" class="ws-primary-btn" type="button"><i data-lucide="plus" class="w-4 h-4"></i><span>新建画布</span></button>
@@ -90,6 +91,24 @@
             <div id="boardStatus" class="ws-status"></div>
         </main>
     </div>
-    <script src="/static/js/canvas-list.js?v=2027.01.1.1.1783154642"></script>
+    <div id="storageModal" class="storage-modal" aria-hidden="true">
+        <div class="storage-backdrop" data-storage-close></div>
+        <section class="storage-dialog" role="dialog" aria-modal="true" aria-labelledby="storageTitle">
+            <header class="storage-head"><div><h2 id="storageTitle">存储管理</h2><p>查看当前未发现任何画布或素材库引用的媒体</p></div><button class="ws-icon-btn" type="button" data-storage-close title="关闭"><i data-lucide="x" class="w-4 h-4"></i></button></header>
+            <nav class="storage-tabs"><button class="active" data-storage-tab="candidates">未引用媒体</button><button data-storage-tab="cache">预览缓存</button><button data-storage-tab="trash">媒体回收站</button></nav>
+            <div id="storageCandidatesPane" class="storage-pane active">
+                <div id="storageWarning" class="storage-warning" hidden></div>
+                <div class="storage-summary"><div><strong id="storageCandidateCount">--</strong><span>候选文件</span></div><div><strong id="storageCandidateSize">--</strong><span>可管理空间</span></div><div><strong id="storageProtectedCount">--</strong><span>受保护文件</span></div><button id="storageRescanBtn" class="storage-secondary" type="button"><i data-lucide="scan-search"></i>重新扫描</button></div>
+                <div class="storage-note"><i data-lucide="shield-check"></i><span>这里只显示当前未发现引用的文件。最近 7 天媒体默认隐藏；处理前服务端会再次检查引用。所选文件将先移入媒体回收站。</span></div>
+                <div class="storage-tools"><input id="storageSearch" type="search" placeholder="搜索文件名"><select id="storageKindFilter"><option value="all">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option></select><select id="storageSourceFilter"><option value="all">全部来源</option><option value="output">生成结果</option><option value="input">输入副本</option></select><label><input id="storageShowRecent" type="checkbox"> 显示最近 7 天</label><select id="storageSort"><option value="newest">时间：新到旧</option><option value="oldest">时间：旧到新</option><option value="largest">大小：大到小</option></select></div>
+                <div class="storage-selectbar"><label><input id="storageSelectVisible" type="checkbox"> 选择当前结果</label><span id="storageSelectedSummary">未选择文件</span></div>
+                <div id="storageMediaGrid" class="storage-grid"></div>
+                <footer class="storage-actions"><button class="storage-secondary" type="button" data-storage-close>取消</button><button id="storageTrashSelected" class="storage-danger" type="button" disabled><i data-lucide="trash-2"></i>移入媒体回收站</button></footer>
+            </div>
+            <div id="storageCachePane" class="storage-pane"><div class="storage-cache-card"><i data-lucide="images"></i><div><strong id="storageCacheSize">--</strong><span id="storageCacheCount">正在统计预览缓存…</span><p>预览缓存可以安全重新生成。清空不会删除任何原始图片或视频。</p></div><button id="storageClearCache" class="storage-danger" type="button">清空预览缓存</button></div></div>
+            <div id="storageTrashPane" class="storage-pane"><div id="storageTrashGrid" class="storage-grid"></div><footer class="storage-actions"><span id="storageTrashSelectedSummary">未选择文件</span><button id="storageRestoreSelected" class="storage-secondary" type="button" disabled>恢复所选</button><button id="storagePurgeSelected" class="storage-danger" type="button" disabled>永久删除所选</button></footer></div>
+        </section>
+    </div>
+    <script src="/static/js/canvas-list.js?v=2027.01.1.1.1783961040"></script>
 </body>
 </html>

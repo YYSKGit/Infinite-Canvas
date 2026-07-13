@@ -268,6 +268,8 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
+MEDIA_TRASH_DIR = os.path.join(DATA_DIR, "media_trash")
+MEDIA_TRASH_MANIFEST = os.path.join(MEDIA_TRASH_DIR, "manifest.json")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
@@ -275,6 +277,7 @@ RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.js
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
 GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+MEDIA_CLEANUP_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 LOCAL_IMAGE_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 RUNNINGHUB_THUMBNAIL_EXTS = (".jpg",)
@@ -285,6 +288,7 @@ HISTORY_LOCK = Lock()
 GLOBAL_CONFIG_LOCK = Lock()
 CONVERSATION_LOCK = Lock()
 CANVAS_LOCK = Lock()
+STORAGE_CLEANUP_LOCK = Lock()
 LOAD_LOCK = Lock()
 RUNNINGHUB_WORKFLOW_LOCK = Lock()
 NEXT_TASK_ID = 1
@@ -2720,6 +2724,15 @@ class CanvasAssetCheckRequest(BaseModel):
 class CanvasAssetDownloadRequest(BaseModel):
     urls: List[str] = []
     items: List[Dict[str, Any]] = []
+
+class StorageTrashRequest(BaseModel):
+    paths: List[str] = []
+
+class StorageRestoreRequest(BaseModel):
+    ids: List[str] = []
+
+class StoragePurgeRequest(BaseModel):
+    ids: List[str] = []
     filename: str = "canvas-output-images.zip"
 
 class CanvasWorkflowExportRequest(BaseModel):
@@ -14928,6 +14941,300 @@ async def list_canvas_assets():
     # canvas_assets_index 会同步遍历并解析所有画布 JSON，放进线程池避免阻塞事件循环
     # （否则画布多时一次请求就会卡住整个 asyncio loop，连 WebSocket 一起掉线）。
     return await asyncio.to_thread(canvas_assets_index)
+
+STORAGE_MEDIA_EXTS = {
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".svg",
+    ".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv",
+    ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac",
+}
+
+def storage_normalize_local_url(value):
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    text = urllib.parse.unquote(text.split("?", 1)[0].split("#", 1)[0])
+    if text.startswith("/assets/input/") or text.startswith("/assets/output/") or text.startswith("/assets/library/") or text.startswith("/assets/uploads/"):
+        return text
+    if text.startswith("/output/"):
+        return text
+    return ""
+
+def storage_collect_urls(value, refs):
+    if isinstance(value, str):
+        direct = storage_normalize_local_url(value)
+        if direct:
+            refs.add(direct)
+        for match in re.findall(r"/(?:assets|output)/[^\s\"'<>]+", value):
+            normalized = storage_normalize_local_url(match.replace("&amp;", "&"))
+            if normalized:
+                refs.add(normalized)
+        return
+    if isinstance(value, dict):
+        for child in value.values():
+            storage_collect_urls(child, refs)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for child in value:
+            storage_collect_urls(child, refs)
+
+def storage_reference_snapshot():
+    refs = set()
+    invalid = []
+    json_paths = []
+    for current, dirs, files in os.walk(DATA_DIR):
+        dirs[:] = [name for name in dirs if name not in {"media_previews", "media_trash", "update_backups", "update_staging"}]
+        for filename in files:
+            if filename.lower().endswith(".json"):
+                json_paths.append(os.path.join(current, filename))
+    for path in (HISTORY_FILE, GLOBAL_CONFIG_FILE):
+        if os.path.isfile(path):
+            json_paths.append(path)
+    for path in json_paths:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                raw = handle.read()
+            try:
+                storage_collect_urls(json.loads(raw), refs)
+            except Exception as exc:
+                rel = os.path.relpath(path, BASE_DIR).replace("\\", "/")
+                invalid.append({"path": rel, "error": str(exc)[:180]})
+                storage_collect_urls(raw, refs)
+        except Exception as exc:
+            rel = os.path.relpath(path, BASE_DIR).replace("\\", "/")
+            invalid.append({"path": rel, "error": str(exc)[:180]})
+    with CANVAS_TASK_LOCK:
+        storage_collect_urls(list(CANVAS_TASKS.values()), refs)
+    return refs, invalid
+
+def storage_media_kind(path):
+    mime = (mimetypes.guess_type(path)[0] or "").lower()
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("audio/"):
+        return "audio"
+    return "image"
+
+def storage_candidate_path(url):
+    normalized = storage_normalize_local_url(url)
+    roots = {
+        "/assets/input/": OUTPUT_INPUT_DIR,
+        "/assets/output/": OUTPUT_OUTPUT_DIR,
+    }
+    for prefix, root in roots.items():
+        if normalized.startswith(prefix):
+            rel = normalized[len(prefix):].lstrip("/")
+            path = os.path.abspath(os.path.join(root, rel.replace("/", os.sep)))
+            root_abs = os.path.abspath(root)
+            if rel and os.path.commonpath([root_abs, path]) == root_abs:
+                return normalized, path
+    return "", ""
+
+def storage_scan_payload():
+    refs, invalid = storage_reference_snapshot()
+    now = now_ms()
+    candidates = []
+    protected_count = 0
+    protected_bytes = 0
+    for root, prefix in ((OUTPUT_INPUT_DIR, "/assets/input/"), (OUTPUT_OUTPUT_DIR, "/assets/output/")):
+        if not os.path.isdir(root):
+            continue
+        for current, _dirs, files in os.walk(root):
+            for filename in files:
+                path = os.path.join(current, filename)
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in STORAGE_MEDIA_EXTS:
+                    continue
+                rel = os.path.relpath(path, root).replace("\\", "/")
+                url = prefix + urllib.parse.quote(rel, safe="/")
+                normalized_url = storage_normalize_local_url(url)
+                try:
+                    stat = os.stat(path)
+                except OSError:
+                    continue
+                if normalized_url in refs:
+                    protected_count += 1
+                    protected_bytes += stat.st_size
+                    continue
+                modified_at = int(stat.st_mtime * 1000)
+                candidates.append({
+                    "path": normalized_url,
+                    "url": url,
+                    "name": filename,
+                    "kind": storage_media_kind(path),
+                    "source": "input" if prefix.endswith("input/") else "output",
+                    "size": stat.st_size,
+                    "modified_at": modified_at,
+                    "recent": now - modified_at < MEDIA_CLEANUP_COOLDOWN_MS,
+                })
+    candidates.sort(key=lambda item: item["modified_at"], reverse=True)
+    preview_files = 0
+    preview_bytes = 0
+    if os.path.isdir(MEDIA_PREVIEW_DIR):
+        for current, _dirs, files in os.walk(MEDIA_PREVIEW_DIR):
+            for filename in files:
+                try:
+                    preview_bytes += os.path.getsize(os.path.join(current, filename))
+                    preview_files += 1
+                except OSError:
+                    pass
+    return {
+        "candidates": candidates,
+        "candidate_bytes": sum(item["size"] for item in candidates),
+        "protected_count": protected_count,
+        "protected_bytes": protected_bytes,
+        "invalid_files": invalid,
+        "cooldown_days": MEDIA_CLEANUP_COOLDOWN_MS // (24 * 60 * 60 * 1000),
+        "preview_cache": {"files": preview_files, "bytes": preview_bytes},
+        "scanned_at": now,
+    }
+
+def storage_load_manifest():
+    try:
+        with open(MEDIA_TRASH_MANIFEST, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def storage_save_manifest(items):
+    os.makedirs(MEDIA_TRASH_DIR, exist_ok=True)
+    temp_path = MEDIA_TRASH_MANIFEST + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(items, handle, ensure_ascii=False, indent=2)
+    os.replace(temp_path, MEDIA_TRASH_MANIFEST)
+
+def storage_trash_payload():
+    items = storage_load_manifest()
+    existing = []
+    for item in items:
+        stored = os.path.abspath(os.path.join(MEDIA_TRASH_DIR, str(item.get("stored_name") or "")))
+        if os.path.isfile(stored) and os.path.commonpath([os.path.abspath(MEDIA_TRASH_DIR), stored]) == os.path.abspath(MEDIA_TRASH_DIR):
+            record = dict(item)
+            record["url"] = f"/api/storage/media-trash/{urllib.parse.quote(str(item.get('id') or ''))}"
+            existing.append(record)
+    return {"items": sorted(existing, key=lambda item: int(item.get("trashed_at") or 0), reverse=True)}
+
+@app.get("/api/storage/scan")
+async def scan_storage_cleanup():
+    return await asyncio.to_thread(storage_scan_payload)
+
+@app.get("/api/storage/media-trash")
+async def list_storage_media_trash():
+    return await asyncio.to_thread(storage_trash_payload)
+
+@app.get("/api/storage/media-trash/{item_id}")
+async def get_storage_media_trash_file(item_id: str):
+    item = next((entry for entry in storage_load_manifest() if entry.get("id") == item_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="回收站媒体不存在")
+    path = os.path.abspath(os.path.join(MEDIA_TRASH_DIR, str(item.get("stored_name") or "")))
+    if os.path.commonpath([os.path.abspath(MEDIA_TRASH_DIR), path]) != os.path.abspath(MEDIA_TRASH_DIR) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="回收站媒体文件不存在")
+    return FileResponse(path)
+
+@app.post("/api/storage/media-trash")
+async def move_storage_media_to_trash(payload: StorageTrashRequest, request: Request):
+    ensure_same_origin_request(request)
+    requested = list(dict.fromkeys(payload.paths[:2000]))
+    if not requested:
+        return {"moved": [], "skipped": []}
+    with STORAGE_CLEANUP_LOCK:
+        fresh = storage_scan_payload()
+        allowed = {item["path"]: item for item in fresh["candidates"]}
+        if fresh["invalid_files"]:
+            raise HTTPException(status_code=409, detail={"message": "存在无法解析的数据文件，已阻止清理", "invalid_files": fresh["invalid_files"]})
+        manifest = storage_load_manifest()
+        moved = []
+        skipped = []
+        os.makedirs(MEDIA_TRASH_DIR, exist_ok=True)
+        for requested_path in requested:
+            normalized, path = storage_candidate_path(requested_path)
+            candidate = allowed.get(normalized)
+            if not candidate or not os.path.isfile(path):
+                skipped.append({"path": requested_path, "reason": "文件已被引用、已不存在或不在可清理目录"})
+                continue
+            item_id = uuid.uuid4().hex
+            ext = os.path.splitext(path)[1].lower()
+            stored_name = f"{item_id}{ext}"
+            os.replace(path, os.path.join(MEDIA_TRASH_DIR, stored_name))
+            record = {
+                "id": item_id, "stored_name": stored_name, "original_path": normalized,
+                "name": candidate["name"], "kind": candidate["kind"], "size": candidate["size"],
+                "modified_at": candidate["modified_at"], "trashed_at": now_ms(),
+            }
+            manifest.append(record)
+            moved.append(record)
+        storage_save_manifest(manifest)
+    return {"moved": moved, "skipped": skipped}
+
+@app.post("/api/storage/media-trash/restore")
+async def restore_storage_media(payload: StorageRestoreRequest, request: Request):
+    ensure_same_origin_request(request)
+    ids = set(payload.ids[:2000])
+    restored = []
+    skipped = []
+    with STORAGE_CLEANUP_LOCK:
+        manifest = storage_load_manifest()
+        remaining = []
+        for item in manifest:
+            if item.get("id") not in ids:
+                remaining.append(item)
+                continue
+            _normalized, target = storage_candidate_path(item.get("original_path"))
+            source = os.path.abspath(os.path.join(MEDIA_TRASH_DIR, str(item.get("stored_name") or "")))
+            if not target or not os.path.isfile(source):
+                skipped.append({"id": item.get("id"), "reason": "回收站文件不存在"})
+                continue
+            if os.path.exists(target):
+                stem, ext = os.path.splitext(target)
+                target = f"{stem}_restored_{str(item.get('id'))[:8]}{ext}"
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.replace(source, target)
+            restored.append({"id": item.get("id"), "path": os.path.relpath(target, BASE_DIR).replace("\\", "/")})
+        storage_save_manifest(remaining)
+    return {"restored": restored, "skipped": skipped}
+
+@app.post("/api/storage/media-trash/purge")
+async def purge_storage_media(payload: StoragePurgeRequest, request: Request):
+    ensure_same_origin_request(request)
+    ids = set(payload.ids[:2000])
+    purged = []
+    with STORAGE_CLEANUP_LOCK:
+        manifest = storage_load_manifest()
+        remaining = []
+        for item in manifest:
+            if item.get("id") not in ids:
+                remaining.append(item)
+                continue
+            path = os.path.abspath(os.path.join(MEDIA_TRASH_DIR, str(item.get("stored_name") or "")))
+            if os.path.commonpath([os.path.abspath(MEDIA_TRASH_DIR), path]) == os.path.abspath(MEDIA_TRASH_DIR):
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                except OSError:
+                    remaining.append(item)
+                    continue
+            purged.append(item.get("id"))
+        storage_save_manifest(remaining)
+    return {"purged": purged}
+
+@app.post("/api/storage/preview-cache/clear")
+async def clear_storage_preview_cache(request: Request):
+    ensure_same_origin_request(request)
+    removed = 0
+    removed_bytes = 0
+    with STORAGE_CLEANUP_LOCK:
+        if os.path.isdir(MEDIA_PREVIEW_DIR):
+            for current, _dirs, files in os.walk(MEDIA_PREVIEW_DIR):
+                for filename in files:
+                    path = os.path.join(current, filename)
+                    try:
+                        removed_bytes += os.path.getsize(path)
+                        os.remove(path)
+                        removed += 1
+                    except OSError:
+                        pass
+    return {"removed": removed, "bytes": removed_bytes}
 
 @app.get("/api/smart-canvas/prompt-templates")
 async def smart_canvas_prompt_templates():
