@@ -113,6 +113,7 @@ let llmInstructionResizeState = null;
 let llmSystemResizeState = null;
 let promptSplitResizeState = null;
 let thumbDragState = null;
+let detachedVideoDomHandoff = null;
 let uploadTargetId = '';
 let pendingGroupUploadPoint = null;
 let mentionRange = null;
@@ -2450,6 +2451,7 @@ function absorbImageNodeIntoSmartGroup(group, child){
     const add = (child.images || []).map(img => stripImageGenerationMeta({...img}));
     if(!add.length) return false;
     group.images = [...(group.images || []), ...add];
+    delete group._singleMediaCell;
     // 清掉显式尺寸，让缩略图网格按图片数自动整理排列（“放入图片自动整理”）。
     delete group.w; delete group.h;
     rerouteSmartConnections(child.id, group.id);
@@ -2542,6 +2544,10 @@ function smartGroupThumbLayout(node){
     const outerPad = 32;
     if(count === 1){
         if(hasExplicit){
+            const preservedCell = Number(node?._singleMediaCell);
+            const preservedSize = preservedCell > 0 && refs.length === 1
+                ? thumbDisplaySize(refs[0].item, preservedCell)
+                : null;
             return {
                 refs,
                 compactMembers,
@@ -2552,8 +2558,8 @@ function smartGroupThumbLayout(node){
                 height:Math.round(explicitH),
                 thumb:Math.round(96 * scale),
                 single:true,
-                innerW:Math.max(24, Math.round(explicitW - outerPad)),
-                innerH:Math.max(24, Math.round(explicitH - outerPad - summarySpace))
+                innerW:preservedSize?.width || Math.max(24, Math.round(explicitW - outerPad)),
+                innerH:preservedSize?.height || Math.max(24, Math.round(explicitH - outerPad - summarySpace))
             };
         }
         const single = singleImageLayout(refs[0].item, {}, scale);
@@ -2591,6 +2597,40 @@ function smartGroupThumbLayout(node){
         height:Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(gridH + outerPad + summarySpace))
     };
 }
+function fitSmartGroupToPreservedSingleMedia(group, cellSize){
+    if(!isSmartGroupNode(group)) return false;
+    const refs = smartGroupImageRefs(group).filter(ref => ref.item?.url);
+    if(refs.length !== 1 || smartGroupCompactMembers(group).length) return false;
+    const cell = Math.max(28, Math.round(Number(cellSize) || 96));
+    const size = thumbDisplaySize(refs[0].item, cell);
+    group._singleMediaCell = cell;
+    group.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(size.width + 32));
+    group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(size.height + 60));
+    return true;
+}
+function fitSmartGroupAfterMediaRemoval(group, cellSize){
+    if(!isSmartGroupNode(group)) return false;
+    const cell = Math.max(28, Math.round(Number(cellSize) || 96));
+    const imageCount = smartGroupImageRefs(group).filter(ref => ref.item?.url).length;
+    const compactCount = smartGroupCompactMembers(group).length;
+    const remainingCount = imageCount + compactCount;
+    if(remainingCount === 0){
+        group.w = SMART_GROUP_DEFAULT_WIDTH;
+        group.h = SMART_GROUP_DEFAULT_HEIGHT;
+        delete group._singleMediaCell;
+        return true;
+    }
+    if(imageCount === 1 && compactCount === 0){
+        return fitSmartGroupToPreservedSingleMedia(group, cell);
+    }
+    delete group._singleMediaCell;
+    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(remainingCount))));
+    const rows = Math.ceil(remainingCount / cols);
+    const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
+    group.w = Math.round(cols * cell + Math.max(0, cols - 1) * 8 + 32);
+    group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(visibleRows * cell + Math.max(0, visibleRows - 1) * 8 + 60));
+    return true;
+}
 const SMART_GROUP_ARRANGE_PADDING = 18;
 const SMART_GROUP_ARRANGE_GAP = 16;
 const SMART_GROUP_ARRANGE_HEADER = 44;
@@ -2600,6 +2640,7 @@ function arrangeSmartGroupMembers(group, options={}){
     if(!isSmartGroupNode(group)) return false;
     const hasThumbImages = smartGroupImageRefs(group).some(ref => ref.item?.url);
     if(hasThumbImages){
+        if(!options.preserveSingleMediaCell) delete group._singleMediaCell;
         const compactMembers = smartGroupCompactMembers(group);
         if(!options.skipUndo) pushUndo();
         const layout = smartGroupThumbLayout(group);
@@ -7945,8 +7986,10 @@ function createNode(x, y, images=[], options={}){
     inheritNodeMetaFromImage(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
-    render();
-    scheduleSave();
+    if(options.render !== false){
+        render();
+        scheduleSave();
+    }
     return node;
 }
 function createPromptNode(x, y, options={}){
@@ -8368,6 +8411,10 @@ function updateNodeElementDuringResize(node){
             // 分组单图卡片含 16px 内边距（PAD=32），图片按内边距内的尺寸显示，避免溢出边框。
             const wrapW = isSmartGroupNode(node) ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32)) : layout.width;
             const wrapH = isSmartGroupNode(node) ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60)) : layout.height;
+            if(isSmartGroupNode(node)){
+                wrap.style.width = `${wrapW}px`;
+                wrap.style.height = `${wrapH}px`;
+            }
             wrap.style.setProperty('--node-img-w', `${wrapW}px`);
             wrap.style.setProperty('--node-img-h', `${wrapH}px`);
         }
@@ -8737,6 +8784,25 @@ function transplantSmartMediaElements(oldNodeEl, newNodeEl){
         restoreMediaPlaybackState(oldMedia, state);
         requestAnimationFrame(() => restoreMediaPlaybackState(oldMedia, state));
     });
+}
+function applyDetachedVideoDomHandoff(){
+    const handoff = detachedVideoDomHandoff;
+    detachedVideoDomHandoff = null;
+    if(!handoff?.host || !handoff.nodeId) return;
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(handoff.nodeId)}"]`);
+    const freshHost = nodeEl?.querySelector('[data-image-index="0"] .smart-canvas-video-host');
+    const oldHost = handoff.host;
+    const video = oldHost.querySelector('.smart-canvas-video');
+    if(!freshHost || !video || smartOriginalMediaUrl(video.dataset.url || video.currentSrc || '') !== handoff.url) return;
+    video._smartCanvasBinding?.abort?.();
+    delete video._smartCanvasBinding;
+    delete oldHost.dataset.smartPlaybackBound;
+    delete oldHost._smartShowControls;
+    delete oldHost._smartSyncControlsPinned;
+    delete oldHost._smartCloseCaptureMenu;
+    oldHost.className = freshHost.className;
+    oldHost.style.cssText = freshHost.style.cssText;
+    freshHost.replaceWith(oldHost);
 }
 function captureMediaPlaybackStates(){
     const states = new Map();
@@ -9420,7 +9486,7 @@ function smartGroupBodyHtml(node){
             const canDelete = ref.nodeId === node.id;
             return `<div class="smart-group-card has-thumbs">
                 <div class="smart-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>
-                <div class="image-wrap smart-group-single-thumb ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}" style="--node-img-w:${innerW}px;--node-img-h:${innerH}px">${singleMediaHtml(ref.item, innerW, innerH)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>
+                <div class="image-wrap smart-group-single-thumb ${selectedImage.nodeId === ref.nodeId && Number(selectedImage.index) === Number(ref.index) ? 'image-selected' : ''}" data-ref-node-id="${escapeAttr(ref.nodeId)}" data-ref-image-index="${ref.index}" data-image-index="${ref.index}" data-media-signature="${escapeAttr(`${mediaKindForItem(ref.item)}:${ref.item?.url || ''}`)}" style="width:${innerW}px;height:${innerH}px;--node-img-w:${innerW}px;--node-img-h:${innerH}px">${singleMediaHtml(ref.item, innerW, innerH)}${imageResolutionBadgeHtml(ref.item)}${canDelete ? `<button class="mini-x image-delete" type="button" data-image-index="${ref.index}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>
             </div>`;
         }
         const groupMaxVisibleRows = (groupThumbLayout.compactMembers || []).length ? Number(groupThumbLayout.rows || 1) : SMART_GROUP_MAX_VISIBLE_ROWS;
@@ -9782,6 +9848,7 @@ function render(){
             if(reusable !== fresh) reusable.remove();
         }
     });
+    applyDetachedVideoDomHandoff();
     restoreMediaPlaybackStates(mediaStates);
     restoreThumbScrollStates(thumbScrollStates);
     restorePromptNodeTextareaScrollStates(promptTextareaScrollStates);
@@ -9863,6 +9930,7 @@ function measureSmartNodeImages(){
                     node.w = layout.width;
                     node.h = layout.height;
                 }
+                if(isSmartGroupNode(node) && node._singleMediaCell) fitSmartGroupToPreservedSingleMedia(node, node._singleMediaCell);
                 updateNodeElementDuringResize(node);
                 if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
                 if(isNodeSelected(node.id)) updateComposer();
@@ -9893,6 +9961,7 @@ function measureSmartNodeImages(){
                 node.w = layout.width;
                 node.h = layout.height;
             }
+            if(isSmartGroupNode(node) && node._singleMediaCell) fitSmartGroupToPreservedSingleMedia(node, node._singleMediaCell);
             updateNodeElementDuringResize(node);
             if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
             if(isNodeSelected(node.id)) updateComposer();
@@ -10730,7 +10799,14 @@ function bindNodeEvents(){
                     if(!node.images?.[imgIndex]) return;
                 } else if((node.images || []).length <= 1) return;
                 e.preventDefault(); e.stopPropagation();
-                thumbDragState = {nodeId:id, imgIndex, startX:e.clientX, startY:e.clientY, detached:false};
+                thumbDragState = {
+                    nodeId:id,
+                    imgIndex,
+                    startX:e.clientX,
+                    startY:e.clientY,
+                    detached:false,
+                    videoHost:item.querySelector('.smart-canvas-video-host') || null
+                };
                 capturePendingUndo();
             });
         });
@@ -10739,6 +10815,7 @@ function bindNodeEvents(){
             e.preventDefault(); e.stopPropagation();
             const node = nodes.find(n => n.id === id);
             if(!node) return;
+            if(isSmartGroupNode(node)) delete node._singleMediaCell;
             const rect = nodeRect(node);
             resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height};
             // 分组缩放：记录本次手势开始时所有成员的位置/尺寸快照与起始缩放，缩放过程按相对快照的比例实时计算，
@@ -11026,25 +11103,19 @@ function deleteImage(id, imageIndex){
     const node = nodes.find(n => n.id === id);
     if(!node || imageIndex < 0) return;
     pushUndo();
+    const previousGroupLayout = isSmartGroupNode(node) ? smartGroupThumbLayout(node) : null;
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
     if(!node.images.some(image => image?.url)){
         delete node.originalMediaSource;
     }
+    if(isSmartGroupNode(node)){
+        const previousCell = previousGroupLayout?.thumb || previousGroupLayout?.innerW;
+        fitSmartGroupAfterMediaRemoval(node, previousCell);
+        arrangeSmartGroupMembers(node, {skipUndo:true, preserveSingleMediaCell:Boolean(node._singleMediaCell)});
+    }
     if(node.images.length <= 1){
         node.title = 'Image';
-        if(isSmartGroupNode(node)){
-            if(node.images.length === 1 && smartGroupCompactMembers(node).length === 0){
-                // Match the drag-out path: discard the former multi-image grid
-                // dimensions so the survivor returns to its natural single-item
-                // layout instead of being stretched across the old group box.
-                delete node.w;
-                delete node.h;
-                arrangeSmartGroupMembers(node, {skipUndo:true});
-            } else if(node.images.length === 0 && smartGroupMembers(node).length === 0){
-                node.w = SMART_GROUP_DEFAULT_WIDTH;
-                node.h = SMART_GROUP_DEFAULT_HEIGHT;
-            }
-        } else if(isHistoryGroupNode(node) && node.images.length === 1){
+        if(isHistoryGroupNode(node) && node.images.length === 1){
             // A one-item history group behaves as a standalone output. Restore
             // the exact prompt/settings snapshot embedded in the remaining image,
             // just as when an item is dragged out of a two-item history group.
@@ -19591,30 +19662,11 @@ window.onmousemove = e => {
                         sourceGroupLayout?.thumb || sourceGroupLayout?.innerW || 0
                     ) || 96));
                     applyNodeMetaToImage(img, source);
+                    const detachedVideoHost = isVideoMediaItem(img) ? thumbDragState.videoHost : null;
                     source.images.splice(thumbDragState.imgIndex, 1);
                     if(isSmartGroupNode(source)){
-                        const remainingCount = smartGroupImageRefs(source).length + smartGroupCompactMembers(source).length;
-                        // A two-item grid carries explicit grid dimensions. Once
-                        // it becomes a single image those dimensions would stretch
-                        // the survivor, so let the single-image layout use its
-                        // natural aspect ratio again.
-                        if(remainingCount === 0){
-                            source.w = SMART_GROUP_DEFAULT_WIDTH;
-                            source.h = SMART_GROUP_DEFAULT_HEIGHT;
-                        } else if(smartGroupImageRefs(source).length === 1 && smartGroupCompactMembers(source).length === 0){
-                            delete source.w;
-                            delete source.h;
-                        } else {
-                            // Rebuild the explicit grid bounds from the remaining
-                            // item count. Otherwise a 3-item (2-row) group keeps
-                            // its old height after becoming a 2-item (1-row) group.
-                            const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(remainingCount))));
-                            const rows = Math.ceil(remainingCount / cols);
-                            const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
-                            source.w = Math.round(cols * sourceGroupCell + Math.max(0, cols - 1) * 8 + 32);
-                            source.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(visibleRows * sourceGroupCell + Math.max(0, visibleRows - 1) * 8 + 60));
-                        }
-                        arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true});
+                        fitSmartGroupAfterMediaRemoval(source, sourceGroupCell);
+                        arrangeSmartGroupMembers(source, {skipUndo:true, syncDom:true, preserveSingleMediaCell:Boolean(source._singleMediaCell)});
                     } else if(source.images.length <= 1){
                         source.title = 'Image';
                         delete source.w; delete source.h;
@@ -19623,7 +19675,17 @@ window.onmousemove = e => {
                     const point = screenToWorld(e);
                     selectedId = '';
                     selectedImage = {nodeId:'', index:-1};
-                    const newNode = createImageNodeAt(point, [img], {select:false, skipUndo:true});
+                    const newNode = createImageNodeAt(point, [img], {select:false, skipUndo:true, render:false});
+                    if(detachedVideoHost){
+                        // Reuse the already decoded player across the node-id
+                        // change instead of destroying it and loading it again.
+                        detachedVideoHost.remove();
+                        detachedVideoDomHandoff = {
+                            host:detachedVideoHost,
+                            nodeId:newNode.id,
+                            url:smartOriginalMediaUrl(img.url || '')
+                        };
+                    }
                     undoSuppressed = false;
                     dragState = {id:newNode.id, startX:e.clientX, startY:e.clientY, ox:newNode.x, oy:newNode.y, thumbDetached:true};
                     thumbDragState.detached = true;

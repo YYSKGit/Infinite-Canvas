@@ -507,6 +507,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .smart-canvas-video-host { position:relative; overflow:hidden; background:#0f172a; container-type:inline-size; }
 .smart-canvas-video { display:block; width:100%; height:100%; object-fit:cover; background:#0f172a; }
 .smart-video-reset-frame { position:absolute; inset:0; z-index:1; width:100%; height:100%; object-fit:cover; display:block; visibility:hidden; opacity:0; pointer-events:none; background:#0f172a; }
+.thumb-item .smart-video-reset-frame,.media-thumb.video-thumb .smart-video-reset-frame { object-fit:contain; }
 .smart-canvas-video-host.is-reset-frame-visible .smart-video-reset-frame { visibility:visible; opacity:1; }
 .smart-canvas-video-host:not(.is-playing) .smart-canvas-video { cursor:pointer; }
 .smart-canvas-video-host.autoplay-blocked::after { content:'点击开启声音'; position:absolute; left:50%; top:50%; z-index:4; transform:translate(-50%,-50%); padding:7px 11px; border-radius:999px; background:rgba(15,23,42,.78); color:#fff; font-size:11px; font-weight:800; pointer-events:none; }
