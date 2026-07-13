@@ -1528,6 +1528,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-log-lightbox-close:hover { background:rgba(15,23,42,.78); }
 .smart-log-lightbox-close i,.smart-log-lightbox-close svg { width:18px !important; height:18px !important; }
 .image-edit-modal.open { display:flex; }
+.image-edit-modal.open.media-preparing { visibility:hidden; pointer-events:none; }
 .image-edit-panel { width:min(1480px, calc(100vw - 36px)); height:min(980px, calc(100vh - 36px)); border-radius:22px; background:var(--card); border:1px solid var(--line); box-shadow:0 30px 90px rgba(15,23,42,.22); padding:14px; display:flex; flex-direction:column; gap:10px; }
 .image-edit-head { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:12px; min-height:48px; }
 .image-edit-panel.video-preview-mode .image-edit-head { grid-template-columns:minmax(0,1fr) auto; }
