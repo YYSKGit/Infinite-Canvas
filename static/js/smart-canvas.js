@@ -696,8 +696,17 @@ function smartVideoPlayerHtml(url, attrs=''){
 }
 function smartCanvasVideoHtml(url, attrs=''){
     const original = smartOriginalMediaUrl(url);
-    const safe = escapeHtml(displayMediaUrl({url:original}));
+    const displayUrl = displayMediaUrl({url:original});
+    const safe = escapeHtml(displayUrl);
+    const genericPreview = smartMediaPreviewUrl({url:original}, 768);
+    const preview = genericPreview !== displayUrl && genericPreview.includes('/api/media-preview?')
+        ? `${genericPreview}&frame=first`
+        : genericPreview;
+    const poster = preview && preview !== displayUrl
+        ? `<img class="smart-video-poster" src="${escapeHtml(preview)}" alt="" decoding="async" draggable="false" aria-hidden="true">`
+        : '';
     return `<video class="smart-canvas-video" src="${safe}" data-url="${escapeAttr(original)}" preload="metadata" playsinline loop disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video>
+        ${poster}
         <canvas class="smart-video-reset-frame" aria-hidden="true"></canvas>
         <div class="smart-video-controls" role="group" aria-label="视频播放控件">
             <button class="smart-video-control smart-video-toggle" type="button" title="播放" aria-label="播放" data-icon="play"><i data-lucide="play" data-smart-icon="play"></i><i data-lucide="pause" data-smart-icon="pause" hidden></i></button>
@@ -842,6 +851,12 @@ function hideSmartVideoResetFrame(video){
     delete video.dataset.smartResetFramePending;
     video.closest('.smart-canvas-video-host')?.classList.remove('is-reset-frame-visible');
 }
+function smartVideoHasUsableInitialPoster(video){
+    const host = video?.closest('.smart-canvas-video-host');
+    return video?.dataset?.smartFramePresented !== '1'
+        && Boolean(host?.querySelector('.smart-video-poster'))
+        && !host.classList.contains('is-video-poster-unavailable');
+}
 function paintSmartVideoResetFrame(video, expectedEpoch){
     if(!video?.isConnected) return false;
     if(String(video.dataset.smartPlaybackEpoch || 0) !== String(expectedEpoch)) return false;
@@ -916,7 +931,9 @@ function resetSmartCanvasVideo(video){
     const playbackKey = smartVideoPlaybackKey(video);
     if(playbackKey) smartVideoUserPausedKeys.delete(playbackKey);
     if(video.dataset.smartReset === '1'){
-        scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
+        // A never-played video already has a cached preview frame. Avoid
+        // decoding the video merely to repaint the same initial state.
+        if(!smartVideoHasUsableInitialPoster(video)) scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
         return;
     }
     const host = video.closest('.smart-canvas-video-host');
@@ -934,7 +951,7 @@ function resetSmartCanvasVideo(video){
     if(!hasTransientState && !hostIsActive && video.paused && (video.currentTime || 0) === 0
         && !video.controls && video.muted === desiredMuted){
         video.dataset.smartReset = '1';
-        scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
+        if(!smartVideoHasUsableInitialPoster(video)) scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
         return;
     }
     const epoch = Number(video.dataset.smartPlaybackEpoch || 0) + 1;
@@ -1122,6 +1139,38 @@ function bindSmartCanvasVideo(host, nodeId){
     const stopControlEvent = event => event.stopPropagation();
     const clearControlsTimer = () => { if(controlsTimer) clearTimeout(controlsTimer); controlsTimer = 0; };
     const controlsPlaybackStarted = () => video.dataset.smartHasPlayed === '1';
+    const poster = host.querySelector('.smart-video-poster');
+    const revealPresentedVideoFrame = () => {
+        delete video.dataset.smartPosterRevealPending;
+        const currentHost = video.closest('.smart-canvas-video-host');
+        if(!currentHost) return;
+        video.dataset.smartFramePresented = '1';
+        currentHost.classList.add('has-presented-video-frame');
+    };
+    const schedulePresentedVideoFrameReveal = () => {
+        if(video.dataset.smartFramePresented === '1'){
+            host.classList.add('has-presented-video-frame');
+            return;
+        }
+        if(video.dataset.smartPosterRevealPending === '1') return;
+        video.dataset.smartPosterRevealPending = '1';
+        if(typeof video.requestVideoFrameCallback === 'function'){
+            video.requestVideoFrameCallback(revealPresentedVideoFrame);
+            return;
+        }
+        // The double frame boundary keeps the preview in place until browsers
+        // without requestVideoFrameCallback have submitted the video surface.
+        requestAnimationFrame(() => requestAnimationFrame(revealPresentedVideoFrame));
+    };
+    host.classList.toggle('has-presented-video-frame', video.dataset.smartFramePresented === '1');
+    if(poster){
+        const hideBrokenPoster = () => {
+            host.classList.add('is-video-poster-unavailable');
+            if(video.dataset.smartReset === '1') scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
+        };
+        on(poster, 'error', hideBrokenPoster, {once:true});
+        if(poster.complete && !poster.naturalWidth) hideBrokenPoster();
+    }
     const openVideoPreview = event => {
         event.preventDefault();
         event.stopPropagation();
@@ -1429,7 +1478,11 @@ function bindSmartCanvasVideo(host, nodeId){
         syncControlsPinned();
         if(!nodeSelected()) showControlsTemporarily();
     });
-    on(video, 'playing', () => { delete video.dataset.smartWaiting; syncSmartVideoControls(host, video); });
+    on(video, 'playing', () => {
+        delete video.dataset.smartWaiting;
+        schedulePresentedVideoFrameReveal();
+        syncSmartVideoControls(host, video);
+    });
     on(video, 'pause', () => syncSmartVideoControls(host, video));
     on(video, 'timeupdate', () => syncSmartVideoControls(host, video));
     on(video, 'durationchange', () => syncSmartVideoControls(host, video));
@@ -1448,6 +1501,7 @@ function bindSmartCanvasVideo(host, nodeId){
         syncSmartVideoControls(host, video);
     });
     on(video, 'error', () => { delete video.dataset.smartWaiting; host.classList.add('has-error'); syncSmartVideoControls(host, video); });
+    if(!video.paused && video.readyState >= 2) schedulePresentedVideoFrameReveal();
     syncSmartVideoControls(host, video);
     syncControlsPinned();
     if(nodeSelected()){

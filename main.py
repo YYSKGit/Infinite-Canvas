@@ -27,6 +27,7 @@ import shlex
 import functools
 import html
 import inspect
+from email.utils import parsedate_to_datetime
 from contextlib import asynccontextmanager
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
@@ -5817,34 +5818,71 @@ def normalize_image_to_srgb(img: Image.Image, icc_profile=None) -> Image.Image:
 def srgb_icc_profile_bytes() -> bytes:
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
-def media_preview_cache_paths(path: str, width: int):
+def media_preview_cache_paths(path: str, width: int, variant: str = "default"):
     stat = os.stat(path)
+    variant_key = "" if variant == "default" else f"|{variant}"
     key = hashlib.sha1(
-        f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|{width}|srgb-v1".encode("utf-8", "ignore")
+        f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|{width}{variant_key}|srgb-v1".encode("utf-8", "ignore")
     ).hexdigest()
     return (
         os.path.join(MEDIA_PREVIEW_DIR, f"{key}.webp"),
         os.path.join(MEDIA_PREVIEW_DIR, f"{key}.png"),
     )
 
+MEDIA_PREVIEW_BROWSER_CACHE = "private, max-age=300, must-revalidate"
+
+def media_preview_file_response(path: str, media_type: str, request: Request):
+    stat_result = os.stat(path)
+    response = FileResponse(
+        path,
+        media_type=media_type,
+        stat_result=stat_result,
+        headers={"Cache-Control": MEDIA_PREVIEW_BROWSER_CACHE},
+    )
+    etag = response.headers.get("etag", "")
+    if_none_match = request.headers.get("if-none-match", "")
+    if if_none_match:
+        candidates = [value.strip() for value in if_none_match.split(",")]
+        if any(value == "*" or value.removeprefix("W/").strip() == etag for value in candidates):
+            return Response(status_code=304, headers={
+                "Cache-Control": MEDIA_PREVIEW_BROWSER_CACHE,
+                "ETag": etag,
+                "Last-Modified": response.headers.get("last-modified", ""),
+            })
+        return response
+    if_modified_since = request.headers.get("if-modified-since", "")
+    last_modified = response.headers.get("last-modified", "")
+    if if_modified_since and last_modified:
+        try:
+            if parsedate_to_datetime(if_modified_since) >= parsedate_to_datetime(last_modified):
+                return Response(status_code=304, headers={
+                    "Cache-Control": MEDIA_PREVIEW_BROWSER_CACHE,
+                    "ETag": etag,
+                    "Last-Modified": last_modified,
+                })
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return response
+
 def is_video_preview_file(path: str) -> bool:
     return os.path.splitext(str(path or "").split("?", 1)[0])[1].lower() in {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}
 
-def generate_video_preview_image(path: str, width: int) -> Image.Image:
+def generate_video_preview_image(path: str, width: int, seek_seconds: float = 0.5) -> Image.Image:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 ffmpeg，无法生成视频预览图")
     fd, frame_path = tempfile.mkstemp(prefix="media_preview_frame_", suffix=".jpg")
     os.close(fd)
     try:
-        cmd = [
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", "0.5",
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        if seek_seconds > 0:
+            cmd.extend(["-ss", f"{seek_seconds:g}"])
+        cmd.extend([
             "-i", path,
             "-frames:v", "1",
             "-vf", f"scale='min({width},iw)':-2",
             frame_path,
-        ]
+        ])
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if proc.returncode != 0 or not os.path.exists(frame_path) or os.path.getsize(frame_path) <= 0:
             raise RuntimeError((proc.stderr or "ffmpeg 未能抽取视频首帧").strip()[:300])
@@ -5859,24 +5897,27 @@ def generate_video_preview_image(path: str, width: int) -> Image.Image:
             pass
 
 @app.get("/api/media-preview")
-async def media_preview(url: str, w: int = 512):
+async def media_preview(request: Request, url: str, w: int = 512, frame: str = ""):
     path = output_file_from_url(url)
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="媒体文件不存在")
 
     width = max(64, min(2048, int(w or 512)))
-    webp_path, png_path = media_preview_cache_paths(path, width)
+    is_video = is_video_preview_file(path)
+    exact_first_frame = is_video and str(frame or "").strip().lower() == "first"
+    cache_variant = "video-first-frame-v1" if exact_first_frame else "default"
+    webp_path, png_path = media_preview_cache_paths(path, width, cache_variant)
 
     if os.path.exists(webp_path):
-        return FileResponse(webp_path, media_type="image/webp")
+        return media_preview_file_response(webp_path, "image/webp", request)
     if os.path.exists(png_path):
-        return FileResponse(png_path, media_type="image/png")
+        return media_preview_file_response(png_path, "image/png", request)
 
     def _build_preview():
         # 同步 PIL 处理 + 落盘，放到线程里执行，避免阻塞事件循环（几十张首次生成会卡死整个 loop → 缩略图全空白）
         os.makedirs(MEDIA_PREVIEW_DIR, exist_ok=True)
-        if is_video_preview_file(path):
-            img = generate_video_preview_image(path, width)
+        if is_video:
+            img = generate_video_preview_image(path, width, 0.0 if exact_first_frame else 0.5)
         else:
             with Image.open(path) as source:
                 icc_profile = source.info.get("icc_profile")
@@ -5893,7 +5934,7 @@ async def media_preview(url: str, w: int = 512):
 
     try:
         out_path, media_type = await asyncio.to_thread(_build_preview)
-        return FileResponse(out_path, media_type=media_type)
+        return media_preview_file_response(out_path, media_type, request)
     except Exception as exc:
         raise HTTPException(status_code=415, detail=f"无法生成预览图：{exc}") from exc
 
