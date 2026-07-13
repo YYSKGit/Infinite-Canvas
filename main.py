@@ -7419,7 +7419,8 @@ def apply_trusted_asset_prompt_index(prompt: str, image_count: int, video_count:
     for label, count in (("图片", image_count), ("视频", video_count), ("音频", audio_count)):
         if count <= 0:
             continue
-        if any(f"{label}{i}" in text for i in range(1, count + 1)):
+        aliases = ("图片", "图") if label == "图片" else (label,)
+        if any(f"{alias}{i}" in text for alias in aliases for i in range(1, count + 1)):
             continue
         segments.append("、".join(f"{label}{i}" for i in range(1, count + 1)))
     if not segments:

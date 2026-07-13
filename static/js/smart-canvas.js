@@ -2714,8 +2714,14 @@ function smartNodeInputThumbsHtml(images, opts={}){
     const refs = (images || []).filter(img => img?.url);
     if(!refs.length) return '';
     const limit = Math.min(10, refs.length);
+    const counters = {image:0, video:0, audio:0};
     const items = refs.slice(0, limit).map((img, index) => {
-        const label = opts.labelPrefix ? `${opts.labelPrefix}${index + 1}` : (window.StudioI18n?.lang?.() === 'en' ? `Image ${index + 1}` : `图${index + 1}`);
+        const kind = promptReferenceKind(img);
+        const typeIndex = ++counters[kind];
+        const englishType = kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : 'Image';
+        const label = opts.labelPrefix
+            ? `${opts.labelPrefix}${index + 1}`
+            : (window.StudioI18n?.lang?.() === 'en' ? `${englishType} ${typeIndex}` : promptMentionTokenLabel(kind, typeIndex));
         const media = isAudioMediaItem(img)
             ? `<div class="media-thumb audio-thumb"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`
             : isVideoMediaItem(img)
@@ -14748,25 +14754,45 @@ function promptHtmlWithMentionTokens(text, refs=[]){
     }
     return html;
 }
-function promptMentionTokenLabel(index){
+function promptReferenceKind(itemOrKind){
+    const kind = typeof itemOrKind === 'string'
+        ? String(itemOrKind || '').trim().toLowerCase()
+        : mediaKindForItem(itemOrKind || {});
+    if(kind === 'video' || kind === 'audio') return kind;
+    return 'image';
+}
+function promptMentionTokenLabel(kind, index){
     const n = Math.max(1, Number(index) || 1);
+    const normalizedKind = promptReferenceKind(kind);
+    if(normalizedKind === 'video') return `视频${n}`;
+    if(normalizedKind === 'audio') return `音频${n}`;
     return `图${n}`;
+}
+function venicePromptReferenceLabel(kind, index){
+    const n = Math.max(1, Number(index) || 1);
+    return `@${promptReferenceKind(kind)}${n}`;
+}
+function promptReferenceLabelState(refs=[]){
+    const labels = new Map();
+    const counters = {image:0, video:0, audio:0};
+    (refs || []).forEach(ref => {
+        const key = promptMentionRefKey(ref);
+        if(!key || labels.has(key)) return;
+        const kind = promptReferenceKind(ref);
+        const index = ++counters[kind];
+        labels.set(key, promptMentionTokenLabel(kind, index));
+    });
+    return {labels, counters};
 }
 function promptReferenceLabelMap(node=null){
     const target = node || selectedNode() || activeComposerNode();
     if(!target) return new Map();
     const refs = uniqueReferenceImages(defaultReferenceImagesFor(target, false, smartLoopContext));
-    const map = new Map();
-    refs.forEach((ref, index) => {
-        const key = promptMentionRefKey(ref);
-        if(!key || map.has(key)) return;
-        map.set(key, promptMentionTokenLabel(index + 1));
-    });
-    return map;
+    return promptReferenceLabelState(refs).labels;
 }
 function promptMentionRefKey(part){
     if(!part || typeof part !== 'object') return '';
-    const kind = String(part.kind || '').trim().toLowerCase();
+    const kind = promptReferenceKind(part);
     const url = String(part.url || '').trim();
     const nodeId = String(part.nodeId || '').trim();
     const imageIndex = String(part.imageIndex ?? '').trim();
@@ -14776,11 +14802,16 @@ function promptMentionRefKey(part){
 function refreshPromptMentionTokenLabels(){
     if(!promptInput) return;
     const tokens = [...promptInput.querySelectorAll('.mention-image-token')];
-    const orderedMap = promptReferenceLabelMap();
+    const target = selectedNode() || activeComposerNode();
+    const orderedRefs = target ? uniqueReferenceImages(defaultReferenceImagesFor(target, false, smartLoopContext)) : [];
+    const orderedState = promptReferenceLabelState(orderedRefs);
+    const orderedMap = orderedState.labels;
     const extraMap = new Map();
+    const counters = {...orderedState.counters};
     tokens.forEach(token => {
+        const kind = promptReferenceKind(token.dataset.kind || 'image');
         const key = promptMentionRefKey({
-            kind:token.dataset.kind || '',
+            kind,
             url:token.dataset.url || '',
             nodeId:token.dataset.nodeId || '',
             imageIndex:token.dataset.imageIndex ?? '',
@@ -14788,7 +14819,7 @@ function refreshPromptMentionTokenLabels(){
         });
         let label = orderedMap.get(key) || extraMap.get(key);
         if(!label){
-            label = promptMentionTokenLabel(orderedMap.size + extraMap.size + 1);
+            label = promptMentionTokenLabel(kind, ++counters[kind]);
             extraMap.set(key, label);
         }
         token.dataset.refLabel = label;
@@ -15776,6 +15807,7 @@ function collectPromptParts(){
 function originalPromptTextFromParts(parts){
     let text = '';
     const labelMap = new Map();
+    const counters = {image:0, video:0, audio:0};
     (parts || []).forEach(part => {
         if(part.type === 'text'){
             text += part.text || '';
@@ -15785,7 +15817,8 @@ function originalPromptTextFromParts(parts){
             const key = promptMentionRefKey(part);
             let label = labelMap.get(key);
             if(!label){
-                label = promptMentionTokenLabel(labelMap.size + 1);
+                const kind = promptReferenceKind(part);
+                label = promptMentionTokenLabel(kind, ++counters[kind]);
                 labelMap.set(key, label);
             }
             text += part.refLabel || label;
@@ -15804,7 +15837,12 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     const refs = defaultRefs.map((img, index) => ({...img, role:`image_${index + 1}`}));
     let hasMentionToken = false;
     const refMap = new Map();
-    refs.forEach((img, index) => refMap.set(img.url, index + 1));
+    const refCounters = {image:0, video:0, audio:0};
+    refs.forEach((img, index) => {
+        const kind = promptReferenceKind(img);
+        const typeIndex = ++refCounters[kind];
+        refMap.set(img.url, {position:index + 1, kind, typeIndex, label:promptMentionTokenLabel(kind, typeIndex)});
+    });
     let body = '';
     let veniceBody = '';
     parts.forEach(part => {
@@ -15829,12 +15867,16 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
                 veniceBody += label;
                 return;
             }
-            refMap.set(part.url, refs.length + 1);
-            refs.push({url:part.url, name:part.name || `图${refs.length + 1}`, nodeId:part.nodeId, imageIndex:part.imageIndex, kind:part.kind || 'image', asset_uris:part.asset_uris || {}, role:`image_${refs.length + 1}`});
+            const kind = promptReferenceKind(part);
+            const typeIndex = ++refCounters[kind];
+            const position = refs.length + 1;
+            const label = promptMentionTokenLabel(kind, typeIndex);
+            refMap.set(part.url, {position, kind, typeIndex, label});
+            refs.push({url:part.url, name:part.name || label, nodeId:part.nodeId, imageIndex:part.imageIndex, kind, asset_uris:part.asset_uris || {}, role:`image_${position}`});
         }
-        const index = refMap.get(part.url);
-        body += `图${index}`;
-        veniceBody += `@image${index}`;
+        const refMeta = refMap.get(part.url);
+        body += refMeta.label;
+        veniceBody += venicePromptReferenceLabel(refMeta.kind, refMeta.typeIndex);
     });
     body = body.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     veniceBody = veniceBody.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
@@ -20241,6 +20283,8 @@ promptInput.addEventListener('keydown', handleMentionPickerKeydown);
 promptInput.addEventListener('mouseover', event => {
     const token = event.target.closest?.('.mention-image-token');
     if(!token) return;
+    // mouseover 会在标签内部的缩略图/文字之间移动时冒泡；只处理真正进入标签的一次。
+    if(event.relatedTarget && token.contains(event.relatedTarget)) return;
     // 音频没有可预览的图像，不能把音频 URL 塞进 <img>（会显示破损图标），直接不弹悬浮预览。
     if(token.dataset.kind === 'audio'){ mentionPreview.style.display = 'none'; return; }
     let media = mentionPreview.querySelector('img,video');
@@ -20260,7 +20304,8 @@ promptInput.addEventListener('mouseover', event => {
         media.disablePictureInPicture = true;
         media.setAttribute('disablepictureinpicture', '');
         media.setAttribute('controlslist', 'nodownload noplaybackrate noremoteplayback');
-        media.src = token.dataset.url || '';
+        const nextSrc = token.dataset.url || '';
+        if(media.getAttribute('src') !== nextSrc) media.src = nextSrc;
         media.play?.().catch(() => {});
     } else {
         media.src = token.dataset.url || '';
@@ -20272,7 +20317,8 @@ promptInput.addEventListener('mouseover', event => {
     mentionPreview.style.display = 'block';
 });
 promptInput.addEventListener('mouseout', event => {
-    if(event.target.closest?.('.mention-image-token')){
+    const token = event.target.closest?.('.mention-image-token');
+    if(token && (!event.relatedTarget || !token.contains(event.relatedTarget))){
         mentionPreview.style.display = 'none';
         const media = mentionPreview.querySelector('img,video');
         media?.pause?.();
