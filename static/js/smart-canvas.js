@@ -690,6 +690,7 @@ function smartCanvasVideoHtml(url, attrs=''){
     const original = smartOriginalMediaUrl(url);
     const safe = escapeHtml(displayMediaUrl({url:original}));
     return `<video class="smart-canvas-video" src="${safe}" data-url="${escapeAttr(original)}" preload="metadata" playsinline loop disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video>
+        <canvas class="smart-video-reset-frame" aria-hidden="true"></canvas>
         <div class="smart-video-controls" role="group" aria-label="视频播放控件">
             <button class="smart-video-control smart-video-toggle" type="button" title="播放" aria-label="播放" data-icon="play"><i data-lucide="play" data-smart-icon="play"></i><i data-lucide="pause" data-smart-icon="pause" hidden></i></button>
             <span class="smart-video-time smart-video-current">0:00</span>
@@ -767,11 +768,89 @@ function smartVideoHasUserPause(video){
     const key = smartVideoPlaybackKey(video);
     return video?.dataset?.smartUserPaused === '1' || Boolean(key && smartVideoUserPausedKeys.has(key));
 }
+function hideSmartVideoResetFrame(video){
+    if(!video) return;
+    delete video.dataset.smartResetFrameEpoch;
+    delete video.dataset.smartResetFramePending;
+    video.closest('.smart-canvas-video-host')?.classList.remove('is-reset-frame-visible');
+}
+function paintSmartVideoResetFrame(video, expectedEpoch){
+    if(!video?.isConnected) return false;
+    if(String(video.dataset.smartPlaybackEpoch || 0) !== String(expectedEpoch)) return false;
+    if(video.dataset.smartPlaybackWanted === '1' || !video.paused || video.seeking) return false;
+    if((Number(video.currentTime) || 0) > .025 || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return false;
+    const host = video.closest('.smart-canvas-video-host');
+    const frame = host?.querySelector('.smart-video-reset-frame');
+    if(!host || !frame) return false;
+    const rect = host.getBoundingClientRect();
+    const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1));
+    const sourceW = video.videoWidth;
+    const sourceH = video.videoHeight;
+    const displayScale = Math.max(
+        Math.max(2, rect.width * dpr) / sourceW,
+        Math.max(2, rect.height * dpr) / sourceH
+    );
+    const memoryScale = 1280 / Math.max(sourceW, sourceH);
+    const minimumScale = 256 / Math.max(sourceW, sourceH);
+    const scale = Math.max(Math.min(1, minimumScale), Math.min(1, displayScale, memoryScale));
+    const width = Math.max(2, Math.round(sourceW * scale));
+    const height = Math.max(2, Math.round(sourceH * scale));
+    try {
+        if(frame.width !== width) frame.width = width;
+        if(frame.height !== height) frame.height = height;
+        const context = frame.getContext('2d', {alpha:false});
+        context.drawImage(video, 0, 0, width, height);
+        delete video.dataset.smartResetFramePending;
+        host.classList.add('is-reset-frame-visible');
+        return true;
+    } catch(e) {
+        delete video.dataset.smartResetFramePending;
+        host.classList.remove('is-reset-frame-visible');
+        return false;
+    }
+}
+function scheduleSmartVideoResetFrame(video, expectedEpoch){
+    if(!video) return;
+    const epoch = String(expectedEpoch ?? video.dataset.smartPlaybackEpoch ?? 0);
+    const existingHost = video.closest('.smart-canvas-video-host');
+    const existingFrame = existingHost?.querySelector('.smart-video-reset-frame');
+    if(existingHost?.classList.contains('is-reset-frame-visible') && existingFrame?.width > 1 && existingFrame?.height > 1) return;
+    if(video.dataset.smartResetFramePending === epoch) return;
+    video.dataset.smartResetFrameEpoch = epoch;
+    video.dataset.smartResetFramePending = epoch;
+    const isCurrent = () => video.isConnected
+        && video.dataset.smartResetFrameEpoch === epoch
+        && String(video.dataset.smartPlaybackEpoch || 0) === epoch
+        && video.dataset.smartPlaybackWanted !== '1';
+    const present = () => {
+        if(!isCurrent()) return;
+        if(video.seeking || video.readyState < 2){
+            video.addEventListener('seeked', present, {once:true});
+            video.addEventListener('loadeddata', present, {once:true});
+            return;
+        }
+        if(typeof video.requestVideoFrameCallback === 'function'){
+            video.requestVideoFrameCallback((_, metadata) => {
+                if(!isCurrent()) return;
+                if(Number(metadata?.mediaTime || 0) <= .025) paintSmartVideoResetFrame(video, epoch);
+            });
+        }
+        // drawImage after seeked is already reliable even when Chromium keeps
+        // displaying an older video compositor surface. The next-frame retry
+        // covers browsers without requestVideoFrameCallback.
+        paintSmartVideoResetFrame(video, epoch);
+        requestAnimationFrame(() => paintSmartVideoResetFrame(video, epoch));
+    };
+    present();
+}
 function resetSmartCanvasVideo(video){
     if(!video) return;
     const playbackKey = smartVideoPlaybackKey(video);
     if(playbackKey) smartVideoUserPausedKeys.delete(playbackKey);
-    if(video.dataset.smartReset === '1') return;
+    if(video.dataset.smartReset === '1'){
+        scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
+        return;
+    }
     const host = video.closest('.smart-canvas-video-host');
     const desiredMuted = video.dataset.smartUserMuted === '1';
     const hasTransientState = video.dataset.smartPlaybackWanted === '1'
@@ -787,6 +866,7 @@ function resetSmartCanvasVideo(video){
     if(!hasTransientState && !hostIsActive && video.paused && (video.currentTime || 0) === 0
         && !video.controls && video.muted === desiredMuted){
         video.dataset.smartReset = '1';
+        scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0);
         return;
     }
     const epoch = Number(video.dataset.smartPlaybackEpoch || 0) + 1;
@@ -804,6 +884,7 @@ function resetSmartCanvasVideo(video){
     video.muted = desiredMuted;
     host?.classList.remove('is-playing', 'autoplay-blocked', 'is-controls-visible', 'is-controls-pinned');
     video.dataset.smartReset = '1';
+    scheduleSmartVideoResetFrame(video, epoch);
 }
 let smartVideoAltCopyDragActive = false;
 function stopAllSmartCanvasVideos(){
@@ -842,6 +923,7 @@ function playSmartCanvasVideo(video){
         video.dataset.smartUserPaused = '1';
         return;
     }
+    hideSmartVideoResetFrame(video);
     delete video.dataset.smartReset;
     const host = video.closest('.smart-canvas-video-host');
     const desiredMuted = video.dataset.smartUserMuted === '1';
@@ -1207,6 +1289,7 @@ function bindSmartCanvasVideo(host, nodeId){
     });
     on(captureMenu, 'mouseleave', scheduleCaptureMenuClose);
     on(video, 'play', () => {
+        hideSmartVideoResetFrame(video);
         video.dataset.smartHasPlayed = '1';
         delete video.dataset.smartWaiting;
         syncSmartVideoControls(host, video);
