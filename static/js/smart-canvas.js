@@ -18763,13 +18763,12 @@ function openCreateMenu(event, options={}){
     if(!createMenu) return;
     createMenuPoint = screenToWorld(event);
     createMenuGroupId = options.groupId || '';
-    const w = 500;
-    const h = 114;
+    createMenu.classList.add('open');
+    const {width:w, height:h} = createMenu.getBoundingClientRect();
     const left = Math.max(14, Math.min(window.innerWidth - w - 14, event.clientX + 8));
     const top = Math.max(14, Math.min(window.innerHeight - h - 14, event.clientY + 8));
     createMenu.style.left = `${left}px`;
     createMenu.style.top = `${top}px`;
-    createMenu.classList.add('open');
     refreshIcons();
 }
 function addCreatedNodeToMenuGroup(node){
