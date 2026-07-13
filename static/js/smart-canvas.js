@@ -8756,20 +8756,34 @@ function restoreMediaPlaybackState(media, state){
 function transplantSmartMediaElements(oldNodeEl, newNodeEl){
     const oldItems = [...(oldNodeEl?.querySelectorAll?.('.thumb-item,.image-wrap') || [])];
     const newItems = [...(newNodeEl?.querySelectorAll?.('.thumb-item,.image-wrap') || [])];
+    const claimedNewItems = new Set();
+    const itemIdentity = item => {
+        if(!item) return '';
+        const ownerId = item.dataset?.refNodeId || oldNodeEl?.dataset?.id || newNodeEl?.dataset?.id || '';
+        const imageIndex = item.dataset?.refImageIndex ?? item.dataset?.imageIndex;
+        return ownerId && imageIndex != null ? `${ownerId}:${imageIndex}` : '';
+    };
     oldItems.forEach((oldItem, index) => {
         const oldMedia = oldItem.querySelector('video,audio,img.node-img,.thumb-item > img,.media-thumb img');
         if(!oldMedia) return;
         const selector = oldMedia.tagName.toLowerCase();
         const oldUrl = oldMedia.dataset?.url || oldMedia.dataset?.originalSrc || oldMedia.getAttribute('src') || '';
         const oldSignature = oldItem.dataset?.mediaSignature || `${selector}:${oldUrl}`;
-        const newItem = newItems.find(item => item.dataset?.mediaSignature === oldSignature)
-            || newItems.find(item => item.querySelector?.(selector)?.dataset?.url === oldUrl)
-            || newItems.find(item => item.querySelector?.(selector)?.dataset?.originalSrc === oldUrl)
-            || newItems.find(item => item.querySelector?.(selector)?.getAttribute?.('src') === oldMedia.getAttribute('src'))
-            || newItems[index];
+        const oldIdentity = itemIdentity(oldItem);
+        const available = predicate => newItems.find(item => !claimedNewItems.has(item) && predicate(item));
+        // A group may legitimately contain the same source URL many times. Match
+        // its stable owner/index slot first and never assign one fresh slot twice;
+        // URL-only matching otherwise makes every duplicate replace slot zero.
+        const newItem = (oldIdentity && available(item => itemIdentity(item) === oldIdentity))
+            || available(item => item.dataset?.mediaSignature === oldSignature)
+            || available(item => item.querySelector?.(selector)?.dataset?.url === oldUrl)
+            || available(item => item.querySelector?.(selector)?.dataset?.originalSrc === oldUrl)
+            || available(item => item.querySelector?.(selector)?.getAttribute?.('src') === oldMedia.getAttribute('src'))
+            || (!claimedNewItems.has(newItems[index]) ? newItems[index] : null);
         const newMedia = newItem?.querySelector?.(selector);
         const newUrl = newMedia?.dataset?.url || newMedia?.dataset?.originalSrc || newMedia?.getAttribute?.('src') || '';
         if(!newMedia || oldUrl !== newUrl) return;
+        claimedNewItems.add(newItem);
         if(selector === 'img'){
             oldMedia.className = newMedia.className;
             oldMedia.draggable = false;
@@ -8804,21 +8818,28 @@ function applyDetachedVideoDomHandoff(){
     oldHost.style.cssText = freshHost.style.cssText;
     freshHost.replaceWith(oldHost);
 }
+function mediaPlaybackStateKey(media){
+    if(!media) return '';
+    const nodeId = media.closest('.image-node')?.dataset?.id || '';
+    const item = media.closest('[data-image-index]');
+    const ownerId = item?.dataset?.refNodeId || nodeId;
+    const imageIndex = item?.dataset?.refImageIndex ?? item?.dataset?.imageIndex ?? '';
+    const tag = media.tagName.toLowerCase();
+    const url = media.dataset.url || media.getAttribute('src') || '';
+    return nodeId && url ? `${nodeId}\n${ownerId}\n${imageIndex}\n${tag}:${url}` : '';
+}
 function captureMediaPlaybackStates(){
     const states = new Map();
     world.querySelectorAll('video[data-url], audio[data-url]').forEach(media => {
-        const tag = media.tagName.toLowerCase();
-        const url = media.dataset.url || media.getAttribute('src') || '';
-        if(url) states.set(`${tag}:${url}`, captureMediaPlaybackState(media));
+        const key = mediaPlaybackStateKey(media);
+        if(key) states.set(key, captureMediaPlaybackState(media));
     });
     return states;
 }
 function restoreMediaPlaybackStates(states){
     if(!states?.size) return;
     world.querySelectorAll('video[data-url], audio[data-url]').forEach(media => {
-        const tag = media.tagName.toLowerCase();
-        const url = media.dataset.url || media.getAttribute('src') || '';
-        restoreMediaPlaybackState(media, states.get(`${tag}:${url}`));
+        restoreMediaPlaybackState(media, states.get(mediaPlaybackStateKey(media)));
     });
 }
 function captureThumbScrollStates(){
