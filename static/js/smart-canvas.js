@@ -12027,7 +12027,38 @@ function refreshComparePanel(){
     const previewSrc = smartMediaPreviewUrl(editing.image || curUrl, 1536) || originalPreviewSrc;
     const sourceChanged = currentImg.getAttribute('src') !== previewSrc;
     currentImg.dataset.previewQuick = previewSrc !== originalPreviewSrc ? '1' : '';
-    if(sourceChanged){
+    const canSwapAfterDecode = sourceChanged
+        && imageEditModal.classList.contains('open')
+        && !imageEditModal.classList.contains('media-preparing')
+        && currentImg.complete
+        && currentImg.naturalWidth;
+    if(canSwapAfterDecode){
+        const candidates = [previewSrc, originalPreviewSrc, proxiedMediaUrl(editing.image || curUrl)]
+            .filter(Boolean)
+            .filter((url, index, all) => all.indexOf(url) === index);
+        (async () => {
+            let loaded = null;
+            for(const candidate of candidates){
+                loaded = await loadDecodedImage(candidate);
+                const live = document.getElementById('previewCurrentImage');
+                if(!live || live.dataset.previewSrcToken !== previewToken) return;
+                if(loaded) break;
+            }
+            const live = document.getElementById('previewCurrentImage');
+            if(!loaded || !live || live.dataset.previewSrcToken !== previewToken) return;
+            loaded.id = 'previewCurrentImage';
+            loaded.className = 'preview-current';
+            loaded.alt = 'current';
+            loaded.style.display = 'block';
+            loaded.style.visibility = '';
+            loaded.dataset.previewSrcToken = previewToken;
+            loaded.dataset.previewQuick = loaded.getAttribute('src') !== originalPreviewSrc ? '1' : '';
+            live.replaceWith(loaded);
+            if(loaded.dataset.previewQuick !== '1') rememberPreviewImageResolution();
+            syncPreviewFrameSize();
+            updatePreviewMetaHint();
+        })();
+    } else if(sourceChanged){
         currentImg.dataset.proxyFallbackTried = '';
         if(imageEditModal.classList.contains('media-preparing')) currentImg.style.visibility = 'hidden';
         currentImg.src = previewSrc;
@@ -13211,6 +13242,8 @@ function openImageEditor(nodeId, imageIndex=0){
         && openRequestAt - Number(imageEditModal.dataset.openRequestAt || 0) < 500) return;
     imageEditModal.dataset.openRequestKey = openRequestKey;
     imageEditModal.dataset.openRequestAt = String(openRequestAt);
+    const switchingVisibleMedia = imageEditModal.classList.contains('open')
+        && !imageEditModal.classList.contains('media-preparing');
     selectedId = nodeId;
     selectedImage = {nodeId, index:imageIndex};
     previewNavState = {nodeId, index:imageIndex, count:(node.images || []).filter(img => img?.url).length};
@@ -13244,8 +13277,10 @@ function openImageEditor(nodeId, imageIndex=0){
     if(previewImg){
         previewImg.onload = null;
         previewImg.onerror = null;
-        previewImg.removeAttribute('src');
-        previewImg.style.visibility = 'hidden';
+        if(!switchingVisibleMedia){
+            previewImg.removeAttribute('src');
+            previewImg.style.visibility = 'hidden';
+        }
         delete previewImg.dataset.previewSrcToken;
         delete previewImg.dataset.previewQuick;
         delete previewImg.dataset.proxyFallbackTried;
@@ -13269,7 +13304,8 @@ function openImageEditor(nodeId, imageIndex=0){
     previewStage?.classList.remove('compare-on');
     if(previewFrame){ previewFrame.style.width = ''; previewFrame.style.height = ''; }
     img.style.width = ''; img.style.height = ''; img.style.maxWidth = ''; img.style.maxHeight = '';
-    imageEditModal.classList.add('open', 'media-preparing');
+    imageEditModal.classList.add('open');
+    imageEditModal.classList.toggle('media-preparing', !switchingVisibleMedia);
     previewCompareOn = false;
     previewCompareIndex = -1;
     previewCompareLoadToken++;
