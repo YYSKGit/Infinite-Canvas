@@ -54,6 +54,8 @@ const veniceCreditsPanelRefill = document.getElementById('veniceCreditsPanelRefi
 const veniceCreditsPanelUpdatedAt = document.getElementById('veniceCreditsPanelUpdatedAt');
 const veniceVideoQuote = document.getElementById('veniceVideoQuote');
 const veniceVideoQuoteText = veniceVideoQuote?.querySelector('.venice-video-quote-text') || null;
+const veniceImageQuote = document.getElementById('veniceImageQuote');
+const veniceImageQuoteText = veniceImageQuote?.querySelector('.venice-image-quote-text') || null;
 const assetToggle = document.getElementById('assetToggle');
 const assetPanel = document.getElementById('assetPanel');
 const assetCloseBtn = document.getElementById('assetCloseBtn');
@@ -196,6 +198,11 @@ let veniceVideoQuoteTimer = null;
 let veniceVideoQuoteController = null;
 let veniceVideoQuoteSignature = '';
 let veniceVideoQuoteRequestToken = 0;
+let veniceImageQuoteTimer = null;
+let veniceImageQuoteController = null;
+let veniceImageQuoteSignature = '';
+let veniceImageQuoteRequestToken = 0;
+let veniceImageQuoteCache = null;
 const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v1';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
@@ -3921,6 +3928,10 @@ function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt
         track.setAttribute('aria-valuetext', hasNumbers ? `${formatVeniceFull(safeUsed)} / ${formatVeniceFull(safeTotal)}` : '-- / --');
     }
     renderVeniceCreditsPanel();
+    if(state === 'ready'){
+        syncVeniceImageQuote();
+        syncVeniceVideoQuote();
+    }
 }
 async function refreshVeniceCredits(options={}){
     if(!veniceCreditsBadge) return null;
@@ -4001,6 +4012,140 @@ function startVeniceCreditsAutoRefresh(){
         refreshVeniceCredits({automatic:true});
     }, VENICE_CREDITS_AUTO_REFRESH_MS);
 }
+function veniceQuoteRemainingShareText(quote){
+    const used = Number(veniceCreditsState.used);
+    const total = Number(veniceCreditsState.total);
+    const cost = Math.max(0, Number(quote) || 0);
+    if(!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return '';
+    const remaining = Math.max(0, total - used);
+    if(remaining <= 0) return ` (${cost === 0 ? '0%' : '∞%'})`;
+    const percent = cost / remaining * 100;
+    const percentText = percent > 0 && percent < 0.01 ? '<0.01%' : `${percent.toFixed(percent >= 10 ? 1 : 2)}%`;
+    return ` (${percentText})`;
+}
+function hideVeniceImageQuote(){
+    if(veniceImageQuoteTimer){
+        clearTimeout(veniceImageQuoteTimer);
+        veniceImageQuoteTimer = null;
+    }
+    if(veniceImageQuoteController){
+        veniceImageQuoteController.abort();
+        veniceImageQuoteController = null;
+    }
+    veniceImageQuoteRequestToken++;
+    veniceImageQuoteSignature = '';
+    if(veniceImageQuote){
+        veniceImageQuote.hidden = true;
+        veniceImageQuote.className = 'venice-image-quote';
+        veniceImageQuote.removeAttribute('title');
+        veniceImageQuote.parentElement?.classList.remove('has-inline-image-quote');
+    }
+}
+function setVeniceImageQuoteStatus(status, text, title=''){
+    if(!veniceImageQuote || !veniceImageQuoteText) return;
+    veniceImageQuote.hidden = false;
+    veniceImageQuote.parentElement?.classList.add('has-inline-image-quote');
+    veniceImageQuote.className = `venice-image-quote is-${status}`;
+    veniceImageQuoteText.textContent = text;
+    if(title) veniceImageQuote.title = title;
+    else veniceImageQuote.removeAttribute('title');
+}
+function veniceImageQuoteResolution(){
+    const selected = String(settings.resolution || '1k').trim().toUpperCase();
+    if(['1K','2K','4K'].includes(selected)) return selected;
+    const parsed = parseSizeValue(sizeForRun(settings));
+    const width = Number(parsed?.width || 0);
+    const height = Number(parsed?.height || 0);
+    if(!(width > 0 && height > 0)) return '1K';
+    const longEdge = Math.max(width, height);
+    const pixels = width * height;
+    if(longEdge >= 3072 || pixels >= 7500000) return '4K';
+    if(longEdge >= 1800 || pixels >= 2400000) return '2K';
+    return '1K';
+}
+function renderVeniceImageQuoteAmount(unitQuote){
+    const count = Math.max(1, Math.min(8, Number(settings.count || 1)));
+    const totalQuote = Number(unitQuote) * count;
+    const totalUsd = totalQuote / 100;
+    const totalCny = totalUsd * 7;
+    const creditsText = Number.isInteger(totalQuote) ? `${totalQuote}` : totalQuote.toFixed(2);
+    setVeniceImageQuoteStatus(
+        totalQuote === 0 ? 'free' : 'ready',
+        totalQuote === 0 ? '免费' : `¥${totalCny.toFixed(2)}`,
+        `${unitQuote} 积分/张 × ${count} = ${creditsText} 积分 ≈ $${totalUsd.toFixed(2)} × 7${veniceQuoteRemainingShareText(totalQuote)}`
+    );
+}
+function syncVeniceImageQuote(){
+    const active = settings.engine === 'api'
+        && settings.apiKind !== 'video'
+        && isVeniceProviderId(settings.provider_id || '');
+    if(!active){
+        hideVeniceImageQuote();
+        return;
+    }
+    const payload = {
+        provider_id:String(settings.provider_id || 'venice'),
+        model:String(settings.model || ''),
+        resolution:veniceImageQuoteResolution()
+    };
+    if(!payload.model){
+        setVeniceImageQuoteStatus('error', '暂无报价');
+        return;
+    }
+    const signature = JSON.stringify(payload);
+    const subject = activeSettingsSubject() || activeComposerNode();
+    const subjectId = String(subject?.id || 'unbound');
+    const activeKey = `${subjectId}:${signature}`;
+    const cached = subject?.veniceImageQuoteCache?.signature === signature
+        ? subject.veniceImageQuoteCache
+        : (veniceImageQuoteCache?.activeKey === activeKey ? veniceImageQuoteCache : null);
+    if(cached && Number.isFinite(Number(cached.quote)) && Number.isFinite(Number(cached.cny))){
+        const quote = Number(cached.quote);
+        veniceImageQuoteSignature = activeKey;
+        renderVeniceImageQuoteAmount(quote);
+        return;
+    }
+    // 批次数不属于请求签名：接口只询一次单张价格，展示时再乘当前张数。
+    if(activeKey === veniceImageQuoteSignature) return;
+    veniceImageQuoteSignature = activeKey;
+    if(veniceImageQuoteTimer) clearTimeout(veniceImageQuoteTimer);
+    if(veniceImageQuoteController) veniceImageQuoteController.abort();
+    const requestToken = ++veniceImageQuoteRequestToken;
+    setVeniceImageQuoteStatus('loading', '加载');
+    veniceImageQuoteTimer = setTimeout(async () => {
+        veniceImageQuoteTimer = null;
+        const controller = new AbortController();
+        veniceImageQuoteController = controller;
+        try {
+            const response = await fetch('/api/venice/image/quote', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:signature,
+                signal:controller.signal
+            });
+            const data = await response.json().catch(() => ({}));
+            if(!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+            if(requestToken !== veniceImageQuoteRequestToken || activeKey !== veniceImageQuoteSignature) return;
+            const quote = Number(data.quote);
+            const cny = Number(data.cny);
+            if(!Number.isFinite(quote) || !Number.isFinite(cny)) throw new Error('报价数据无效');
+            const usd = Number.isFinite(Number(data.usd)) ? Number(data.usd) : quote / 100;
+            const cache = {activeKey, signature, quote, usd, cny, updatedAt:Date.now()};
+            veniceImageQuoteCache = cache;
+            if(subject){
+                subject.veniceImageQuoteCache = {signature, quote, usd, cny, updatedAt:cache.updatedAt};
+                scheduleSave();
+            }
+            renderVeniceImageQuoteAmount(quote);
+        } catch(error) {
+            if(error?.name === 'AbortError') return;
+            if(requestToken !== veniceImageQuoteRequestToken || activeKey !== veniceImageQuoteSignature) return;
+            setVeniceImageQuoteStatus('error', '未知', String(error?.message || error || ''));
+        } finally {
+            if(veniceImageQuoteController === controller) veniceImageQuoteController = null;
+        }
+    }, 250);
+}
 const VENICE_VIDEO_ASPECTS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
 function isVeniceVideoProvider(providerId=''){
     const idText = String(providerId || '').trim();
@@ -4054,20 +4199,21 @@ function syncVeniceVideoQuote(){
     const subject = activeSettingsSubject() || activeComposerNode();
     const subjectId = String(subject?.id || 'unbound');
     const activeKey = `${subjectId}:${signature}`;
-    if(activeKey === veniceVideoQuoteSignature) return;
-    veniceVideoQuoteSignature = activeKey;
-    if(veniceVideoQuoteTimer) clearTimeout(veniceVideoQuoteTimer);
-    if(veniceVideoQuoteController) veniceVideoQuoteController.abort();
-    const requestToken = ++veniceVideoQuoteRequestToken;
     const cached = subject?.veniceVideoQuoteCache;
     if(cached?.signature === signature && Number.isFinite(Number(cached.quote)) && Number.isFinite(Number(cached.cny))){
         const quote = Number(cached.quote);
         const cny = Number(cached.cny);
         const usd = Number.isFinite(Number(cached.usd)) ? Number(cached.usd) : quote / 100;
-        setVeniceVideoQuoteStatus('ready', `预计 ¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7`);
+        veniceVideoQuoteSignature = activeKey;
+        setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingShareText(quote)}`);
         return;
     }
-    setVeniceVideoQuoteStatus('loading', '报价加载中');
+    if(activeKey === veniceVideoQuoteSignature) return;
+    veniceVideoQuoteSignature = activeKey;
+    if(veniceVideoQuoteTimer) clearTimeout(veniceVideoQuoteTimer);
+    if(veniceVideoQuoteController) veniceVideoQuoteController.abort();
+    const requestToken = ++veniceVideoQuoteRequestToken;
+    setVeniceVideoQuoteStatus('loading', '加载');
     veniceVideoQuoteTimer = setTimeout(async () => {
         veniceVideoQuoteTimer = null;
         const controller = new AbortController();
@@ -4090,11 +4236,11 @@ function syncVeniceVideoQuote(){
                 subject.veniceVideoQuoteCache = {signature, quote, usd, cny, updatedAt:Date.now()};
                 scheduleSave();
             }
-            setVeniceVideoQuoteStatus('ready', `预计 ¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7`);
+            setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingShareText(quote)}`);
         } catch(error) {
             if(error?.name === 'AbortError') return;
             if(requestToken !== veniceVideoQuoteRequestToken || activeKey !== veniceVideoQuoteSignature) return;
-            setVeniceVideoQuoteStatus('error', '报价暂不可用', String(error?.message || error || ''));
+            setVeniceVideoQuoteStatus('error', '未知', String(error?.message || error || ''));
         } finally {
             if(veniceVideoQuoteController === controller) veniceVideoQuoteController = null;
         }
@@ -4274,6 +4420,7 @@ function renderDynamicParams(){
     else if(settings.engine === 'modelscope') renderMsParams();
     else if(settings.engine === 'runninghub') renderRunningHubParams();
     else renderComfyParams();
+    syncVeniceImageQuote();
     syncVeniceVideoQuote();
     bindDynamicParams();
     restoreOpenControl(keepOpen);
@@ -5464,7 +5611,10 @@ function setDynamicSetting(key, value){
     persistActiveSmartSettings();
     rememberRecentSmartSettings(settings, activeSettingsSubject());
     if(layoutKeys.has(key)) renderDynamicParams();
-    else if(key === 'videoDuration') syncVeniceVideoQuote();
+    else {
+        if(key === 'videoDuration') syncVeniceVideoQuote();
+        syncVeniceImageQuote();
+    }
     scheduleSave();
 }
 function closeAllSmartPopovers(){
@@ -13590,7 +13740,7 @@ function positionComposerForNode(node){
     if(composerExpanded) return;
     const rect = nodeRect(node);
     const gap = 14;
-    const cardW = 520;
+    const cardW = 530;
     composer.style.width = `${cardW}px`;
     composer.style.left = `${rect.x + rect.width / 2 - cardW / 2}px`;
     composer.style.top = `${rect.y + rect.height + gap}px`;

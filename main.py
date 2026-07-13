@@ -377,6 +377,7 @@ VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
 VENICE_OUTERFACE_VIDEO_QUOTE_URL = "https://outerface.venice.ai/api/inference/video/quote"
 VENICE_OUTERFACE_IMAGE_URL = "https://outerface.venice.ai/api/inference/image"
+VENICE_OUTERFACE_IMAGE_QUOTE_URL = "https://outerface.venice.ai/api/inference/image/quote"
 VENICE_OUTERFACE_IMAGE_EDIT_URL = "https://outerface.venice.ai/api/inference/multi-edit"
 VENICE_OUTERFACE_USER_SESSION_URL = "https://outerface.venice.ai/api/user/session"
 VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
@@ -2531,6 +2532,11 @@ class VeniceVideoQuoteRequest(BaseModel):
     duration: int = 5
     resolution: str = "480p"
     generate_audio: bool = False
+
+class VeniceImageQuoteRequest(BaseModel):
+    provider_id: str = "venice"
+    model: str = "grok-imagine-image-quality"
+    resolution: str = "1K"
 
 class TempShUploadRequest(BaseModel):
     url: str = ""
@@ -13525,6 +13531,49 @@ async def get_venice_video_quote(payload: VeniceVideoQuoteRequest):
         raise HTTPException(status_code=502, detail="Venice 视频报价接口返回了无效价格。")
     return {
         "provider_id": str(provider.get("id") or payload.provider_id),
+        "quote": quote,
+        "usd": round(quote / 100, 4),
+        "cny": round(quote / 100 * 7, 2),
+    }
+
+@app.post("/api/venice/image/quote")
+async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
+    provider = get_api_provider(payload.provider_id)
+    if not is_venice_provider(provider):
+        raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
+    model = selected_model(payload.model, "grok-imagine-image-quality")
+    resolution = venice_size_resolution(payload.resolution)
+    body = {
+        "variants": [{
+            "modelId": model,
+            "resolution": resolution,
+        }],
+    }
+    timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async def send(jwt, _user_id):
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": bearer_auth_value(jwt),
+                "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+            }
+            return await client.post(VENICE_OUTERFACE_IMAGE_QUOTE_URL, headers=headers, json=body)
+        response = await venice_web_request(client, provider, send)
+    if response.status_code >= 400:
+        detail = venice_http_error_detail(response, f"Venice 图片报价失败(HTTP {response.status_code})")
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    try:
+        raw = response.json()
+        quote = float((raw or {}).get("quote"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Venice 图片报价接口没有返回有效的 quote。") from exc
+    if not math.isfinite(quote) or quote < 0:
+        raise HTTPException(status_code=502, detail="Venice 图片报价接口返回了无效价格。")
+    return {
+        "provider_id": str(provider.get("id") or payload.provider_id),
+        "model": model,
+        "resolution": resolution,
         "quote": quote,
         "usd": round(quote / 100, 4),
         "cny": round(quote / 100 * 7, 2),
