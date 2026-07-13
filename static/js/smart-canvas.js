@@ -13451,7 +13451,10 @@ function openImageEditor(nodeId, imageIndex=0){
     if(previewFrame){ previewFrame.style.width = ''; previewFrame.style.height = ''; }
     img.style.width = ''; img.style.height = ''; img.style.maxWidth = ''; img.style.maxHeight = '';
     imageEditModal.classList.add('open');
-    imageEditModal.classList.toggle('media-preparing', !switchingVisibleMedia);
+    // Video already keeps its own media element hidden until the inherited
+    // seek completes. Show the opaque modal immediately so resetting the
+    // canvas player to its first frame happens behind the preview window.
+    imageEditModal.classList.toggle('media-preparing', !switchingVisibleMedia && kind !== 'video');
     previewCompareOn = false;
     previewCompareIndex = -1;
     previewCompareLoadToken++;
