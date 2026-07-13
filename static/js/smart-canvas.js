@@ -10563,6 +10563,13 @@ function deleteImage(id, imageIndex){
             delete node.h;
             inheritNodeMetaFromImage(node);
             syncHistoryNodePromptFromImages(node);
+        } else if(isSmartImageNode(node) && node.images.length === 1){
+            // Batch generation results are regular smart-image multi-image
+            // nodes. When deletion reduces them to one item, apply the same
+            // cleanup as the drag-out path instead of retaining grid dimensions.
+            delete node.w;
+            delete node.h;
+            inheritNodeMetaFromImage(node);
         }
     }
     if(selectedImage.nodeId === id) selectedImage = {nodeId:id, index:Math.min(selectedImage.index, node.images.length - 1)};
@@ -14314,25 +14321,24 @@ function pendingBaseBoxSize(options={}){
 }
 function pendingBoxSize(count, options={}){
     const base = pendingBaseBoxSize(options);
-    const aspect = base.w / Math.max(1, base.h);
     const c = Math.max(1, Number(count) || 1);
     if(c <= 1){
         return {w:Math.round(base.w), h:Math.round(base.h)};
     }
+    // Completed multi-image nodes use a uniform square thumbnail grid. Using
+    // each output's estimated aspect ratio here makes portrait/wide batches
+    // collapse into a tiny pending card and then jump again on completion.
+    // Keep the pending skeleton identical to the final group layout instead.
     const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(c))));
     const rows = Math.ceil(c / cols);
-    const cellMax = Math.max(96, Math.min(220, Math.max(base.w, base.h) * 0.42));
-    let cellW, cellH;
-    if(base.w >= base.h){
-        cellW = cellMax;
-        cellH = Math.max(40 * MEDIA_NODE_DEFAULT_SCALE, Math.round(cellMax / aspect));
-    } else {
-        cellH = cellMax;
-        cellW = Math.max(40 * MEDIA_NODE_DEFAULT_SCALE, Math.round(cellMax * aspect));
-    }
-    const w = cols * (cellW + 8) + 16;
-    const h = rows * (cellH + 8) + 16;
-    return {w, h};
+    const visibleRows = Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows);
+    const thumb = Math.round(MEDIA_GROUP_THUMB_BASE * MEDIA_GROUP_DEFAULT_SCALE);
+    const cell = thumb + 8;
+    const pad = 32;
+    return {
+        w:Math.max(Math.round(226 * MEDIA_GROUP_DEFAULT_SCALE), cols * cell + pad),
+        h:visibleRows * cell - 8 + pad
+    };
 }
 function animateFirstPendingNode(nodeId, fromSize){
     // Visual enhancement only: it must never interrupt generation or leave a node busy.
@@ -17039,7 +17045,7 @@ async function runGeneration(){
         syncRunButtonState();
     }
     render();
-    if(wasEmptyFirstRun && !branchNode && expectedCount === 1 && (logKind === 'image' || logKind === 'video')){
+    if(wasEmptyFirstRun && !branchNode && (logKind === 'image' || logKind === 'video')){
         animateFirstPendingNode(pendingNode.id, emptyNodeRect && {width:emptyNodeRect.width, height:emptyNodeRect.height});
     }
     try {
@@ -17998,7 +18004,8 @@ async function resumeSmartPendingNode(node, logContext={}){
     node.pending = activeTaskCount;
     node.running = false;
     if(!activeTaskCount) markSmartNodeRunFailed(node, {keepRecoverableTasks:true});
-    render();
+    if(!firstPendingTransitionActive(node.id)) render();
+    else refreshRunTimerPills();
     const failures = [];
     await Promise.all(tasks.map(async task => {
         if(task.failed && task.recoverTaskId) return;
