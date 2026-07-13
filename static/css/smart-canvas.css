@@ -636,14 +636,25 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-node.selected .node-resize-handle, .image-node:hover .node-resize-handle { opacity:1; }
 .image-node.dragging .node-resize-handle { opacity:0 !important; pointer-events:none !important; }
 .image-node:has(.smart-canvas-video-host.is-controls-visible,.smart-canvas-video-host.is-controls-pinned,.smart-canvas-video-host.is-controls-interacting) .node-resize-handle,.image-node.selected:has(.smart-canvas-video[data-smart-has-played="1"]) .node-resize-handle { opacity:0 !important; pointer-events:none !important; }
-.node-port { position:absolute; top:50%; width:14px; height:14px; border-radius:50%; background:var(--card); border:1.8px solid var(--strong); transform:translateY(-50%); z-index:6; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .15s ease, background .15s ease, transform .15s ease, box-shadow .15s ease; box-shadow:0 4px 10px rgba(15,23,42,.18); }
+.node-port { --port-x:0px; --port-y:0px; position:absolute; top:50%; width:16px; height:16px; border-radius:50%; background:var(--card); border:1.6px solid color-mix(in srgb, var(--strong) 78%, var(--card)); transform:translate(var(--port-x), calc(-50% + var(--port-y))); z-index:6; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .24s ease, background .2s ease, transform .36s cubic-bezier(.22,.72,.2,1), box-shadow .24s ease; box-shadow:0 4px 10px rgba(15,23,42,.2); transform-origin:center; }
+.node-port::before,.node-port::after { content:""; position:absolute; left:50%; top:50%; width:7px; height:1.3px; border-radius:2px; background:currentColor; transform:translate(-50%,-50%); pointer-events:none; }
+.node-port::after { transform:translate(-50%,-50%) rotate(90deg); }
 .node-port.port-in { left:-8px; }
 .node-port.port-out { right:-8px; }
 .image-node:hover .node-port, .image-node.selected .node-port, .image-node.port-hover .node-port { opacity:1; pointer-events:auto; }
-.shell.port-dragging .node-port { opacity:1; pointer-events:auto; }
-.node-port:hover, .node-port.is-active { background:var(--strong); transform:translateY(-50%) scale(1.22); box-shadow:0 6px 14px rgba(15,23,42,.26); }
+.node-port.is-magnetic { opacity:1; pointer-events:auto; transition:opacity .2s ease, background .2s ease, transform .34s cubic-bezier(.22,.72,.2,1), box-shadow .22s ease; box-shadow:0 7px 18px rgba(15,23,42,.3),0 0 0 5px color-mix(in srgb, var(--strong) 9%, transparent); }
+.node-port:hover, .node-port.is-active, .node-port.is-caught { background:var(--strong); color:var(--strong-text); box-shadow:0 7px 18px rgba(15,23,42,.3),0 0 0 5px color-mix(in srgb, var(--strong) 10%, transparent); }
+.node-port.is-drag-source { opacity:0 !important; pointer-events:none !important; }
+/* A port remains a child of its node while it follows the pointer outside.
+   Suppress the node's incidental :hover controls until the pointer truly
+   enters the card; the magnetic port itself stays visible. */
+.image-node:has(.node-port.is-magnetic) .floating-node-actions,
+.image-node:has(.node-port.is-magnetic) .node-resize-handle,
+.empty-node:has(.node-port.is-magnetic) .node-delete { opacity:0 !important; pointer-events:none !important; }
+.image-node:has(.node-port.is-magnetic) .node-port:not(.is-magnetic) { opacity:0 !important; pointer-events:none !important; }
 .image-node.dragging .node-port { opacity:0 !important; pointer-events:none !important; }
 .shell.port-dragging { cursor:crosshair !important; }
+.shell.port-magnetic-ready,.shell.port-magnetic-ready * { cursor:crosshair !important; }
 .image-node.drop-target { outline:2px dashed var(--strong); outline-offset:4px; border-radius:18px; }
 .image-node.drag-out { opacity:.5; }
 .run-time-pill { position:absolute; right:8px; top:8px; z-index:7; height:24px; padding:0 9px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(37,99,235,.92); color:#fff; font-size:10.5px; font-weight:800; font-variant-numeric:tabular-nums; box-shadow:0 8px 18px rgba(15,23,42,.18); pointer-events:none; }

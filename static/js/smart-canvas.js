@@ -115,6 +115,9 @@ let mentionInsertMode = 'token';
 let panState = null;
 let didPan = false;
 let portDragState = null;
+let magneticPortEl = null;
+let magneticPortPointer = null;
+let magneticPortCatchRaf = 0;
 let saveTimer = null;
 let apiProviders = [];
 let comfyWorkflows = [];
@@ -9338,8 +9341,8 @@ function render(){
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             ${hint ? `<div class="node-hint">${hint}</div>` : ''}
             ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
-            <div class="node-port port-in" data-port="in" title="input"></div>
-            <div class="node-port port-out" data-port="out" title="output"></div>
+            <div class="node-port port-in" data-port="in"></div>
+            <div class="node-port port-out" data-port="out"></div>
         </div>`;
         return {node, html};
     });
@@ -9409,8 +9412,8 @@ function render(){
             <div class="node-body">${body}</div>
             <div class="node-hint">${isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')))}</div>
             ${imgs.length || node.pending || isQueued || isPrompt || isLoop ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
-            <div class="node-port port-in" data-port="in" title="输入"></div>
-            <div class="node-port port-out" data-port="out" title="输出"></div>
+            <div class="node-port port-in" data-port="in"></div>
+            <div class="node-port port-out" data-port="out"></div>
         </div>`;
     }).join('');
     world.insertAdjacentHTML('beforeend', nodesHtml);
@@ -9918,6 +9921,64 @@ function updatePortDragVisual(){
         targetNodeEl?.querySelector(`.node-port[data-port="${portDragState.hoverPort}"]`)?.classList.add('is-active');
     }
 }
+const MAGNETIC_PORT_RADIUS_WORLD = 46;
+function resetMagneticPort(){
+    shell.classList.remove('port-magnetic-ready');
+    magneticPortPointer = null;
+    if(magneticPortCatchRaf){ cancelAnimationFrame(magneticPortCatchRaf); magneticPortCatchRaf = 0; }
+    if(!magneticPortEl) return;
+    magneticPortEl.classList.remove('is-magnetic', 'is-caught');
+    magneticPortEl.style.removeProperty('--port-x');
+    magneticPortEl.style.removeProperty('--port-y');
+    magneticPortEl = null;
+}
+function trackMagneticPortCatch(){
+    magneticPortCatchRaf = 0;
+    if(!magneticPortEl || !magneticPortPointer) return;
+    const rect = magneticPortEl.getBoundingClientRect();
+    const distance = Math.hypot(magneticPortPointer.x - (rect.left + rect.width / 2), magneticPortPointer.y - (rect.top + rect.height / 2));
+    const caught = distance <= Math.max(6, Math.min(12, rect.width * .65));
+    magneticPortEl.classList.toggle('is-caught', caught);
+    // Keep observing while the CSS transform is catching up with a stationary pointer.
+    if(!caught) magneticPortCatchRaf = requestAnimationFrame(trackMagneticPortCatch);
+}
+function scheduleMagneticPortCatch(){
+    if(!magneticPortCatchRaf) magneticPortCatchRaf = requestAnimationFrame(trackMagneticPortCatch);
+}
+function updateMagneticPort(e){
+    if(portDragState || dragState || resizeState || panState || selectionState){ resetMagneticPort(); return; }
+    if(e.target?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')){ resetMagneticPort(); return; }
+    const shellRect = shell.getBoundingClientRect();
+    const magneticRadius = MAGNETIC_PORT_RADIUS_WORLD * viewport.scale;
+    let best = null;
+    for(const node of nodes){
+        const rect = nodeConnectionRect(node);
+        const left = shellRect.left + viewport.x + rect.x * viewport.scale;
+        const right = left + rect.width * viewport.scale;
+        const centerY = shellRect.top + viewport.y + (rect.y + rect.height / 2) * viewport.scale;
+        if(Math.abs(e.clientY - centerY) > magneticRadius) continue;
+        for(const kind of ['in','out']){
+            const anchorX = kind === 'in' ? left : right;
+            // The magnetic area is an exterior semicircle; moving inside the
+            // node must never pull a port across its content.
+            if((kind === 'in' && e.clientX > left) || (kind === 'out' && e.clientX < right)) continue;
+            const distance = Math.hypot(e.clientX - anchorX, e.clientY - centerY);
+            if(distance <= magneticRadius && (!best || distance < best.distance)) best = {nodeId:node.id, kind, anchorX, anchorY:centerY, distance};
+        }
+    }
+    if(!best){ resetMagneticPort(); return; }
+    best.port = world.querySelector(`.image-node[data-id="${CSS.escape(best.nodeId)}"] .node-port.port-${best.kind}`);
+    if(!best.port){ resetMagneticPort(); return; }
+    if(magneticPortEl && magneticPortEl !== best.port) resetMagneticPort();
+    magneticPortEl = best.port;
+    magneticPortPointer = {x:e.clientX, y:e.clientY};
+    // Port movement is expressed in world units because the whole canvas is scaled.
+    best.port.style.setProperty('--port-x', `${(e.clientX - best.anchorX) / viewport.scale}px`);
+    best.port.style.setProperty('--port-y', `${(e.clientY - best.anchorY) / viewport.scale}px`);
+    best.port.classList.add('is-magnetic');
+    shell.classList.add('port-magnetic-ready');
+    scheduleMagneticPortCatch();
+}
 function handlePortDrop(drag, e){
     const {targetId, targetPort, hit} = (() => {
         const hitEl = document.elementFromPoint(e.clientX, e.clientY);
@@ -10325,6 +10386,10 @@ function bindNodeEvents(){
                     hoverPort:'',
                     moved:false
                 };
+                // Starting a link uses the same return-and-fade transition as
+                // leaving the magnetic area; no separate exit animation.
+                resetMagneticPort();
+                port.classList.add('is-drag-source');
                 shell.classList.add('port-dragging');
                 capturePendingUndo();
                 ensurePortDragPathElement();
@@ -18483,6 +18548,21 @@ shell.addEventListener('click', e => {
 }, true);
 shell.onmousedown = e => {
     if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    // The animated port can visually lag behind the pointer. Treat its whole
+    // magnetic region as the real hit target so dragging starts immediately.
+    if(e.button === 0 && magneticPortEl && !isRKeyDown && !e.ctrlKey && !e.metaKey){
+        e.preventDefault();
+        e.stopPropagation();
+        magneticPortEl.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles:true,
+            cancelable:true,
+            button:0,
+            buttons:1,
+            clientX:e.clientX,
+            clientY:e.clientY
+        }));
+        return;
+    }
     if(e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
     closeCreateMenu();
     if(e.button === 0 && isRKeyDown){
@@ -18556,6 +18636,8 @@ smartArrangeBtn?.addEventListener('click', e => {
 });
 window.onmousemove = e => {
     lastMouseWorld = screenToWorld(e);
+    if(!portDragState && !dragState) updateMagneticPort(e);
+    else resetMagneticPort();
     if(portDragState || dragState) updateSmartEdgePan(e);
     if(smartMinimapDrag){
         e.preventDefault();
@@ -18873,6 +18955,7 @@ window.onmouseup = e => {
         shell.classList.remove('port-dragging');
         clearPortDragVisual();
         handlePortDrop(drag, e);
+        updateMagneticPort(e);
         return;
     }
     if(promptResizeState){ promptResizeState = null; scheduleSave(); }
