@@ -198,6 +198,11 @@ body.theme-dark .asset-search-wrap .asset-search { background-color:transparent 
 .upload-body strong { color:var(--text); font-size:11px; line-height:1.25; font-weight:900; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .upload-body small { color:var(--faint); font-size:10px; line-height:1.25; font-weight:800; }
 .asset-card { position:relative; min-width:0; border:1px solid var(--line); border-radius:12px; background:var(--card); overflow:hidden; transition:border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
+/* 屏幕外卡片保留网格占位，但跳过内部图片、文字的布局与绘制。 */
+.asset-card,.prompt-row { content-visibility:auto; contain-intrinsic-size:auto 220px; }
+.asset-sidebar-resize-active .asset-panel { backdrop-filter:none; box-shadow:none; }
+.asset-sidebar-resize-active .asset-card,
+.asset-sidebar-resize-active .prompt-row { transition:none; box-shadow:none; transform:none; }
 .asset-card:hover { border-color:var(--line-2); box-shadow:0 12px 24px var(--shadow); transform:translateY(-1px); }
 .asset-card[draggable="true"] { cursor:grab; }
 .asset-card[draggable="true"]:active { cursor:grabbing; }

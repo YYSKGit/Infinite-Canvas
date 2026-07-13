@@ -407,7 +407,10 @@
             opacity: 0;
             transform: scale(1.02);
             filter: blur(4px);
-            transition: all 0.5s var(--fluid-ease);
+            /* Do not animate width/height when the host layout changes. */
+            transition: opacity 0.5s var(--fluid-ease),
+                        transform 0.5s var(--fluid-ease),
+                        filter 0.5s var(--fluid-ease);
             pointer-events: none;
         }
 
@@ -1680,7 +1683,7 @@
             <iframe id="frame-angle" data-src="/static/angle.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
             <iframe id="frame-online" data-src="/static/online.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
             <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1783774891" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1783958466" scrolling="yes"></iframe>
             <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
             <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
             <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
@@ -2040,6 +2043,14 @@
             document.querySelectorAll('iframe').forEach(frame => pauseScaleInFrame(frame, duration));
         }
 
+        function pauseAssetManagerRendering(duration) {
+            const frame = document.getElementById('frame-asset-manager');
+            if(!frame?.classList.contains('active')) return;
+            try {
+                frame.contentWindow?.postMessage({ type:'asset-sidebar-resize', duration }, '*');
+            } catch(e) {}
+        }
+
         function broadcastScaleToFrames() {
             document.querySelectorAll('iframe').forEach(frame => syncScaleToFrame(frame));
         }
@@ -2118,8 +2129,15 @@
             broadcastLanguage();
             const sidebar = document.getElementById('studioSidebar');
             if(sidebar) {
-                sidebar.addEventListener('mouseenter', () => pauseScaleInFrames());
-                sidebar.addEventListener('mouseleave', () => pauseScaleInFrames());
+                sidebar.addEventListener('mouseenter', () => {
+                    pauseScaleInFrames();
+                    pauseAssetManagerRendering(600);
+                });
+                sidebar.addEventListener('mouseleave', () => {
+                    pauseScaleInFrames();
+                    // 收起动画有 0.5s 延迟，再覆盖其后的 0.5s 动画。
+                    pauseAssetManagerRendering(1100);
+                });
             }
             checkForUpdates();
         });

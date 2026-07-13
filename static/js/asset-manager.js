@@ -4766,6 +4766,15 @@ document.querySelectorAll('[data-tab]').forEach(btn => {
 });
 refreshBtn?.addEventListener('click', () => loadAll().catch(err => setStatus(err.message || '加载失败')));
 window.addEventListener('message', event => {
+    if(event.data?.type === 'asset-sidebar-resize'){
+        document.body.classList.add('asset-sidebar-resize-active');
+        clearTimeout(window.__assetSidebarResizeTimer);
+        const duration = Math.max(0, Number(event.data.duration) || 0);
+        window.__assetSidebarResizeTimer = setTimeout(() => {
+            document.body.classList.remove('asset-sidebar-resize-active');
+        }, duration);
+        return;
+    }
     if(event.data?.type === 'studio-theme') {
         window.StudioTheme?.apply?.(event.data.theme);
         return;
