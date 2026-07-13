@@ -14178,45 +14178,89 @@ function sizeForRun(sourceSettings=settings){
         : '1k';
     return apiImageSize(sourceSettings.ratio || 'square', sourceSettings.resolution || fallbackResolution, sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
 }
-function expectedOutputSize(){
-    if(settings.engine === 'comfy'){
-        if(settings.comfyMode === 'text'){
-            const w = Number(settings.width) || 1024;
-            const h = Number(settings.height) || 1024;
+function expectedOutputSize(sourceSettings=settings, options={}){
+    if(isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind === 'video'){
+        const refs = options.refs || [];
+        const rawAspect = String(sourceSettings.videoAspect || '16:9').trim().toLowerCase();
+        let ratio = parseRatioValue(rawAspect);
+        if(!ratio && ['', 'keep_ratio', 'adaptive', 'source'].includes(rawAspect)){
+            ratio = imageRefsOnly(refs).map(ratioFromSmartRef).find(value => value > 0) || 0;
+        }
+        if(!ratio) ratio = 16 / 9;
+        return ratio >= 1 ? {w:1024, h:Math.max(1, Math.round(1024 / ratio))} : {w:Math.max(1, Math.round(1024 * ratio)), h:1024};
+    }
+    if(sourceSettings.engine === 'comfy'){
+        if(sourceSettings.comfyMode === 'text'){
+            const w = Number(sourceSettings.width) || 1024;
+            const h = Number(sourceSettings.height) || 1024;
             return {w, h};
         }
         return {w:1024, h:1024};
     }
-    if(settings.engine === 'runninghub') return {w:1024, h:1024};
-    const sizeStr = settings.engine === 'modelscope'
-        ? apiImageSize(settings.msRatio || 'square', settings.msResolution || '1k', settings.msCustomRatio || '', settings.msCustomSize || '')
-        : sizeForRun();
+    if(sourceSettings.engine === 'runninghub') return {w:1024, h:1024};
+    const sizeStr = sourceSettings.engine === 'modelscope'
+        ? apiImageSize(sourceSettings.msRatio || 'square', sourceSettings.msResolution || '1k', sourceSettings.msCustomRatio || '', sourceSettings.msCustomSize || '')
+        : sizeForRun(sourceSettings);
     const parsed = parseSizeValue(sizeStr);
     if(parsed){
         return {w: Number(parsed.width) || 1024, h: Number(parsed.height) || 1024};
     }
     return {w:1024, h:1024};
 }
-function explicitRequestOutputSizeForPending(){
-    if(isApiLikeEngine(settings.engine) && settings.apiKind !== 'video'){
-        const parsed = parseSizeValue(sizeForRun());
+function explicitRequestOutputSizeForPending(sourceSettings=settings, options={}){
+    if(isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind === 'video'){
+        return expectedOutputSize(sourceSettings, options);
+    }
+    if(isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind !== 'video'){
+        const parsed = parseSizeValue(sizeForRun(sourceSettings));
         if(parsed) return {w:Number(parsed.width) || 1024, h:Number(parsed.height) || 1024};
     }
-    if(settings.engine === 'modelscope'){
-        const sizeStr = apiImageSize(settings.msRatio || 'square', settings.msResolution || '1k', settings.msCustomRatio || '', settings.msCustomSize || '');
+    if(sourceSettings.engine === 'modelscope'){
+        const sizeStr = apiImageSize(sourceSettings.msRatio || 'square', sourceSettings.msResolution || '1k', sourceSettings.msCustomRatio || '', sourceSettings.msCustomSize || '');
         const parsed = parseSizeValue(sizeStr);
         if(parsed) return {w:Number(parsed.width) || 1024, h:Number(parsed.height) || 1024};
     }
-    if(settings.engine === 'comfy' && settings.comfyMode === 'text'){
-        const w = Number(settings.width) || 1024;
-        const h = Number(settings.height) || 1024;
+    if(sourceSettings.engine === 'comfy' && sourceSettings.comfyMode === 'text'){
+        const w = Number(sourceSettings.width) || 1024;
+        const h = Number(sourceSettings.height) || 1024;
         return {w, h};
     }
     return null;
 }
 function pendingSizeFromImageRef(img){
-    const w = Number(img?.natural_w || img?.width || 0);
-    const h = Number(img?.natural_h || img?.height || 0);
+    const layout = mediaLayoutSize(img);
+    if(layout.width > 0 && layout.height > 0) return {w:layout.width, h:layout.height};
+    const w = Number(img?.videoWidth || img?.video_width || img?.previewWidth || 0);
+    const h = Number(img?.videoHeight || img?.video_height || img?.previewHeight || 0);
+    return w > 0 && h > 0 ? {w, h} : null;
+}
+function pendingOriginalMediaForRef(ref){
+    if(!ref?.url) return null;
+    if(ref.nodeId){
+        const owner = nodes.find(node => node.id === ref.nodeId);
+        const indexed = owner?.images?.[Number(ref.imageIndex) || 0];
+        if(indexed?.url) return {node:owner, image:indexed, index:Number(ref.imageIndex) || 0};
+    }
+    const wantedUrls = new Set([
+        ref.url, ref.sourceUrl, ref.originalLocalUrl, ref.localUrl,
+        canonicalSmartMediaUrl(ref)
+    ].filter(Boolean).map(value => canonicalSmartMediaUrl(value)));
+    for(const node of nodes){
+        const index = (node.images || []).findIndex(image => [
+            image?.url, image?.sourceUrl, image?.originalLocalUrl, image?.localUrl,
+            canonicalSmartMediaUrl(image)
+        ].filter(Boolean).some(value => wantedUrls.has(canonicalSmartMediaUrl(value))));
+        if(index >= 0) return {node, image:node.images[index], index};
+    }
+    return null;
+}
+function pendingMediaElementSize(owner){
+    if(!owner?.node?.id) return null;
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(owner.node.id)}"]`);
+    const itemEl = nodeEl?.querySelector(`[data-image-index="${owner.index}"]`) || nodeEl;
+    const media = itemEl?.querySelector('img,video');
+    const w = Number(media?.naturalWidth || media?.videoWidth || 0);
+    const h = Number(media?.naturalHeight || media?.videoHeight || 0);
     return w > 0 && h > 0 ? {w, h} : null;
 }
 function pendingSourceBoxSize(options={}){
@@ -14225,10 +14269,11 @@ function pendingSourceBoxSize(options={}){
         const rect = nodeRect(sourceNode);
         if(rect.width > 24 && rect.height > 24) return {w:Math.round(rect.width), h:Math.round(rect.height), display:true};
     }
-    const ref = (options.refs || []).find(img => img?.url);
-    const refSize = pendingSizeFromImageRef(ref);
+    const ref = (options.refs || []).find(img => img?.url && ['image','video'].includes(mediaKindForItem(img)));
+    const owner = pendingOriginalMediaForRef(ref);
+    const refSize = pendingSizeFromImageRef(ref) || pendingSizeFromImageRef(owner?.image) || pendingMediaElementSize(owner);
     if(refSize) return refSize;
-    const refNode = ref?.nodeId ? nodes.find(n => n.id === ref.nodeId) : null;
+    const refNode = owner?.node || (ref?.nodeId ? nodes.find(n => n.id === ref.nodeId) : null);
     if(refNode){
         const rect = nodeRect(refNode);
         if(rect.width > 24 && rect.height > 24) return {w:Math.round(rect.width), h:Math.round(rect.height), display:true};
@@ -14244,12 +14289,28 @@ function displayBoxFromNaturalSize(size){
     return {w:layout.width, h:layout.height};
 }
 function pendingBaseBoxSize(options={}){
-    const requestSize = explicitRequestOutputSizeForPending();
-    if(requestSize) return displayBoxFromNaturalSize(requestSize);
+    const sourceSettings = options.settings || settings;
     const sourceSize = pendingSourceBoxSize(options);
+    const provider = (apiProviders || []).find(item => String(item?.id || '') === String(sourceSettings.provider_id || '')) || null;
+    const providerProtocol = String(provider?.protocol || '').trim().toLowerCase();
+    const runningHubImageGeneration = sourceSettings.apiKind !== 'video'
+        && (sourceSettings.engine === 'runninghub' || providerProtocol === 'runninghub');
+    const veniceImageEdit = isApiLikeEngine(sourceSettings.engine)
+        && sourceSettings.apiKind !== 'video'
+        && (providerProtocol === 'venice' || isVeniceProviderId(sourceSettings.provider_id || ''))
+        && Boolean(sourceSize);
+    // RunningHub has no reliable generic output-size contract across apps and
+    // workflows. When media is supplied, its first input is the best estimate.
+    // Venice image edits omit size/aspect entirely on the backend, so the node's
+    // text-to-image size setting must not take precedence over the input media.
+    if(sourceSize && (runningHubImageGeneration || veniceImageEdit)){
+        return sourceSize.display ? {w:sourceSize.w, h:sourceSize.h} : displayBoxFromNaturalSize(sourceSize);
+    }
+    const requestSize = explicitRequestOutputSizeForPending(sourceSettings, options);
+    if(requestSize) return displayBoxFromNaturalSize(requestSize);
     if(sourceSize?.display) return {w:sourceSize.w, h:sourceSize.h};
     if(sourceSize) return displayBoxFromNaturalSize(sourceSize);
-    return displayBoxFromNaturalSize(expectedOutputSize());
+    return displayBoxFromNaturalSize(expectedOutputSize(sourceSettings, options));
 }
 function pendingBoxSize(count, options={}){
     const base = pendingBaseBoxSize(options);
@@ -14272,6 +14333,39 @@ function pendingBoxSize(count, options={}){
     const w = cols * (cellW + 8) + 16;
     const h = rows * (cellH + 8) + 16;
     return {w, h};
+}
+function animateFirstPendingNode(nodeId, fromSize){
+    // Visual enhancement only: it must never interrupt generation or leave a node busy.
+    try {
+        const prefersReducedMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+        if(prefersReducedMotion || !nodeId || !fromSize) return;
+        const el = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+        if(!el || !el.classList.contains('node-pending') || typeof el.animate !== 'function') return;
+        const toWidth = Math.max(1, el.getBoundingClientRect().width);
+        const toHeight = Math.max(1, el.getBoundingClientRect().height);
+        const fromWidth = Math.max(1, Number(fromSize.width) || toWidth);
+        const fromHeight = Math.max(1, Number(fromSize.height) || toHeight);
+        const scaleX = Math.max(.08, Math.min(8, fromWidth / toWidth));
+        const scaleY = Math.max(.08, Math.min(8, fromHeight / toHeight));
+        el.classList.add('first-pending-transition');
+        const animation = el.animate([
+            {transform:`scale(${scaleX}, ${scaleY})`, opacity:.88},
+            {transform:'scale(1.012, 1.012)', opacity:1, offset:.82},
+            {transform:'scale(1, 1)', opacity:1}
+        ], {duration:360, easing:'cubic-bezier(.22, 1, .36, 1)', fill:'both'});
+        const finish = () => {
+            el.classList.remove('first-pending-transition');
+            scheduleConnectionLayerRefresh();
+        };
+        animation.addEventListener('finish', finish, {once:true});
+        animation.addEventListener('cancel', finish, {once:true});
+    } catch(error) {
+        console.warn('First pending node transition skipped:', error);
+    }
+}
+function firstPendingTransitionActive(nodeId){
+    if(!nodeId) return false;
+    return Boolean(world.querySelector(`.image-node.first-pending-transition[data-id="${CSS.escape(nodeId)}"]`));
 }
 function mentionTokenHtml(img){
     if(!img?.url) return '';
@@ -16863,6 +16957,9 @@ function runSmartCascadeFromLoop(loopId){
 async function runGeneration(){
     const node = selectedNode();
     if(!node) return;
+    const wasEmptyFirstRun = isSmartImageNode(node) && !(node.images || []).length && !node.pending && !node.queued && !node.jimengPending;
+    const emptyNodeEl = wasEmptyFirstRun ? world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`) : null;
+    const emptyNodeRect = emptyNodeEl?.getBoundingClientRect();
     const request = buildPromptRequest(node, generationReferenceImagesForRun(node, true, smartLoopContext), true, smartLoopContext);
     const prompt = request.prompt.trim();
     if(smartNodeInFlight(node)) return;
@@ -16896,7 +16993,9 @@ async function runGeneration(){
     const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, activeSettings);
     rememberRecentSmartSettings(activeSettings, node);
     const runLogStart = nowMs();
-    const expectedCount = activeSettings.engine === 'runninghub'
+    const expectedCount = logKind === 'video'
+        ? 1
+        : activeSettings.engine === 'runninghub'
         ? Math.max(1, Math.min(8, Number(activeSettings.count || 1)))
         : activeSettings.engine === 'comfy'
         ? (activeSettings.comfyMode === 'text' || activeSettings.comfyMode === 'enhance' || activeSettings.comfyMode === 'edit' || activeSettings.comfyMode === 'custom' ? 1 : 1)
@@ -16921,7 +17020,7 @@ async function runGeneration(){
         delete pendingNode.runElapsedMs;
         pendingNode.runTimerHidden = false;
         if(!cleanHistoryImages(pendingNode.images || []).length){
-            const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs});
+            const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs, settings:activeSettings});
             pendingNode.w = pendingBox.w;
             pendingNode.h = pendingBox.h;
         }
@@ -16940,6 +17039,9 @@ async function runGeneration(){
         syncRunButtonState();
     }
     render();
+    if(wasEmptyFirstRun && !branchNode && expectedCount === 1 && (logKind === 'image' || logKind === 'video')){
+        animateFirstPendingNode(pendingNode.id, emptyNodeRect && {width:emptyNodeRect.width, height:emptyNodeRect.height});
+    }
     try {
         if(activeSettings.engine === 'comfy'){
             await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta);
@@ -16969,7 +17071,11 @@ async function runGeneration(){
             pendingNode.runStartedAt = nowMs();
             pendingNode.runTimerHidden = false;
             pendingNode.running = false;
-            render();
+            // Fast async APIs (for example Venice) return task IDs while the
+            // first-size transition is still playing. The current DOM already
+            // represents the same pending state, so do not replace it mid-animation.
+            if(!firstPendingTransitionActive(pendingNode.id)) render();
+            else refreshRunTimerPills();
             scheduleSave();
             await saveCanvas();
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart});

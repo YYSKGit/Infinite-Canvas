@@ -121,6 +121,20 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .smart-log-toggle.active,.smart-shortcut-toggle.active,.smart-workflow-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
 .smart-log-toggle i,.smart-log-toggle svg,.smart-shortcut-toggle i,.smart-shortcut-toggle svg,.smart-workflow-toggle i,.smart-workflow-toggle svg { width:16px; height:16px; }
 .image-node { position:absolute; width:260px; min-height:178px; border-radius:16px; background:transparent; border:0; box-shadow:none; overflow:visible; user-select:none; cursor:move; }
+.image-node.first-pending-transition { transform-origin:top left; will-change:transform,opacity; pointer-events:none; }
+.image-node.first-pending-transition .node-body,
+.image-node.first-pending-transition .node-head,
+.image-node.first-pending-transition .node-hint { animation:first-pending-content-in 300ms 45ms cubic-bezier(.22,1,.36,1) both; }
+@keyframes first-pending-content-in {
+    from { opacity:0; }
+    to { opacity:1; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .image-node.first-pending-transition,
+    .image-node.first-pending-transition .node-body,
+    .image-node.first-pending-transition .node-head,
+    .image-node.first-pending-transition .node-hint { animation:none !important; transition:none !important; }
+}
 body.smart-node-drag * { user-select:none !important; }
 body.smart-node-drag .image-node textarea,
 body.smart-node-drag .image-node input,
