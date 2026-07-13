@@ -768,10 +768,16 @@ const smartVideoUserPausedKeys = new Set();
 const smartVideoPostPreviewFirstFrameKeys = new Set();
 let smartVideoPreviewHandoff = null;
 let smartVideoPreviewOpeningKey = '';
+let smartVideoPreviewCloseEpoch = 0;
+let smartVideoPreviewSource = null;
 function handoffSmartCanvasVideoToPreview(video, nodeId, imageIndex){
     if(!video) return;
     const playbackKey = smartVideoPlaybackKey(video);
     if(playbackKey) smartVideoPostPreviewFirstFrameKeys.add(playbackKey);
+    smartVideoPreviewSource = {
+        playbackKey,
+        containerNodeId:video.closest('.image-node')?.dataset?.id || ''
+    };
     smartVideoPreviewHandoff = {
         nodeId,
         imageIndex:Number(imageIndex) || 0,
@@ -1208,7 +1214,21 @@ function bindSmartCanvasVideo(host, nodeId){
             openVideoPreview(e);
             return;
         }
-        if(hoverOnly) return;
+        if(hoverOnly){
+            // A grouped video's first click must not reach the group node's
+            // onclick/render path, otherwise the video element is replaced
+            // between the two presses of a double-click and loses its time.
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            if(!isNodeSelected(nodeId)){
+                selectedId = nodeId;
+                selectedIds = [];
+                selectedImage = {nodeId:'', index:-1};
+                syncSelectionUi();
+                updateComposer();
+            }
+            return;
+        }
         e.stopPropagation();
         e.stopImmediatePropagation();
         if(!nodeSelected()){
@@ -1224,6 +1244,12 @@ function bindSmartCanvasVideo(host, nodeId){
         }
         clearTimer();
         userPlaySmartCanvasVideo(video);
+    }, {capture:true});
+    on(video, 'dblclick', e => {
+        // The preview is normally opened on the second mousedown, but the
+        // browser still dispatches dblclick afterwards. Consume it here so a
+        // smart-group ancestor cannot interpret it as "open create menu".
+        openVideoPreview(e);
     }, {capture:true});
     const toggle = host.querySelector('.smart-video-toggle');
     const mute = host.querySelector('.smart-video-mute');
@@ -13496,8 +13522,18 @@ function openImageEditor(nodeId, imageIndex=0){
     refreshIcons();
 }
 function closeImageEditor(){
+    const previewCloseEpoch = ++smartVideoPreviewCloseEpoch;
+    const previewSource = smartVideoPreviewSource;
     smartVideoPreviewHandoff = null;
     smartVideoPreviewOpeningKey = '';
+    smartVideoPreviewSource = null;
+    const sourceContainer = nodes.find(node => node.id === previewSource?.containerNodeId);
+    if(previewSource?.playbackKey && smartVideoContainerIsGroup(sourceContainer)){
+        smartVideoUserPausedKeys.delete(previewSource.playbackKey);
+        world?.querySelectorAll?.('.smart-canvas-video').forEach(video => {
+            if(smartVideoPlaybackKey(video) === previewSource.playbackKey) delete video.dataset.smartUserPaused;
+        });
+    }
     cleanupSmartLogPreviewNode();
     previewCompareLoadToken++;
     previewComparePendingKey = '';
@@ -13547,6 +13583,14 @@ function closeImageEditor(){
             if(playbackKey && !host?.matches(':hover')) smartVideoPostPreviewFirstFrameKeys.delete(playbackKey);
         });
     });
+    // A grouped video may already have emitted mouseleave while the modal was
+    // covering it, so it cannot rely on another leave event to release this
+    // one-shot lock. Keep it through the immediate re-hover timer, then unlock
+    // without starting playback; the next genuine hover can play normally.
+    setTimeout(() => {
+        if(previewCloseEpoch === smartVideoPreviewCloseEpoch
+            && !imageEditModal.classList.contains('open')) smartVideoPostPreviewFirstFrameKeys.clear();
+    }, 800);
 }
 function clampCrop(){
     if(!cropState) return;
