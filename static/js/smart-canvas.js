@@ -999,6 +999,7 @@ async function exportSmartCanvasVideoFrame(video, nodeId, which='current'){
         const frame = uploaded[0];
         if(!frame?.url) throw new Error('当前帧上传失败');
         frame.kind = 'image';
+        frame.frameCaptureKind = which;
         frame.natural_w = video.videoWidth;
         frame.natural_h = video.videoHeight;
         const owner = nodes.find(node => node.id === nodeId);
@@ -8317,15 +8318,62 @@ function imageResolutionBadgeHtml(img){
     const label = imageResolutionLabel(img);
     return label ? `<span class="image-resolution-badge">${escapeHtml(label)}</span>` : '';
 }
-function imageNameLabel(img, fallback='image'){
-    const raw = String(img?.name || fileNameFromUrl(img?.url || '') || fallback || 'image').trim();
-    return raw || 'image';
+function mediaNameWithoutExtension(value, fallback='media'){
+    const raw = String(value || '').trim();
+    if(!raw) return fallback;
+    const clean = raw.replace(/[?#].*$/, '');
+    const withoutExtension = clean.replace(/\.[^./\\\s]{1,16}$/, '');
+    return withoutExtension || clean || fallback;
+}
+function mediaDisplayType(kind='image'){
+    if(kind === 'video') return {label:'视频节点', icon:'play'};
+    if(kind === 'audio') return {label:'音频节点', icon:'file-audio'};
+    if(kind === 'text') return {label:'文本节点', icon:'file-text'};
+    if(kind === 'file') return {label:'文件节点', icon:'file'};
+    return {label:'图片节点', icon:'image'};
+}
+function generatedMediaNodeOrdinal(node, kind='image'){
+    if(!node) return 1;
+    const peers = nodes.filter(candidate => {
+        if(!isGeneratedSmartOutputNode(candidate) || isHistoryGroupNode(candidate)) return false;
+        const candidateKind = candidate.outputKind || mediaKindForItem(candidate.images?.[0] || {});
+        return candidateKind === kind;
+    });
+    const index = peers.findIndex(candidate => candidate.id === node.id);
+    return index >= 0 ? index + 1 : 1;
+}
+function isGeneratedMediaForDisplay(img, node){
+    if(img?.displayNameCustomized) return false;
+    if(img?.generatedResult || img?._genPrompt) return true;
+    return Boolean(node && !node.originalMediaSource && isGeneratedSmartOutputNode(node));
+}
+function videoFrameDisplayLabel(img, node){
+    if(img?.displayNameCustomized || node?.originalMediaSource !== 'video-frame') return '';
+    const kind = String(img?.frameCaptureKind || '').toLowerCase();
+    if(kind === 'first') return '首帧';
+    if(kind === 'last') return '尾帧';
+    if(kind === 'current') return '截图';
+    const legacyName = String(img?.name || fileNameFromUrl(img?.url || '') || '').toLowerCase();
+    if(/(?:^|[-_])first-frame(?:[-_.]|$)/.test(legacyName)) return '首帧';
+    if(/(?:^|[-_])last-frame(?:[-_.]|$)/.test(legacyName)) return '尾帧';
+    return '截图';
+}
+function imageNameLabel(img, fallback='image', node=null){
+    const kind = mediaKindForItem(img || {});
+    const type = mediaDisplayType(kind);
+    const frameLabel = videoFrameDisplayLabel(img, node);
+    if(frameLabel) return frameLabel;
+    if(isGeneratedMediaForDisplay(img, node)) return `${type.label} ${generatedMediaNodeOrdinal(node, kind)}`;
+    const raw = String(img?.name || fileNameFromUrl(img?.url || '') || fallback || type.label).trim();
+    return mediaNameWithoutExtension(raw, type.label);
 }
 function imageNameBadgeHtml(img, options={}){
     if(!img?.url) return '';
-    const label = imageNameLabel(img);
+    const kind = mediaKindForItem(img);
+    const type = mediaDisplayType(kind);
+    const label = imageNameLabel(img, type.label, options.node || null);
     const outsideClass = options.outside ? ' image-name-badge-outside' : '';
-    return `<span class="image-name-badge${outsideClass}" data-image-name="1" title="${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+    return `<span class="image-name-badge${outsideClass}" data-image-name="1" title="${escapeAttr(label)}"><i data-lucide="${escapeAttr(type.icon)}"></i><span>${escapeHtml(label)}</span></span>`;
 }
 function thumbDisplaySize(img, maxSize){
     const limit = Math.max(28, Math.round(Number(maxSize) || 96));
@@ -9200,7 +9248,7 @@ function nodeBodyHtml(node, layout){
         const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
         return isRunning ? `<div class="thumb-grid-wrapper">${gridContent}${loadingOverlay}</div>` : gridContent;
     }
-    if(imgs[0]) return `<div class="image-wrap ${showSingleImageName ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showSingleImageName ? imageNameBadgeHtml(imgs[0], {outside:true}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
+    if(imgs[0]) return `<div class="image-wrap ${showSingleImageName ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showSingleImageName ? imageNameBadgeHtml(imgs[0], {outside:true, node}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
     return `<div class="empty-upload-node">
         <div class="empty-upload-copy">
             <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
@@ -10815,13 +10863,37 @@ async function renameSmartNodeImage(nodeId, imageIndex){
     const index = Math.max(0, Number(imageIndex) || 0);
     const image = node?.images?.[index];
     if(!node || !image) return;
-    const current = imageNameLabel(image);
-    const name = await openAssetNameDialog({title:'重命名图片', value:current, placeholder:'图片名称', cancelValue:null});
+    const current = imageNameLabel(image, 'image', node);
+    const name = await openAssetNameDialog({title:'重命名媒体', value:current, placeholder:'留空恢复自动名称', cancelValue:null});
     if(name === null) return;
     const next = String(name || '').trim();
-    if(!next || next === current) return;
+    if(!next){
+        if(!image.displayNameCustomized) return;
+        pushUndo();
+        if(Object.prototype.hasOwnProperty.call(image, 'nameBeforeCustomization')){
+            if(image.nameBeforeCustomization) image.name = image.nameBeforeCustomization;
+            else delete image.name;
+        } else {
+            const fallbackName = fileNameFromUrl(image.url || '');
+            if(fallbackName) image.name = fallbackName;
+            else delete image.name;
+        }
+        delete image.nameBeforeCustomization;
+        delete image.displayNameCustomized;
+        selectedId = node.id;
+        selectedIds = [];
+        selectedImage = {nodeId:node.id, index};
+        render();
+        scheduleSave();
+        return;
+    }
+    if(next === current) return;
     pushUndo();
+    if(!image.displayNameCustomized && !Object.prototype.hasOwnProperty.call(image, 'nameBeforeCustomization')){
+        image.nameBeforeCustomization = image.name || '';
+    }
     image.name = next;
+    image.displayNameCustomized = true;
     selectedId = node.id;
     selectedIds = [];
     selectedImage = {nodeId:node.id, index};
@@ -11929,6 +12001,7 @@ async function exportVideoFrame(which='current'){
         const frame = uploaded[0];
         if(!frame?.url) throw new Error('导出到画布失败');
         frame.kind = 'image';
+        frame.frameCaptureKind = which;
         frame.natural_w = video.videoWidth;
         frame.natural_h = video.videoHeight;
         const rect = editing.node ? nodeRect(editing.node) : null;
@@ -13680,6 +13753,18 @@ function renderInputPromptPreview(node){
         ? `<div class="input-prompt-preview-label">${escapeHtml(tr('smart.inputUpstream'))}</div><div class="input-prompt-preview-text">${escapeHtml(text)}</div>`
         : '';
 }
+function inputThumbHoverTitle(currentNode, img, index=0){
+    const fallback = tr('smart.inputNum').replace('{n}', String(index + 1));
+    const sourceNode = img?.nodeId ? nodes.find(candidate => candidate.id === img.nodeId) : null;
+    const sourceImage = sourceNode?.images?.[Number(img?.imageIndex)] || img;
+    const mediaName = imageNameLabel(sourceImage, fallback, sourceNode);
+    if(currentNode && isSelfReferenceForNode(currentNode, img)) return `${mediaName} · ${tr('smart.inputSelf')}`;
+    if(!sourceNode){
+        const genericSource = smartImageMode(currentNode) === 'workflow' ? tr('smart.inputUpstreamWorkflow') : tr('smart.inputUpstream');
+        return `${mediaName} · ${genericSource}`;
+    }
+    return `${mediaName} 输入`;
+}
 function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
     syncJimengModelPillForRefs();
@@ -13691,7 +13776,7 @@ function renderInputThumbsRow(node){
     // 参考图多时会让输入框打字明显卡顿。
     const thumbsSignature = JSON.stringify({
         node: node?.id || '',
-        items: dedup.map(img => `${inputRefKey(img)}@${img.url || ''}`),
+        items: dedup.map((img, index) => `${inputRefKey(img)}@${img.url || ''}@${inputThumbHoverTitle(node, img, index)}`),
         manual: [...manualRefKeys],
         add: addActive,
         mode: node ? smartImageMode(node) : ''
@@ -13724,9 +13809,7 @@ function renderInputThumbsRow(node){
         const isVid = isVideoMediaItem(img);
         const kind = mediaKindForItem(img);
         const isSelf = node ? isSelfReferenceForNode(node, img) : false;
-        const title = isSelf
-            ? tr('smart.inputSelf')
-            : (smartImageMode(node) === 'workflow' ? tr('smart.inputUpstreamWorkflow') : tr('smart.inputUpstream'));
+        const hoverTitle = inputThumbHoverTitle(node, img, i);
         const inner = kind === 'audio'
             ? `<div class="input-thumb-audio"><i data-lucide="file-audio"></i></div>`
             : isVid
@@ -13738,7 +13821,7 @@ function renderInputThumbsRow(node){
         const key = inputRefKey(img);
         const removable = manualRefKeys.has(key);
         const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
-        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
+        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(hoverTitle)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div>`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
@@ -15266,6 +15349,12 @@ function visibleReferenceImagesFor(node){
     const base = defaultReferenceImagesFor(node);
     return uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]);
 }
+function mentionInputNodeLabel(img, fallback='图片'){
+    const sourceNode = img?.nodeId ? nodes.find(candidate => candidate.id === img.nodeId) : null;
+    const kind = mediaKindForItem(img || {});
+    const type = mediaDisplayType(kind);
+    return imageNameLabel(img, fallback || type.label, sourceNode);
+}
 function inputMentionCandidateImages(node){
     const current = node ? cleanSavedRunRefsForNode(node, [...lineImagesFor(node), ...manualReferenceImagesFor(node)]) : [];
     const seen = new Set();
@@ -15275,11 +15364,14 @@ function inputMentionCandidateImages(node){
         return true;
     })
     .reverse()
-    .map((img, index) => ({
-        ...img,
-        mentionId:`mention_${index}_${Math.random().toString(36).slice(2, 7)}`,
-        alias:img.name || `图片${index + 1}`
-    }));
+    .map((img, index) => {
+        const alias = mentionInputNodeLabel(img, `图片${index + 1}`);
+        return {
+            ...img,
+            mentionId:`mention_${index}_${Math.random().toString(36).slice(2, 7)}`,
+            alias
+        };
+    });
 }
 // 一个素材可注册到多个平台：收集所有「已通过」的 asset:// 地址，按平台映射。
 function assetRegisteredUris(item){
