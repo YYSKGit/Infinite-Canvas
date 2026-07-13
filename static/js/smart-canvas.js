@@ -17064,9 +17064,44 @@ async function runGeneration(){
             scheduleSave();
             return;
         }
-        const outImages = activeSettings.engine === 'runninghub'
-            ? (await Promise.all(Array.from({length:expectedCount}, () => runRunningHubGeneration(prompt, refs, activeSettings)))).flat()
-            : activeSettings.engine === 'modelscope'
+        if(activeSettings.engine === 'runninghub'){
+            const settled = await Promise.all(Array.from({length:expectedCount}, async (_, index) => {
+                try {
+                    const batch = resultMediaUrls(await runRunningHubGeneration(prompt, refs, activeSettings));
+                    if(!batch.length) throw new Error(tr('smart.errNoOutImages'));
+                    finalizeSmartPendingTask(pendingNode, `runninghub_${index}`, batch, 'image');
+                    render();
+                    scheduleSave();
+                    return {ok:true, images:batch};
+                } catch(error) {
+                    pendingNode.pending = Math.max(0, Number(pendingNode.pending || 0) - 1);
+                    render();
+                    scheduleSave();
+                    return {ok:false, error};
+                }
+            }));
+            const outImages = settled.filter(item => item.ok).flatMap(item => item.images || []);
+            const failures = settled.filter(item => !item.ok);
+            if(!outImages.length) throw failures[0]?.error || new Error(tr('smart.errNoOutImages'));
+            if(pendingNode.pending > 0) pendingNode.pending = 0;
+            markSmartNodeComplete(pendingNode, pendingMeta);
+            pendingNode.title = pendingNode.images.length > 1 ? 'Group' : 'Image';
+            pendingNode.scale = pendingNode.images.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : mediaNodeDefaultScale(pendingNode);
+            delete pendingNode.w;
+            delete pendingNode.h;
+            render();
+            if(failures.length){
+                const message = failures[0]?.error?.message || tr('smart.errRunFailed');
+                notifySmartTaskFailure(message);
+                toast(`${outImages.length}/${expectedCount} ${tr('smart.countUnit') || ''} · ${message}`.slice(0, 160));
+            }
+            if(outpaintSize) delete node.outpaintSize;
+            addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
+            clearPromptInput({preserveDraft:true});
+            scheduleSave();
+            return;
+        }
+        const outImages = activeSettings.engine === 'modelscope'
                 ? await runModelscopeGeneration(prompt, refs, activeSettings, request)
                 : await runApiGeneration(prompt, refs, activeSettings, request);
         if(isApiLikeEngine(activeSettings.engine)){
