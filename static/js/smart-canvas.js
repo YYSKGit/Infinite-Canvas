@@ -3619,6 +3619,34 @@ function formatVeniceDateTime(timestamp){
         return '--';
     }
 }
+function formatVenicePreciseDateTime(timestamp){
+    const t = Number(timestamp);
+    if(!Number.isFinite(t) || t <= 0) return '--';
+    try {
+        return new Intl.DateTimeFormat('zh-CN', {
+            year:'numeric', month:'2-digit', day:'2-digit',
+            hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+        }).format(new Date(t));
+    } catch(_) {
+        return '--';
+    }
+}
+function veniceCreditsCnyText(credits){
+    const value = Number(credits);
+    if(!Number.isFinite(value)) return '--';
+    return `¥${(Math.max(0, value) / 100 * 7).toFixed(2)}`;
+}
+function setVeniceRowTooltip(valueEl, text){
+    const row = valueEl?.closest('.venice-credits-row');
+    if(!row) return;
+    if(text && text !== '--'){
+        row.dataset.tooltip = text;
+        row.setAttribute('aria-label', `${row.querySelector('span')?.textContent || ''}：${valueEl.textContent}，${text}`);
+    } else {
+        delete row.dataset.tooltip;
+        row.removeAttribute('aria-label');
+    }
+}
 function isFiniteInputNumber(value){
     if(value === null || value === undefined || value === '') return false;
     const n = Number(value);
@@ -3727,6 +3755,21 @@ function renderVeniceCreditsPanel(){
     if(veniceCreditsPanelPercent) veniceCreditsPanelPercent.textContent = valid ? `${percent.toFixed(1)}%` : '--';
     if(veniceCreditsPanelRefill) veniceCreditsPanelRefill.textContent = veniceRemainingText(veniceCreditsState.nextRefillAt);
     if(veniceCreditsPanelUpdatedAt) veniceCreditsPanelUpdatedAt.textContent = veniceAgoText(veniceCreditsState.updatedAt);
+    setVeniceRowTooltip(veniceCreditsPanelUsed, valid ? `约 ${veniceCreditsCnyText(used)}` : '--');
+    setVeniceRowTooltip(veniceCreditsPanelTotal, valid ? `约 ${veniceCreditsCnyText(total)}` : '--');
+    const available = Number(veniceCreditsState.available);
+    const fallbackAvailable = valid ? Math.max(0, total - used) : NaN;
+    const remainingCredits = Number.isFinite(available) ? Math.max(0, available) : fallbackAvailable;
+    const refillAt = Number(veniceCreditsState.nextRefillAt);
+    const remainingDays = Number.isFinite(refillAt) && refillAt > Date.now()
+        ? Math.max(1, Math.ceil((refillAt - Date.now()) / 86400000))
+        : NaN;
+    const dailyCredits = Number.isFinite(remainingCredits) && Number.isFinite(remainingDays) ? remainingCredits / remainingDays : NaN;
+    setVeniceRowTooltip(veniceCreditsPanelPercent, Number.isFinite(dailyCredits)
+        ? `建议每日 ≤ ${formatVeniceFull(dailyCredits)}（${veniceCreditsCnyText(dailyCredits)}）`
+        : '--');
+    setVeniceRowTooltip(veniceCreditsPanelRefill, formatVenicePreciseDateTime(veniceCreditsState.nextRefillAt));
+    setVeniceRowTooltip(veniceCreditsPanelUpdatedAt, formatVenicePreciseDateTime(veniceCreditsState.updatedAt));
 }
 function closeVeniceCreditsPanel(){
     veniceCreditsPanel?.classList.remove('open');
