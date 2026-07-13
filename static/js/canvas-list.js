@@ -1067,10 +1067,16 @@ const storageRestoreSelectedBtn = document.getElementById('storageRestoreSelecte
 const storagePurgeSelectedBtn = document.getElementById('storagePurgeSelected');
 const storagePreview = document.getElementById('storagePreview');
 const storagePreviewBody = document.getElementById('storagePreviewBody');
+const storagePreviewPrev = document.getElementById('storagePreviewPrev');
+const storagePreviewNext = document.getElementById('storagePreviewNext');
+const storagePreviewMeta = document.getElementById('storagePreviewMeta');
 let storageScan = null;
 let storageTrashItems = [];
 const storageSelected = new Set();
 const storageTrashSelected = new Set();
+let storagePreviewItems = [];
+let storagePreviewIndex = -1;
+let storagePreviewWheelAt = 0;
 
 function formatBytes(value){
     const bytes = Math.max(0, Number(value) || 0);
@@ -1110,7 +1116,8 @@ function storageThumb(item, trash=false){
     return `<img src="${escapeAttr(url)}" data-original-url="${escapeAttr(url)}" loading="lazy" alt="${escapeAttr(item.name || '')}">`;
 }
 
-function openStoragePreview(item){
+function renderStoragePreview(){
+    const item = storagePreviewItems[storagePreviewIndex];
     if(!item?.url || !storagePreview || !storagePreviewBody) return;
     const url = escapeAttr(item.url);
     const name = item.name || '媒体预览';
@@ -1118,9 +1125,28 @@ function openStoragePreview(item){
     if(item.kind === 'video') storagePreviewBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
     else if(item.kind === 'audio') storagePreviewBody.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
     else storagePreviewBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}">`;
+    storagePreviewMeta.textContent = `${storagePreviewIndex + 1} / ${storagePreviewItems.length} · ${name}`;
+    const single = storagePreviewItems.length < 2;
+    storagePreviewPrev.disabled = single;
+    storagePreviewNext.disabled = single;
+    refreshIcons();
+}
+
+function openStoragePreview(item, items){
+    storagePreviewItems = [...(items || [])];
+    storagePreviewIndex = storagePreviewItems.findIndex(entry => entry === item || (entry.path && entry.path === item?.path) || (entry.id && entry.id === item?.id));
+    if(storagePreviewIndex < 0 && item) { storagePreviewItems = [item]; storagePreviewIndex = 0; }
+    if(storagePreviewIndex < 0) return;
+    renderStoragePreview();
     storagePreview.classList.add('open');
     storagePreview.setAttribute('aria-hidden','false');
     refreshIcons();
+}
+
+function stepStoragePreview(direction){
+    if(storagePreviewItems.length < 2) return;
+    storagePreviewIndex = (storagePreviewIndex + direction + storagePreviewItems.length) % storagePreviewItems.length;
+    renderStoragePreview();
 }
 
 function closeStoragePreview(){
@@ -1128,6 +1154,8 @@ function closeStoragePreview(){
     storagePreview.classList.remove('open');
     storagePreview.setAttribute('aria-hidden','true');
     storagePreviewBody.innerHTML = '';
+    storagePreviewItems = [];
+    storagePreviewIndex = -1;
 }
 
 function updateStorageSelection(){
@@ -1159,7 +1187,7 @@ function renderStorageCandidates(){
             };
             card.ondblclick = event => {
                 event.preventDefault(); event.stopPropagation();
-                openStoragePreview(items.find(item => item.path === card.dataset.storagePath));
+                openStoragePreview(items.find(item => item.path === card.dataset.storagePath), items);
             };
         });
     }
@@ -1220,7 +1248,7 @@ function renderStorageTrash(){
         };
         card.ondblclick = event => {
             event.preventDefault(); event.stopPropagation();
-            openStoragePreview(storageTrashItems.find(item => item.id === card.dataset.trashId));
+            openStoragePreview(storageTrashItems.find(item => item.id === card.dataset.trashId), storageTrashItems);
         };
     });
     updateStorageTrashSelection();
@@ -1254,6 +1282,15 @@ storageManagerBtn?.addEventListener('click', () => {
 });
 document.querySelectorAll('[data-storage-close]').forEach(btn => btn.addEventListener('click', () => { storageModal.classList.remove('open'); storageModal.setAttribute('aria-hidden','true'); document.body.style.overflow = ''; }));
 document.querySelectorAll('[data-storage-preview-close]').forEach(btn => btn.addEventListener('click', closeStoragePreview));
+storagePreviewPrev?.addEventListener('click', () => stepStoragePreview(-1));
+storagePreviewNext?.addEventListener('click', () => stepStoragePreview(1));
+storagePreview?.addEventListener('wheel', event => {
+    if(!storagePreview.classList.contains('open') || Math.abs(event.deltaY) < 8) return;
+    event.preventDefault();
+    const now = Date.now(); if(now - storagePreviewWheelAt < 350) return;
+    storagePreviewWheelAt = now;
+    stepStoragePreview(event.deltaY > 0 ? 1 : -1);
+}, {passive:false});
 document.querySelectorAll('[data-storage-tab]').forEach(btn => btn.addEventListener('click', () => switchStorageTab(btn.dataset.storageTab)));
 document.getElementById('storageRescanBtn')?.addEventListener('click', scanStorage);
 [storageSearch,storageKindFilter,storageSourceFilter,storageShowRecent,storageSort].forEach(el => el?.addEventListener(el === storageSearch ? 'input' : 'change', renderStorageCandidates));
@@ -1269,7 +1306,12 @@ storageRestoreSelectedBtn?.addEventListener('click', async () => { try { const d
 storagePurgeSelectedBtn?.addEventListener('click', async () => { const ids=[...storageTrashSelected]; if(!ids.length || !confirm(`永久删除 ${ids.length} 个媒体文件？此操作无法恢复。`)) return; try { const data=await storageJsonAction('/api/storage/media-trash/purge',{ids}); storageTrashSelected.clear(); setStatus(`已永久删除 ${data.purged?.length || 0} 个文件`); await loadStorageTrash(); } catch(err){ alert(err.message || String(err)); } });
 document.getElementById('storageClearCache')?.addEventListener('click', async event => { if(!confirm('清空全部预览缓存？原始图片和视频不会被删除。')) return; event.currentTarget.disabled=true; try { const data=await storageJsonAction('/api/storage/preview-cache/clear',{}); setStatus(`已清理 ${data.removed || 0} 个缓存，释放 ${formatBytes(data.bytes)}`); await scanStorage(); } catch(err){ alert(err.message || String(err)); } finally { event.currentTarget.disabled=false; } });
 window.addEventListener('keydown', event => {
-    if(event.key !== 'Escape') return;
-    if(storagePreview?.classList.contains('open')) closeStoragePreview();
-    else if(storageModal?.classList.contains('open')) document.querySelector('[data-storage-close]')?.click();
+    if(storagePreview?.classList.contains('open')) {
+        if(event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            stepStoragePreview(event.key === 'ArrowRight' ? 1 : -1);
+        } else if(event.key === 'Escape') closeStoragePreview();
+        return;
+    }
+    if(event.key === 'Escape' && storageModal?.classList.contains('open')) document.querySelector('[data-storage-close]')?.click();
 });

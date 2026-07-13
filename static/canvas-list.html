@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1783387674"></script>
-    <link rel="stylesheet" href="/static/css/canvas-list.css?v=2027.01.1.1.1783961833">
+    <link rel="stylesheet" href="/static/css/canvas-list.css?v=2027.01.1.1.1783963676">
     <link rel="stylesheet" href="/static/css/theme.css?v=2027.01.1.1.1783674343">
 </head>
 <body>
@@ -99,8 +99,7 @@
             <div id="storageCandidatesPane" class="storage-pane active">
                 <div id="storageWarning" class="storage-warning" hidden></div>
                 <div class="storage-summary"><div><strong id="storageCandidateCount">--</strong><span>候选文件</span></div><div><strong id="storageCandidateSize">--</strong><span>可管理空间</span></div><div><strong id="storageProtectedCount">--</strong><span>受保护文件</span></div><button id="storageRescanBtn" class="storage-secondary" type="button"><i data-lucide="scan-search"></i>重新扫描</button></div>
-                <div class="storage-tools"><input id="storageSearch" type="search" placeholder="搜索文件名"><select id="storageKindFilter"><option value="all">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option></select><select id="storageSourceFilter"><option value="all">全部来源</option><option value="output">生成结果</option><option value="input">输入副本</option></select><label><input id="storageShowRecent" type="checkbox"> 显示最近 7 天</label><select id="storageSort"><option value="newest">时间：新到旧</option><option value="oldest">时间：旧到新</option><option value="largest">大小：大到小</option></select></div>
-                <div class="storage-selectbar"><label><input id="storageSelectVisible" type="checkbox"> 选择当前结果</label><span id="storageSelectedSummary">未选择文件</span></div>
+                <div class="storage-controlbar"><div class="storage-tools"><input id="storageSearch" type="search" placeholder="搜索文件名"><select id="storageKindFilter"><option value="all">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option></select><select id="storageSourceFilter"><option value="all">全部来源</option><option value="output">生成结果</option><option value="input">输入副本</option></select><label><input id="storageShowRecent" type="checkbox"> 显示最近 7 天</label><select id="storageSort"><option value="newest">时间：新到旧</option><option value="oldest">时间：旧到新</option><option value="largest">大小：大到小</option></select></div><div class="storage-selectbar"><label><input id="storageSelectVisible" type="checkbox"> 选择当前结果</label><span id="storageSelectedSummary">未选择文件</span></div></div>
                 <div id="storageMediaGrid" class="storage-grid"></div>
                 <footer class="storage-actions"><button class="storage-secondary" type="button" data-storage-close>取消</button><button id="storageTrashSelected" class="storage-danger" type="button" disabled><i data-lucide="trash-2"></i>移入媒体回收站</button></footer>
             </div>
@@ -112,9 +111,10 @@
         <div class="storage-preview-backdrop" data-storage-preview-close></div>
         <section class="storage-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="storagePreviewTitle">
             <header><strong id="storagePreviewTitle">媒体预览</strong><button class="ws-icon-btn" type="button" data-storage-preview-close title="关闭预览"><i data-lucide="x"></i></button></header>
-            <div id="storagePreviewBody" class="storage-preview-body"></div>
+            <div class="storage-preview-stage"><button id="storagePreviewPrev" class="storage-preview-nav prev" type="button" aria-label="上一个媒体"><i data-lucide="chevron-left"></i></button><div id="storagePreviewBody" class="storage-preview-body"></div><button id="storagePreviewNext" class="storage-preview-nav next" type="button" aria-label="下一个媒体"><i data-lucide="chevron-right"></i></button></div>
+            <footer class="storage-preview-footer"><span id="storagePreviewMeta"></span><span>← → 或滚轮切换</span></footer>
         </section>
     </div>
-    <script src="/static/js/canvas-list.js?v=2027.01.1.1.1783961835"></script>
+    <script src="/static/js/canvas-list.js?v=2027.01.1.1.1783963676"></script>
 </body>
 </html>
