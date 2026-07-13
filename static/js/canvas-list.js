@@ -1065,6 +1065,8 @@ const storageSelectVisible = document.getElementById('storageSelectVisible');
 const storageTrashSelectedBtn = document.getElementById('storageTrashSelected');
 const storageRestoreSelectedBtn = document.getElementById('storageRestoreSelected');
 const storagePurgeSelectedBtn = document.getElementById('storagePurgeSelected');
+const storagePreview = document.getElementById('storagePreview');
+const storagePreviewBody = document.getElementById('storagePreviewBody');
 let storageScan = null;
 let storageTrashItems = [];
 const storageSelected = new Set();
@@ -1108,6 +1110,26 @@ function storageThumb(item, trash=false){
     return `<img src="${escapeAttr(url)}" data-original-url="${escapeAttr(url)}" loading="lazy" alt="${escapeAttr(item.name || '')}">`;
 }
 
+function openStoragePreview(item){
+    if(!item?.url || !storagePreview || !storagePreviewBody) return;
+    const url = escapeAttr(item.url);
+    const name = item.name || '媒体预览';
+    document.getElementById('storagePreviewTitle').textContent = name;
+    if(item.kind === 'video') storagePreviewBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
+    else if(item.kind === 'audio') storagePreviewBody.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
+    else storagePreviewBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}">`;
+    storagePreview.classList.add('open');
+    storagePreview.setAttribute('aria-hidden','false');
+    refreshIcons();
+}
+
+function closeStoragePreview(){
+    if(!storagePreview) return;
+    storagePreview.classList.remove('open');
+    storagePreview.setAttribute('aria-hidden','true');
+    storagePreviewBody.innerHTML = '';
+}
+
 function updateStorageSelection(){
     const chosen = (storageScan?.candidates || []).filter(item => storageSelected.has(item.path));
     const bytes = chosen.reduce((sum,item) => sum + Number(item.size || 0), 0);
@@ -1135,7 +1157,10 @@ function renderStorageCandidates(){
                 if(checkbox) checkbox.checked = selected;
                 updateStorageSelection();
             };
-            card.querySelector('.storage-thumb img')?.addEventListener('dblclick', event => { event.stopPropagation(); window.open(event.currentTarget.dataset.originalUrl || event.currentTarget.src, '_blank', 'noopener'); });
+            card.ondblclick = event => {
+                event.preventDefault(); event.stopPropagation();
+                openStoragePreview(items.find(item => item.path === card.dataset.storagePath));
+            };
         });
     }
     updateStorageSelection();
@@ -1182,15 +1207,21 @@ async function loadStorageTrash(){
 function renderStorageTrash(){
     if(!storageTrashItems.length) storageTrashGrid.innerHTML = '<div class="storage-empty"><i data-lucide="trash-2"></i><strong>媒体回收站为空</strong><span>从“未引用媒体”移入的文件会显示在这里。</span></div>';
     else storageTrashGrid.innerHTML = storageTrashItems.map(item => `<article class="storage-card ${storageTrashSelected.has(item.id) ? 'selected' : ''}" data-trash-id="${escapeAttr(item.id)}"><input class="storage-check" type="checkbox" ${storageTrashSelected.has(item.id) ? 'checked' : ''}><div class="storage-thumb">${storageThumb(item,true)}</div><div class="storage-card-info"><div class="storage-card-name" title="${escapeAttr(item.original_path)}">${escapeHtml(item.name)}</div><div class="storage-card-meta"><span>${formatBytes(item.size)}</span><span>${storageDate(item.trashed_at)}</span></div></div></article>`).join('');
-    storageTrashGrid.querySelectorAll('.storage-card').forEach(card => card.onclick = event => {
-        if(event.target.closest('audio')) return;
-        const id = card.dataset.trashId;
-        if(storageTrashSelected.has(id)) storageTrashSelected.delete(id); else storageTrashSelected.add(id);
-        const selected = storageTrashSelected.has(id);
-        card.classList.toggle('selected', selected);
-        const checkbox = card.querySelector('.storage-check');
-        if(checkbox) checkbox.checked = selected;
-        updateStorageTrashSelection();
+    storageTrashGrid.querySelectorAll('.storage-card').forEach(card => {
+        card.onclick = event => {
+            if(event.target.closest('audio')) return;
+            const id = card.dataset.trashId;
+            if(storageTrashSelected.has(id)) storageTrashSelected.delete(id); else storageTrashSelected.add(id);
+            const selected = storageTrashSelected.has(id);
+            card.classList.toggle('selected', selected);
+            const checkbox = card.querySelector('.storage-check');
+            if(checkbox) checkbox.checked = selected;
+            updateStorageTrashSelection();
+        };
+        card.ondblclick = event => {
+            event.preventDefault(); event.stopPropagation();
+            openStoragePreview(storageTrashItems.find(item => item.id === card.dataset.trashId));
+        };
     });
     updateStorageTrashSelection();
     refreshIcons();
@@ -1222,6 +1253,7 @@ storageManagerBtn?.addEventListener('click', () => {
     document.body.style.overflow = 'hidden'; switchStorageTab('candidates'); scanStorage(); refreshIcons();
 });
 document.querySelectorAll('[data-storage-close]').forEach(btn => btn.addEventListener('click', () => { storageModal.classList.remove('open'); storageModal.setAttribute('aria-hidden','true'); document.body.style.overflow = ''; }));
+document.querySelectorAll('[data-storage-preview-close]').forEach(btn => btn.addEventListener('click', closeStoragePreview));
 document.querySelectorAll('[data-storage-tab]').forEach(btn => btn.addEventListener('click', () => switchStorageTab(btn.dataset.storageTab)));
 document.getElementById('storageRescanBtn')?.addEventListener('click', scanStorage);
 [storageSearch,storageKindFilter,storageSourceFilter,storageShowRecent,storageSort].forEach(el => el?.addEventListener(el === storageSearch ? 'input' : 'change', renderStorageCandidates));
@@ -1236,4 +1268,8 @@ storageTrashSelectedBtn?.addEventListener('click', async () => {
 storageRestoreSelectedBtn?.addEventListener('click', async () => { try { const data=await storageJsonAction('/api/storage/media-trash/restore',{ids:[...storageTrashSelected]}); storageTrashSelected.clear(); setStatus(`已恢复 ${data.restored?.length || 0} 个文件`); await loadStorageTrash(); } catch(err){ alert(err.message || String(err)); } });
 storagePurgeSelectedBtn?.addEventListener('click', async () => { const ids=[...storageTrashSelected]; if(!ids.length || !confirm(`永久删除 ${ids.length} 个媒体文件？此操作无法恢复。`)) return; try { const data=await storageJsonAction('/api/storage/media-trash/purge',{ids}); storageTrashSelected.clear(); setStatus(`已永久删除 ${data.purged?.length || 0} 个文件`); await loadStorageTrash(); } catch(err){ alert(err.message || String(err)); } });
 document.getElementById('storageClearCache')?.addEventListener('click', async event => { if(!confirm('清空全部预览缓存？原始图片和视频不会被删除。')) return; event.currentTarget.disabled=true; try { const data=await storageJsonAction('/api/storage/preview-cache/clear',{}); setStatus(`已清理 ${data.removed || 0} 个缓存，释放 ${formatBytes(data.bytes)}`); await scanStorage(); } catch(err){ alert(err.message || String(err)); } finally { event.currentTarget.disabled=false; } });
-window.addEventListener('keydown', event => { if(event.key === 'Escape' && storageModal?.classList.contains('open')) document.querySelector('[data-storage-close]')?.click(); });
+window.addEventListener('keydown', event => {
+    if(event.key !== 'Escape') return;
+    if(storagePreview?.classList.contains('open')) closeStoragePreview();
+    else if(storageModal?.classList.contains('open')) document.querySelector('[data-storage-close]')?.click();
+});
