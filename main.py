@@ -32,7 +32,7 @@ import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, Thread
 import httpx
-from PIL import Image, ImageOps
+from PIL import Image, ImageCms, ImageOps
 from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -5773,10 +5773,35 @@ def image_has_alpha(img: Image.Image) -> bool:
         return "transparency" in img.info
     return False
 
+def normalize_image_to_srgb(img: Image.Image, icc_profile=None) -> Image.Image:
+    """Convert preview pixels to sRGB while preserving transparency."""
+    has_alpha = image_has_alpha(img)
+    alpha = img.convert("RGBA").getchannel("A") if has_alpha else None
+    color_image = img if not has_alpha and img.mode in ("RGB", "CMYK", "LAB") else img.convert("RGB")
+    rgb = color_image.convert("RGB")
+    if icc_profile:
+        try:
+            source_profile = ImageCms.ImageCmsProfile(BytesIO(icc_profile))
+            rgb = ImageCms.profileToProfile(
+                color_image,
+                source_profile,
+                ImageCms.createProfile("sRGB"),
+                outputMode="RGB",
+            )
+        except Exception:
+            # Invalid or unsupported embedded profiles should not prevent a preview.
+            pass
+    if alpha is not None:
+        rgb.putalpha(alpha)
+    return rgb
+
+def srgb_icc_profile_bytes() -> bytes:
+    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
 def media_preview_cache_paths(path: str, width: int):
     stat = os.stat(path)
     key = hashlib.sha1(
-        f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|{width}".encode("utf-8", "ignore")
+        f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|{width}|srgb-v1".encode("utf-8", "ignore")
     ).hexdigest()
     return (
         os.path.join(MEDIA_PREVIEW_DIR, f"{key}.webp"),
@@ -5835,14 +5860,16 @@ async def media_preview(url: str, w: int = 512):
             img = generate_video_preview_image(path, width)
         else:
             with Image.open(path) as source:
+                icc_profile = source.info.get("icc_profile")
                 img = ImageOps.exif_transpose(source)
                 img.thumbnail((width, width), Image.LANCZOS)
-                img = img.convert("RGBA" if image_has_alpha(img) else "RGB")
+                img = normalize_image_to_srgb(img, icc_profile)
+        srgb_profile = srgb_icc_profile_bytes()
         try:
-            img.save(webp_path, format="WEBP", quality=80, method=1)   # method=1 生成更快（缩略图不追求极致压缩）
+            img.save(webp_path, format="WEBP", quality=80, method=1, icc_profile=srgb_profile)   # method=1 生成更快（缩略图不追求极致压缩）
             return webp_path, "image/webp"
         except Exception:
-            img.save(png_path, format="PNG")
+            img.save(png_path, format="PNG", icc_profile=srgb_profile)
             return png_path, "image/png"
 
     try:
