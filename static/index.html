@@ -181,7 +181,7 @@
             align-items: center;
             border-right: 1px solid var(--border);
             padding: 40px 0;
-            transition: width 0.5s var(--fluid-ease) 0.5s, background 0.3s, border-color 0.3s;
+            transition: width 0.5s var(--fluid-ease), background 0.3s, border-color 0.3s;
             z-index: 50;
             overflow: hidden;
         }
@@ -220,7 +220,7 @@
             cursor: pointer;
             flex: 0 0 auto;
             /* 仅保留 hover 真正会用到的属性过渡，避免 transition: all 因首屏属性补齐被意外触发 */
-            transition: transform 0.6s var(--fluid-ease) 0.5s, border-radius 0.6s var(--fluid-ease) 0.5s, border-color 0.3s, background-color .18s, box-shadow .2s;
+            transition: transform 0.6s var(--fluid-ease), border-radius 0.6s var(--fluid-ease), border-color 0.3s, background-color .18s, box-shadow .2s;
         }
 
         .sidebar:hover .logo-ring {
@@ -267,8 +267,8 @@
             justify-content: flex-start;
             border-radius: 18px;
             cursor: pointer;
-            /* 只对 width 做带延迟的过渡（侧栏悬停展开效果）；background/color 不参与过渡，避免 active 切换时底色"流动" */
-            transition: width 0.3s var(--fluid-ease) 0.5s;
+            /* 只对 width 做过渡（侧栏悬停展开/移出收起效果）；background/color 不参与过渡，避免 active 切换时底色"流动" */
+            transition: width 0.3s var(--fluid-ease);
             color: var(--muted);
             overflow: hidden;
             padding-left: 14px;
@@ -301,7 +301,7 @@
             font-weight: 600;
             font-size: 14px;
             white-space: nowrap;
-            transition: opacity 0.3s 0.5s;
+            transition: opacity 0.3s;
         }
 
         .sidebar:hover .nav-text {
@@ -325,7 +325,7 @@
             justify-content: flex-start;
             cursor: pointer;
             overflow: hidden;
-            transition: width 0.3s var(--fluid-ease) 0.5s, background-color 0.2s, color 0.2s, border-color 0.2s;
+            transition: width 0.3s var(--fluid-ease), background-color 0.2s, color 0.2s, border-color 0.2s;
         }
 
         .sidebar:hover .nav-fold-toggle {
@@ -555,7 +555,7 @@
             font-weight: 800;
             color: var(--text);
             /* 只过渡 hover 时真正改的 transform/opacity，避免 all 触发延迟 */
-            transition: transform 0.5s var(--fluid-ease) 0.4s, opacity 0.5s var(--fluid-ease) 0.4s;
+            transition: transform 0.5s var(--fluid-ease), opacity 0.5s var(--fluid-ease);
             z-index: 10;
         }
 
@@ -633,7 +633,7 @@
             justify-content: center;
             cursor: pointer;
             /* 只过渡 hover/激活会改的属性，避免 all 触发延迟 */
-            transition: width 0.3s var(--fluid-ease) 0.5s, gap 0.3s var(--fluid-ease) 0.5s, background-color 0.2s, color 0.2s, border-color 0.2s;
+            transition: width 0.3s var(--fluid-ease), gap 0.3s var(--fluid-ease), background-color 0.2s, color 0.2s, border-color 0.2s;
             flex-shrink: 0;
             overflow:hidden;
             gap:8px;
@@ -705,7 +705,7 @@
             opacity: 0;
             max-width: 0;
             overflow: hidden;
-            transition: opacity 0.3s 0.5s, max-width 0.3s var(--fluid-ease) 0.5s, transform .22s var(--fluid-ease);
+            transition: opacity 0.3s, max-width 0.3s var(--fluid-ease), transform .22s var(--fluid-ease);
         }
         .sidebar:hover .settings-fold-chevron,
         .sidebar.is-pinned .settings-fold-chevron {
@@ -741,7 +741,7 @@
             letter-spacing:.02em;
             white-space:nowrap;
             overflow:hidden;
-            transition: opacity 0.3s 0.5s, max-width 0.3s var(--fluid-ease) 0.5s;
+            transition: opacity 0.3s, max-width 0.3s var(--fluid-ease);
         }
         .sidebar:hover .side-pill-text {
             opacity:1;
@@ -769,7 +769,7 @@
             white-space:nowrap;
             overflow:hidden;
             cursor:pointer;
-            transition:width 0.3s var(--fluid-ease) 0.5s, color .2s, border-color .2s, background-color .2s;
+            transition:width 0.3s var(--fluid-ease), color .2s, border-color .2s, background-color .2s;
         }
         .project-version-badge:hover { color:var(--text); border-color:var(--accent, #6366f1); }
         .project-version-badge.checking { opacity:.6; animation:badge-pulse 1s ease-in-out infinite; }
@@ -799,7 +799,7 @@
             font-size:9px;
             font-weight:900;
             overflow:hidden;
-            transition:width 0.3s var(--fluid-ease) 0.5s, background-color .2s, color .2s, border-color .2s;
+            transition:width 0.3s var(--fluid-ease), background-color .2s, color .2s, border-color .2s;
         }
         .update-now-btn.show { display:flex; }
         .sidebar:hover .update-now-btn { width:170px; transition-delay:0s; }
@@ -812,7 +812,7 @@
             max-width:42px;
             white-space:nowrap;
             overflow:hidden;
-            transition: opacity 0.3s 0.5s, max-width 0.3s var(--fluid-ease) 0.5s;
+            transition: opacity 0.3s, max-width 0.3s var(--fluid-ease);
         }
         .update-action-prefix { display:none; }
         .update-version-full { display:none; }
@@ -1716,7 +1716,7 @@
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
             <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
             <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1784024581" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1784046449" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -2180,8 +2180,8 @@
                 });
                 sidebar.addEventListener('mouseleave', () => {
                     pauseScaleInFrames();
-                    // 收起动画有 0.5s 延迟，再覆盖其后的 0.5s 动画。
-                    pauseAssetManagerRendering(1100);
+                    // 鼠标移出后立即收起，仅覆盖随后的 0.5s 动画。
+                    pauseAssetManagerRendering(600);
                 });
             }
             checkForUpdates();

@@ -74,6 +74,7 @@ if(statusEl && statusEl.parentElement !== document.body) document.body.appendChi
 let projects = [];
 let canvases = [];          // all canvases across projects
 let deletedCanvases = [];
+let initialDataLoaded = false;
 let currentProjectId = rememberedProjectId();
 let pendingDeleteProjectId = null;
 let statusTimer = null;
@@ -234,6 +235,11 @@ async function loadAll(){
             currentProjectId = def ? def.id : 'default';
         }
         rememberProjectId(currentProjectId);
+        // Only from this point onward does an empty array mean "no canvases".
+        // Before the requests finish, parent-frame messages (for example
+        // studio-lang) may ask for a re-render while `canvases` is still the
+        // placeholder []. Keep the empty state hidden during that window.
+        initialDataLoaded = true;
         renderProjects();
         renderBoard();
         resetView();
@@ -425,6 +431,10 @@ function autoLayoutNulls(items){
 }
 
 function renderBoard(){
+    if(!initialDataLoaded){
+        boardEmptyHint.classList.add('hidden');
+        return;
+    }
     updateBoardHeader();
     const items = canvasesInProject(currentProjectId);
     autoLayoutNulls(items);
