@@ -15139,6 +15139,26 @@ def storage_candidate_path(url):
                 return normalized, path
     return "", ""
 
+def storage_prune_empty_parent_dirs(file_path):
+    """删除媒体移入回收站后留下的空父目录，但永不删除 input/output 根目录。"""
+    path = os.path.abspath(str(file_path or ""))
+    parent = os.path.dirname(path)
+    roots = (os.path.abspath(OUTPUT_INPUT_DIR), os.path.abspath(OUTPUT_OUTPUT_DIR))
+    root = next((item for item in roots if os.path.commonpath([item, path]) == item), "")
+    if not root:
+        return 0
+    removed = 0
+    while parent != root and os.path.commonpath([root, parent]) == root:
+        try:
+            if os.path.islink(parent):
+                break
+            os.rmdir(parent)
+            removed += 1
+        except OSError:
+            break
+        parent = os.path.dirname(parent)
+    return removed
+
 def storage_scan_payload():
     refs, invalid, origins = storage_reference_snapshot()
     now = now_ms()
@@ -15286,6 +15306,7 @@ async def move_storage_media_to_trash(payload: StorageTrashRequest, request: Req
             ext = os.path.splitext(path)[1].lower()
             stored_name = f"{item_id}{ext}"
             os.replace(path, os.path.join(MEDIA_TRASH_DIR, stored_name))
+            storage_prune_empty_parent_dirs(path)
             record = {
                 "id": item_id, "stored_name": stored_name, "original_path": normalized,
                 "name": candidate["name"], "kind": candidate["kind"], "size": candidate["size"],
