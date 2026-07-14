@@ -278,7 +278,6 @@ RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.js
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
 GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
-MEDIA_CLEANUP_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 LOCAL_IMAGE_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 RUNNINGHUB_THUMBNAIL_EXTS = (".jpg",)
@@ -15105,7 +15104,6 @@ def storage_scan_payload():
                     "source": "input" if prefix.endswith("input/") else "output",
                     "size": stat.st_size,
                     "modified_at": modified_at,
-                    "recent": now - modified_at < MEDIA_CLEANUP_COOLDOWN_MS,
                 })
     candidates.sort(key=lambda item: item["modified_at"], reverse=True)
     preview_files = 0
@@ -15124,7 +15122,6 @@ def storage_scan_payload():
         "protected_count": protected_count,
         "protected_bytes": protected_bytes,
         "invalid_files": invalid,
-        "cooldown_days": MEDIA_CLEANUP_COOLDOWN_MS // (24 * 60 * 60 * 1000),
         "preview_cache": {"files": preview_files, "bytes": preview_bytes},
         "scanned_at": now,
     }
