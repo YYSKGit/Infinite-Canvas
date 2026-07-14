@@ -2184,6 +2184,7 @@ function setSmartCanvasSwitcherOpen(open){
     smartCanvasSwitcherBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 let smartCanvasSwitchInFlight = false;
+let pendingSmartCanvasSwitch = null;
 function smartCanvasHasLiveAsyncWork(){
     return Boolean(
         activeSmartTaskPolls.size
@@ -2230,11 +2231,21 @@ function resetSmartCanvasTransientStateForSwitch(){
     canvasDefaultSmartSettings = cloneSmartSettings(settings);
 }
 async function switchToSmartCanvas(nextCanvasId, options={}){
-    if(!nextCanvasId || nextCanvasId === canvasId){
+    if(!nextCanvasId){
+        setSmartCanvasSwitcherOpen(false);
+        return false;
+    }
+    if(smartCanvasSwitchInFlight){
+        // Browser history can move again while the current canvas is still
+        // waiting for its initial media. Record even the currently displayed
+        // canvas: choosing it again means "cancel and return".
+        pendingSmartCanvasSwitch = {canvasId:nextCanvasId, options:{...options}};
+        return false;
+    }
+    if(nextCanvasId === canvasId){
         setSmartCanvasSwitcherOpen(false);
         return true;
     }
-    if(smartCanvasSwitchInFlight) return false;
     smartCanvasSwitchInFlight = true;
     setSmartCanvasSwitcherOpen(false);
     const previousCanvasId = canvasId;
@@ -2250,22 +2261,39 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
         saveTimer = null;
         const nextUrl = smartCanvasUrl(nextCanvasId);
         if(smartCanvasHasLiveAsyncWork()){
-            window.location.href = nextUrl;
+            const finalTarget = pendingSmartCanvasSwitch?.canvasId || nextCanvasId;
+            pendingSmartCanvasSwitch = null;
+            if(finalTarget === canvasId) return false;
+            window.location.href = smartCanvasUrl(finalTarget);
             return true;
         }
         const loaded = await loadCanvas(nextCanvasId, {switching:true});
         if(!loaded){
+            // loadCanvas commits several globals before rendering finishes.
+            // If it fails, never feed that possibly partial state into another
+            // in-page save/switch cycle. Rebuild the latest requested canvas
+            // from a clean document instead.
+            const recoveryTarget = pendingSmartCanvasSwitch?.canvasId || previousCanvasId;
+            const recoveryUrl = smartCanvasUrl(recoveryTarget);
+            pendingSmartCanvasSwitch = null;
             if(options.history === false) history.replaceState({canvasId:previousCanvasId}, '', previousUrl);
-            canvasId = previousCanvasId;
-            window.location.href = previousUrl;
+            window.location.href = recoveryUrl;
             return false;
         }
-        if(options.history === false) history.replaceState({canvasId:nextCanvasId}, '', nextUrl);
-        else history.pushState({canvasId:nextCanvasId}, '', nextUrl);
+        const superseded = pendingSmartCanvasSwitch?.canvasId && pendingSmartCanvasSwitch.canvasId !== nextCanvasId;
+        if(!superseded){
+            if(options.history === false) history.replaceState({canvasId:nextCanvasId}, '', nextUrl);
+            else history.pushState({canvasId:nextCanvasId}, '', nextUrl);
+        }
         renderSmartCanvasSwitcher();
         return true;
     } finally {
         smartCanvasSwitchInFlight = false;
+        const pending = pendingSmartCanvasSwitch;
+        pendingSmartCanvasSwitch = null;
+        if(pending?.canvasId && pending.canvasId !== canvasId){
+            queueMicrotask(() => { switchToSmartCanvas(pending.canvasId, pending.options); });
+        }
     }
 }
 let smartCanvasSwitcherItems = null;
@@ -6943,6 +6971,8 @@ function handleAssetLibraryUpdatedMessage(data={}){
 // 服务器广播 canvas_updated 时带回 client_id，自己发的就忽略，避免自我刷新。
 const smartClientId = `canvas_smart_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
 let canvasSyncInFlight = false;
+let canvasSyncInFlightCount = 0;
+let smartCanvasLoadGeneration = 0;
 let canvasSyncTimer = null;
 let canvasMetaPollTimer = null;
 let connectionLayerRaf = 0;
@@ -7203,10 +7233,14 @@ async function mergeReloadCanvasNow(){
         scheduleCanvasMergeReload(600);
         return;
     }
+    const requestedCanvasId = canvasId;
+    const requestedCanvas = canvas;
+    const requestedGeneration = smartCanvasLoadGeneration;
     try {
-        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
+        const res = await fetch(`/api/canvases/${encodeURIComponent(requestedCanvasId)}`);
         if(!res.ok) return;
         const data = await res.json();
+        if(requestedCanvasId !== canvasId || requestedCanvas !== canvas || requestedGeneration !== smartCanvasLoadGeneration) return;
         if(data && data.canvas) applyMergedServerCanvas(data.canvas);
     } catch(e) {}
 }
@@ -7229,10 +7263,14 @@ function startCanvasMetaPoll(){
     canvasMetaPollTimer = setInterval(async () => {
         if(!canvasId || !canvas) return;
         if(canvasSyncInFlight || dragState || selectionState) return;
+        const requestedCanvasId = canvasId;
+        const requestedCanvas = canvas;
+        const requestedGeneration = smartCanvasLoadGeneration;
         try {
-            const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/meta`);
+            const res = await fetch(`/api/canvases/${encodeURIComponent(requestedCanvasId)}/meta`);
             if(!res.ok) return;
             const meta = await res.json();
+            if(requestedCanvasId !== canvasId || requestedCanvas !== canvas || requestedGeneration !== smartCanvasLoadGeneration) return;
             if(Number(meta.updated_at || 0) > Number(canvas.updated_at || 0)) mergeReloadCanvasNow();
         } catch(e) {}
     }, 8000);
@@ -8023,6 +8061,7 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         const data = await res.json();
         if(!data?.canvas) return false;
         if(options.switching) resetSmartCanvasTransientStateForSwitch();
+        smartCanvasLoadGeneration += 1;
         canvasId = requestedCanvasId;
         canvas = data.canvas;
         rememberCanvasListProject(canvas.project || 'default');
@@ -8086,6 +8125,9 @@ function scheduleSave(){
 }
 async function saveCanvas(){
     if(!canvasId || !canvas) return;
+    const requestedCanvasId = canvasId;
+    const requestedCanvas = canvas;
+    const requestedGeneration = smartCanvasLoadGeneration;
     savePromptDraftForCurrent();
     nodes.forEach(node => {
         node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
@@ -8095,9 +8137,10 @@ async function saveCanvas(){
     canvas.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
     canvas.viewport = {...viewport};
     const storageCanvas = canvasForStorage();
+    canvasSyncInFlightCount += 1;
     canvasSyncInFlight = true;
     try {
-        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`, {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(requestedCanvasId)}`, {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
@@ -8112,6 +8155,7 @@ async function saveCanvas(){
                 client_id:smartClientId
             })
         });
+        if(requestedCanvasId !== canvasId || requestedCanvas !== canvas || requestedGeneration !== smartCanvasLoadGeneration) return;
         if(res.ok){
             const data = await res.json();
             if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
@@ -8134,7 +8178,8 @@ async function saveCanvas(){
             saveTimer = setTimeout(saveCanvas, 300);
         }
     } catch(e) {} finally {
-        canvasSyncInFlight = false;
+        canvasSyncInFlightCount = Math.max(0, canvasSyncInFlightCount - 1);
+        canvasSyncInFlight = canvasSyncInFlightCount > 0;
     }
 }
 function imageMetaFromNode(node){
