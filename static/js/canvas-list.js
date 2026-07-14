@@ -73,6 +73,41 @@ let currentProjectId = rememberedProjectId();
 let pendingDeleteProjectId = null;
 let statusTimer = null;
 let clipboardCanvasId = null;   // 剪切的画布（切到别的项目后粘贴）
+let projectMenuEl = null;
+
+function closeProjectMenu(){
+    projectMenuEl?.remove(); projectMenuEl = null;
+    boardProjectName.setAttribute('aria-expanded', 'false');
+}
+function renderProjectMenu(){
+    if(!projectMenuEl) return;
+    projectMenuEl.innerHTML = `<div class="ws-project-menu-head"><strong>${L('项目','PROJECTS')}</strong><div class="ws-project-menu-head-actions"><button class="ws-project-menu-trash" type="button" title="${L('回收站','Trash')}" aria-label="${L('回收站','Trash')}"><i data-lucide="trash-2"></i></button><button class="ws-project-menu-add" type="button" title="${L('新建项目','New project')}" aria-label="${L('新建项目','New project')}"><i data-lucide="plus"></i></button></div></div><div class="ws-project-menu-list">${projects.map(p => { const d=p.id==='default'; return `<button class="ws-project-menu-item ${p.id===currentProjectId?'active':''}" type="button" data-project-id="${escapeAttr(p.id)}"><i data-lucide="${p.id===currentProjectId?'folder-open':'folder'}"></i><span class="ws-project-menu-name">${escapeHtml(p.name)}</span><span class="ws-project-menu-count">${projectCanvasCount(p.id)}</span><span class="ws-project-menu-actions"><span class="ws-project-menu-action rename" title="${L('重命名','Rename')}"><i data-lucide="pencil"></i></span>${d?'':`<span class="ws-project-menu-action danger delete" title="${L('删除','Delete')}"><i data-lucide="trash-2"></i></span>`}</span></button>`; }).join('')}</div>`;
+    projectMenuEl.querySelector('.ws-project-menu-add').onclick = () => {
+        const name=prompt(L('新项目名称','New project name'),L('新项目','New project'));
+        if(name?.trim()){ newProjectInput.value=name.trim(); createProject(); }
+        closeProjectMenu();
+    };
+    projectMenuEl.querySelector('.ws-project-menu-trash').onclick = () => { closeProjectMenu(); trashEntryBtn.click(); };
+    projectMenuEl.querySelectorAll('.ws-project-menu-item').forEach(item => item.onclick = e => {
+        const pid=item.dataset.projectId;
+        if(e.target.closest('.rename')){ e.stopPropagation(); const p=projects.find(x=>x.id===pid); const name=prompt(L('项目名称','Project name'),p?.name||''); if(name?.trim()) renameProject(pid,name.trim()); }
+        else if(e.target.closest('.delete')){ e.stopPropagation(); if(confirm(L('删除这个项目？其中的画布将移回默认项目。','Delete this project? Its canvases will move to Default.'))) deleteProject(pid); }
+        else selectProject(pid);
+        closeProjectMenu();
+    });
+    refreshIcons();
+}
+function openProjectMenu(){
+    if(trashPanel.classList.contains('active')){ closeTrashView(); return; }
+    if(projectMenuEl){ closeProjectMenu(); return; }
+    projectMenuEl=document.createElement('div'); projectMenuEl.className='ws-project-menu';
+    document.querySelector('.ws-topbar-left').appendChild(projectMenuEl);
+    boardProjectName.setAttribute('aria-expanded','true'); renderProjectMenu();
+}
+boardProjectName.setAttribute('role','button'); boardProjectName.setAttribute('tabindex','0'); boardProjectName.setAttribute('aria-haspopup','menu'); boardProjectName.setAttribute('aria-expanded','false');
+boardProjectName.addEventListener('click',openProjectMenu);
+boardProjectName.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openProjectMenu();}});
+document.addEventListener('click',e=>{if(projectMenuEl&&!e.target.closest('.ws-project-menu')&&!e.target.closest('#boardProjectName'))closeProjectMenu();});
 
 // board viewport (mirrors smart-canvas math)
 const viewport = { x: 0, y: 0, scale: 1 };
@@ -354,9 +389,18 @@ async function deleteProject(pid){
 
 /* ===== Board rendering ===== */
 function updateBoardHeader(){
+    if(trashPanel.classList.contains('active')){
+        boardProjectName.classList.add('trash-context');
+        boardProjectName.innerHTML = `<i data-lucide="arrow-left" class="ws-context-icon ws-back-icon"></i><i data-lucide="trash-2" class="ws-context-icon"></i><span>${L('回收站','Trash')}</span>`;
+        boardCanvasCount.style.display = 'none';
+        refreshIcons();
+        return;
+    }
     const p = currentProject();
-    boardProjectName.textContent = p ? p.name : L('默认项目','Default');
+    boardProjectName.classList.remove('trash-context');
+    boardProjectName.innerHTML = `<i data-lucide="folder-open" class="ws-context-icon"></i><span>${escapeHtml(p ? p.name : L('默认项目','Default'))}</span>`;
     boardCanvasCount.textContent = String(canvasesInProject(currentProjectId).length);
+    refreshIcons();
 }
 
 function autoLayoutNulls(items){
@@ -474,12 +518,16 @@ function openCanvas(c){
 
 /* ===== Card create flow ===== */
 let createCardEl = null;
-let createKind = 'classic';
-function closeCreateCard(){ createCardEl?.remove(); createCardEl = null; }
+let createKind = 'smart';
+function closeCreateCard(){
+    createCardEl?.remove(); createCardEl = null;
+    boardEmptyHint.classList.toggle('hidden', canvasesInProject(currentProjectId).length > 0);
+}
 function openCreateCard(worldPt){
     closeCreateCard();
     closeCardMenu();
-    createKind = 'classic';
+    boardEmptyHint.classList.add('hidden');
+    createKind = 'smart';
     const el = document.createElement('div');
     el.className = 'ws-create-card';
     el.style.left = worldPt.x + 'px';
@@ -488,8 +536,8 @@ function openCreateCard(worldPt){
         <div class="ws-create-title">${L('新建画布','New canvas')}</div>
         <input class="ws-create-input" type="text" maxlength="80" placeholder="${L('画布名称（可留空）','Canvas name (optional)')}">
         <div class="ws-create-toggle">
-            <button class="ws-create-toggle-btn active" type="button" data-kind="classic">${L('普通画布','Classic')}</button>
-            <button class="ws-create-toggle-btn" type="button" data-kind="smart">${L('智能画布','Smart')}</button>
+            <button class="ws-create-toggle-btn active" type="button" data-kind="smart">${L('智能画布','Smart')}</button>
+            <button class="ws-create-toggle-btn" type="button" data-kind="classic">${L('普通画布','Classic')}</button>
         </div>
         <div class="ws-create-actions">
             <button class="ws-create-confirm" type="button">${L('创建','Create')}</button>
@@ -897,12 +945,22 @@ async function refreshTrashCount(){
 async function openTrashView(){
     trashEntryBtn.classList.add('active');
     trashPanel.classList.add('active');
+    document.querySelector('.ws-main')?.classList.add('trash-mode');
+    closeProjectMenu();
+    boardProjectName.classList.add('trash-context');
+    boardProjectName.setAttribute('aria-expanded', 'false');
+    boardProjectName.innerHTML = `<i data-lucide="arrow-left" class="ws-context-icon ws-back-icon"></i><i data-lucide="trash-2" class="ws-context-icon"></i><span>${L('回收站','Trash')}</span>`;
+    boardCanvasCount.style.display = 'none';
+    refreshIcons();
     closeCardMenu(); closeCreateCard();
     await loadTrash();
 }
 function closeTrashView(){
     trashEntryBtn.classList.remove('active');
     trashPanel.classList.remove('active');
+    document.querySelector('.ws-main')?.classList.remove('trash-mode');
+    boardCanvasCount.style.display = '';
+    updateBoardHeader();
 }
 async function loadTrash(){
     try {
@@ -1016,6 +1074,7 @@ trashCloseBtn.addEventListener('click', closeTrashView);
 
 // close card menu when clicking outside
 document.addEventListener('mousedown', e => {
+    if(createCardEl && !e.target.closest('.ws-create-card')) closeCreateCard();
     if(document.querySelector('.ws-card-pop') && !e.target.closest('.ws-card-pop') && !e.target.closest('.ws-card-menu')){
         closeCardMenu();
     }
