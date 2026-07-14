@@ -2,6 +2,10 @@ const params = new URLSearchParams(location.search);
 let canvasId = params.get('id') || '';
 const sourceProjectId = params.get('project') || '';
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
+const LAST_CANVAS_ROUTE_KEY = 'studio_last_canvas_route';
+try {
+    if(canvasId) localStorage.setItem(LAST_CANVAS_ROUTE_KEY, location.pathname + location.search);
+} catch(e){}
 const shell = document.getElementById('shell');
 const world = document.getElementById('world');
 const composer = document.getElementById('composer');

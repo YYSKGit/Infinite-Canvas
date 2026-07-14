@@ -361,6 +361,12 @@ let emojiPickerCanvasId = null;
 let canvasMetaAnchorId = '';
 let canvasSortMode = (() => { try { return localStorage.getItem('canvasSortMode') || 'recent'; } catch(e){ return 'recent'; } })();
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
+const LAST_CANVAS_ROUTE_KEY = 'studio_last_canvas_route';
+try {
+    if(new URLSearchParams(location.search).get('id')) {
+        localStorage.setItem(LAST_CANVAS_ROUTE_KEY, location.pathname + location.search);
+    }
+} catch(e){}
 const CANVAS_COLOR_OPTIONS = ['red','orange','amber','green','teal','blue','violet','pink','slate'];
 // 先绑定返回，避免编辑器后续初始化较慢时丢失来源项目。
 backToManagerBtn?.addEventListener('click', () => {

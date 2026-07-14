@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" id="pwa-theme-color" content="#ffffff">
-    <link rel="manifest" href="/static/manifest.json?v=2027.01.1.1.1783665424">
+    <link rel="manifest" href="/static/manifest.json?v=2027.01.1.1.1784023663">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
     <title>AI Studio</title>
     <style>
@@ -26,7 +26,7 @@
         })();
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=2027.01.1.1.1783154657"></script>
-    <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
+    <script src="/static/js/theme.js?v=2027.01.1.1.1784022535"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1783387674"></script>
     <style>
         @import url('/static/vendor/css/fonts.css?v=2027.01.1.1.1783154653');
@@ -1677,16 +1677,16 @@
         </script>
 
         <main class="stage">
-            <iframe id="frame-zimage" data-src="/static/zimage.html?v=2027.01.1.1.1783675386" class="active" scrolling="yes"></iframe>
-            <iframe id="frame-enhance" data-src="/static/enhance.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-klein" data-src="/static/klein.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-angle" data-src="/static/angle.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-online" data-src="/static/online.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1784009813" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2027.01.1.1.1783675386" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1784021864" scrolling="yes"></iframe>
+            <iframe id="frame-zimage" data-src="/static/zimage.html?v=2027.01.1.1.1784022552" class="active" scrolling="yes"></iframe>
+            <iframe id="frame-enhance" data-src="/static/enhance.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-klein" data-src="/static/klein.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-angle" data-src="/static/angle.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-online" data-src="/static/online.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2027.01.1.1.1784022552" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1784024581" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -1790,6 +1790,7 @@
         const CID = localStorage.getItem("client_id") || generateUUID();
         localStorage.setItem("client_id", CID);
         const ACTIVE_PAGE_KEY = 'studio_active_page';
+        const LAST_CANVAS_ROUTE_KEY = 'studio_last_canvas_route';
         const LOCAL_NAV_COLLAPSED_KEY = 'studio_local_nav_collapsed';
         const SIDEBAR_SETTINGS_COLLAPSED_KEY = 'studio_sidebar_settings_collapsed';
         const SIDEBAR_PINNED_KEY = 'studio_sidebar_pinned';
@@ -1954,6 +1955,17 @@
         function restoreActivePage() {
             restoreSidebarPinned();
             const id = PAGE_IDS.includes(localStorage.getItem(ACTIVE_PAGE_KEY)) ? localStorage.getItem(ACTIVE_PAGE_KEY) : DEFAULT_PAGE_ID;
+            if(id === 'canvas') {
+                const frame = document.getElementById('frame-canvas');
+                try {
+                    const savedRoute = localStorage.getItem(LAST_CANVAS_ROUTE_KEY) || '';
+                    const savedUrl = new URL(savedRoute, location.origin);
+                    const isEditor = savedUrl.origin === location.origin
+                        && ['/static/canvas.html', '/static/smart-canvas.html'].includes(savedUrl.pathname)
+                        && Boolean(savedUrl.searchParams.get('id'));
+                    if(frame && isEditor) frame.dataset.src = savedUrl.pathname + savedUrl.search;
+                } catch(e) {}
+            }
             restoreLocalNav(id);
             restoreSidebarSettings(id);
             const trigger = document.querySelector(`[onclick*="'${id}'"],[onclick*='"${id}"']`);

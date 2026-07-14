@@ -11,6 +11,11 @@ function escapeAttr(str){ return escapeHtml(str); }
 function L(zh, en){ return langIsEn() ? en : zh; }
 function compactLabel(fullZh, compactZh, en){ return window.innerWidth <= 760 ? L(compactZh, en) : L(fullZh, en); }
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
+const LAST_CANVAS_ROUTE_KEY = 'studio_last_canvas_route';
+
+// Returning to the list is an intentional destination. Record it so reopening
+// the site does not jump back into an editor the user already left.
+try { localStorage.setItem(LAST_CANVAS_ROUTE_KEY, location.pathname + location.search); } catch(e){}
 
 function rememberedProjectId(){
     try {
