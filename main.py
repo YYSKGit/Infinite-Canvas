@@ -263,9 +263,9 @@ OUTPUT_INPUT_DIR = os.path.join(ASSETS_DIR, "input")
 OUTPUT_OUTPUT_DIR = os.path.join(ASSETS_DIR, "output")
 ASSET_LIBRARY_DIR = os.path.join(ASSETS_DIR, "library")
 LOCAL_UPLOAD_DIR = os.path.join(ASSETS_DIR, "uploads")
-HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
 API_ENV_FILE = os.path.join(BASE_DIR, "API", ".env")
 DATA_DIR = os.path.join(BASE_DIR, "data")
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
 CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
@@ -276,7 +276,7 @@ PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
-GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
+GLOBAL_CONFIG_FILE = os.path.join(DATA_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 LOCAL_IMAGE_IMPORT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -15113,9 +15113,6 @@ def storage_reference_snapshot():
         for filename in files:
             if filename.lower().endswith(".json"):
                 json_paths.append(os.path.join(current, filename))
-    for path in (HISTORY_FILE, GLOBAL_CONFIG_FILE):
-        if os.path.isfile(path):
-            json_paths.append(path)
     for path in json_paths:
         try:
             with open(path, "r", encoding="utf-8") as handle:
@@ -15137,7 +15134,7 @@ def storage_reference_snapshot():
                     add_origins(found, "other_canvas_data")
                     add_origins(log_refs, "canvas_run_history")
                     add_origins(current_assets, "current_canvas_assets")
-                elif rel == "history.json":
+                elif rel == "data/history.json":
                     add_origins(found, "global_history")
                 elif rel.startswith("data/conversations/"):
                     add_origins(found, "conversations")
