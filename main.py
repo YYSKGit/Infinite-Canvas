@@ -1457,7 +1457,6 @@ def update_env_values(updates):
 
 BACKEND_LOCAL_LOAD = {addr: 0 for addr in COMFYUI_INSTANCES}
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
 os.makedirs(OUTPUT_INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_OUTPUT_DIR, exist_ok=True)
@@ -1469,7 +1468,10 @@ os.makedirs(CONVERSATION_DIR, exist_ok=True)
 os.makedirs(CANVAS_DIR, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
+# Legacy compatibility: serve old /output/* references only when that retired
+# directory is actually present; do not recreate it on every launch.
+if os.path.isdir(OUTPUT_DIR):
+    app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
 # --- Pydantic 模型 ---
@@ -3156,23 +3158,43 @@ def safe_user_id(user_id, request: Request):
     candidate = re.sub(r"[^a-zA-Z0-9_.-]", "-", candidate)[:80].strip(".-")
     return candidate or "anonymous"
 
-def user_dir(user_id):
+def user_dir(user_id, create=False):
     path = os.path.join(CONVERSATION_DIR, user_id)
-    os.makedirs(path, exist_ok=True)
+    if create:
+        os.makedirs(path, exist_ok=True)
     return path
 
-def conversation_path(user_id, conversation_id):
+def conversation_path(user_id, conversation_id, create_user_dir=False):
     cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", conversation_id or "")
     if not cleaned:
         raise HTTPException(status_code=400, detail="无效的对话 ID")
-    return os.path.join(user_dir(user_id), f"{cleaned}.json")
+    return os.path.join(user_dir(user_id, create=create_user_dir), f"{cleaned}.json")
+
+def remove_empty_conversation_user_dir(user_id):
+    path = user_dir(user_id)
+    try:
+        os.rmdir(path)
+        return True
+    except OSError:
+        return False
+
+def cleanup_empty_conversation_dirs():
+    removed = 0
+    try:
+        entries = list(os.scandir(CONVERSATION_DIR))
+    except OSError:
+        return removed
+    for entry in entries:
+        if entry.is_dir(follow_symlinks=False) and remove_empty_conversation_user_dir(entry.name):
+            removed += 1
+    return removed
 
 def now_ms():
     return int(time.time() * 1000)
 
 def save_conversation(user_id, conversation):
     with CONVERSATION_LOCK:
-        path = conversation_path(user_id, conversation["id"])
+        path = conversation_path(user_id, conversation["id"], create_user_dir=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(conversation, f, ensure_ascii=False, indent=2)
 
@@ -3197,10 +3219,13 @@ def load_conversation(user_id, conversation_id):
 
 def list_conversations(user_id):
     records = []
-    for filename in os.listdir(user_dir(user_id)):
+    directory = user_dir(user_id)
+    if not os.path.isdir(directory):
+        return records
+    for filename in os.listdir(directory):
         if not filename.endswith(".json"):
             continue
-        path = os.path.join(user_dir(user_id), filename)
+        path = os.path.join(directory, filename)
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -3216,6 +3241,8 @@ def list_conversations(user_id):
             "last_message": (last_message or {}).get("content", ""),
         })
     return sorted(records, key=lambda item: item["updated_at"], reverse=True)
+
+cleanup_empty_conversation_dirs()
 
 def canvas_path(canvas_id):
     cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", canvas_id or "")
@@ -14912,8 +14939,10 @@ async def get_conversation(conversation_id: str, request: Request, x_user_id: st
 async def delete_conversation(conversation_id: str, request: Request, x_user_id: str = Header(default="")):
     user_id = safe_user_id(x_user_id, request)
     path = conversation_path(user_id, conversation_id)
-    if os.path.exists(path):
-        os.remove(path)
+    with CONVERSATION_LOCK:
+        if os.path.exists(path):
+            os.remove(path)
+        remove_empty_conversation_user_dir(user_id)
     return {"ok": True}
 
 # --- 画布管理 ---
@@ -15693,7 +15722,7 @@ def smart_group_export_folder(folder: str, group_name: str) -> str:
     else:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         safe_group = sanitize_export_filename(group_name or "group", "group")
-        path = os.path.abspath(os.path.join(OUTPUT_DIR, "smart-groups", f"{safe_group}-{stamp}"))
+        path = os.path.abspath(os.path.join(DATA_DIR, "exports", "smart-groups", f"{safe_group}-{stamp}"))
     os.makedirs(path, exist_ok=True)
     return path
 
