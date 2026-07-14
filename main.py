@@ -5770,15 +5770,30 @@ def output_path_for(filename, category="output"):
 def output_file_from_url(url):
     if isinstance(url, dict):
         url = url.get("url", "")
-    if not url or not (url.startswith("/output/") or url.startswith("/assets/")):
+    if not url:
         return None
     clean = urllib.parse.unquote(url.split("?", 1)[0]).replace("\\", "/")
+    trash_prefix = "/api/storage/media-trash/"
+    if clean.startswith(trash_prefix):
+        item_id = clean[len(trash_prefix):].strip("/")
+        if not item_id or "/" in item_id:
+            return None
+        item = next((entry for entry in storage_load_manifest() if str(entry.get("id") or "") == item_id), None)
+        if not item:
+            return None
+        root = os.path.abspath(MEDIA_TRASH_DIR)
+        path = os.path.abspath(os.path.join(root, str(item.get("stored_name") or "")))
+        if os.path.commonpath([root, path]) != root or not os.path.isfile(path):
+            return None
+        return path
     if clean.startswith("/assets/"):
         root = ASSETS_DIR
         rel = clean[len("/assets/"):]
-    else:
+    elif clean.startswith("/output/"):
         root = OUTPUT_DIR
         rel = clean[len("/output/"):]
+    else:
+        return None
     rel = rel.lstrip("/")
     if not rel:
         return None

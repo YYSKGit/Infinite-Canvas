@@ -1147,7 +1147,6 @@ function storageFilteredCandidates(){
 function storageThumb(item, trash=false){
     const url = item.url;
     if(item.kind === 'video') {
-        if(trash) return `<div class="storage-video-placeholder"><i data-lucide="file-video"></i><span>视频</span></div>`;
         const preview = `/api/media-preview?w=420&url=${encodeURIComponent(url)}`;
         return `<img src="${escapeAttr(preview)}" data-original-url="${escapeAttr(url)}" loading="lazy" alt="${escapeAttr(item.name || '')}"><span class="storage-video-mark"><i data-lucide="play"></i>视频</span>`;
     }
