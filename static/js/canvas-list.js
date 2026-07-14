@@ -1066,7 +1066,9 @@ const storageSelectVisible = document.getElementById('storageSelectVisible');
 const storageTrashSelectedBtn = document.getElementById('storageTrashSelected');
 const storageRestoreSelectedBtn = document.getElementById('storageRestoreSelected');
 const storagePurgeSelectedBtn = document.getElementById('storagePurgeSelected');
+const storageTrashSelectAll = document.getElementById('storageTrashSelectAll');
 const storagePreview = document.getElementById('storagePreview');
+const storagePreviewDialog = storagePreview?.querySelector('.storage-preview-dialog');
 const storagePreviewBody = document.getElementById('storagePreviewBody');
 const storagePreviewPrev = document.getElementById('storagePreviewPrev');
 const storagePreviewNext = document.getElementById('storagePreviewNext');
@@ -1080,6 +1082,9 @@ const storageTrashSelected = new Set();
 let storagePreviewItems = [];
 let storagePreviewIndex = -1;
 let storagePreviewWheelAt = 0;
+let storagePreviewWheelDelta = 0;
+let storagePreviewRenderToken = 0;
+const storagePreviewImageCache = new Map();
 
 function formatBytes(value){
     const bytes = Math.max(0, Number(value) || 0);
@@ -1095,11 +1100,11 @@ function storageDate(value){
     return new Date(Number(value)).toLocaleDateString(langIsEn() ? 'en-US' : 'zh-CN');
 }
 
-function storageRelativeDate(value){
+function storageRelativeDate(value, recentLabel='刚刚创建'){
     const elapsed = Date.now() - Number(value || 0);
-    if(!Number.isFinite(elapsed) || elapsed < 0) return '刚刚创建';
+    if(!Number.isFinite(elapsed) || elapsed < 0) return recentLabel;
     const minutes = Math.floor(elapsed / 60000);
-    if(minutes < 5) return '刚刚创建';
+    if(minutes < 5) return recentLabel;
     if(minutes < 60) return `${minutes} 分钟前`;
     const hours = Math.floor(minutes / 60);
     if(hours < 24) return `${hours} 小时前`;
@@ -1134,24 +1139,101 @@ function storageThumb(item, trash=false){
     return `<img src="${escapeAttr(url)}" data-original-url="${escapeAttr(url)}" loading="lazy" alt="${escapeAttr(item.name || '')}">`;
 }
 
+function storagePreviewItemSelected(item){
+    return item?.id ? storageTrashSelected.has(item.id) : Boolean(item?.path && storageSelected.has(item.path));
+}
+
+function syncStoragePreviewSelection(){
+    storagePreviewDialog?.classList.toggle('media-selected', storagePreviewItemSelected(storagePreviewItems[storagePreviewIndex]));
+}
+
+function toggleStoragePreviewSelection(){
+    const item = storagePreviewItems[storagePreviewIndex];
+    const key = item?.id || item?.path;
+    if(!key) return;
+    const selectedSet = item.id ? storageTrashSelected : storageSelected;
+    if(selectedSet.has(key)) selectedSet.delete(key); else selectedSet.add(key);
+    const selected = selectedSet.has(key);
+    syncStoragePreviewSelection();
+    if(item.id) {
+        updateStorageTrashSelection();
+        const card = [...storageTrashGrid.querySelectorAll('.storage-card')].find(entry => entry.dataset.trashId === key);
+        card?.classList.toggle('selected', selected);
+        const checkbox = card?.querySelector('.storage-check');
+        if(checkbox) checkbox.checked = selected;
+    } else {
+        updateStorageSelection();
+        const card = [...storageMediaGrid.querySelectorAll('.storage-card')].find(entry => entry.dataset.storagePath === key);
+        card?.classList.toggle('selected', selected);
+        const checkbox = card?.querySelector('.storage-check');
+        if(checkbox) checkbox.checked = selected;
+    }
+}
+
+function loadStoragePreviewImage(item){
+    const key = item.url;
+    if(storagePreviewImageCache.has(key)) {
+        const cached = storagePreviewImageCache.get(key);
+        storagePreviewImageCache.delete(key);
+        storagePreviewImageCache.set(key, cached);
+        return cached;
+    }
+    const pending = new Promise((resolve, reject) => {
+        const image = new Image();
+        image.alt = item.name || '';
+        image.onload = async () => {
+            try { await image.decode?.(); } catch(_err) {}
+            resolve(image);
+        };
+        image.onerror = error => { storagePreviewImageCache.delete(key); reject(error); };
+        image.src = item.url;
+    });
+    storagePreviewImageCache.set(key, pending);
+    while(storagePreviewImageCache.size > 12) storagePreviewImageCache.delete(storagePreviewImageCache.keys().next().value);
+    return pending;
+}
+
+function preloadStoragePreviewNeighbors(){
+    if(storagePreviewItems.length < 2) return;
+    [-2,-1,1,2].forEach(offset => {
+        const index = ((storagePreviewIndex + offset) % storagePreviewItems.length + storagePreviewItems.length) % storagePreviewItems.length;
+        const item = storagePreviewItems[index];
+        if(item && item.kind !== 'video' && item.kind !== 'audio') loadStoragePreviewImage(item).catch(() => {});
+    });
+}
+
 function renderStoragePreview(){
     const item = storagePreviewItems[storagePreviewIndex];
     if(!item?.url || !storagePreview || !storagePreviewBody) return;
-    const url = escapeAttr(item.url);
+    const renderToken = ++storagePreviewRenderToken;
     const name = item.name || '媒体预览';
-    document.getElementById('storagePreviewTitle').textContent = name;
-    const fileIcon = document.querySelector('.storage-preview-file-icon');
-    if(fileIcon) fileIcon.innerHTML = `<i data-lucide="${item.kind === 'video' ? 'film' : item.kind === 'audio' ? 'audio-lines' : 'image'}"></i>`;
-    if(item.kind === 'video') storagePreviewBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
-    else if(item.kind === 'audio') storagePreviewBody.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
-    else storagePreviewBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}">`;
-    storagePreviewProgress.textContent = `${storagePreviewIndex + 1} / ${storagePreviewItems.length}`;
-    storagePreviewSize.textContent = formatBytes(item.size);
-    storagePreviewDate.textContent = storageRelativeDate(item.modified_at || item.trashed_at);
-    const single = storagePreviewItems.length < 2;
-    storagePreviewPrev.disabled = single;
-    storagePreviewNext.disabled = single;
-    refreshIcons();
+    const itemIndex = storagePreviewIndex;
+    const commit = media => {
+        if(renderToken !== storagePreviewRenderToken) return;
+        storagePreviewBody.replaceChildren(media);
+        document.getElementById('storagePreviewTitle').textContent = name;
+        const fileIcon = document.querySelector('.storage-preview-file-icon');
+        if(fileIcon) fileIcon.innerHTML = `<i data-lucide="${item.kind === 'video' ? 'film' : item.kind === 'audio' ? 'audio-lines' : 'image'}"></i>`;
+        storagePreviewProgress.textContent = `${itemIndex + 1} / ${storagePreviewItems.length}`;
+        storagePreviewSize.textContent = formatBytes(item.size);
+        storagePreviewDate.textContent = storageRelativeDate(item.modified_at || item.trashed_at);
+        syncStoragePreviewSelection();
+        const single = storagePreviewItems.length < 2;
+        storagePreviewPrev.disabled = single;
+        storagePreviewNext.disabled = single;
+        refreshIcons();
+        preloadStoragePreviewNeighbors();
+    };
+    if(item.kind !== 'video' && item.kind !== 'audio') {
+        loadStoragePreviewImage(item).then(commit).catch(() => {
+            if(renderToken !== storagePreviewRenderToken) return;
+            const image = new Image(); image.src = item.url; image.alt = name; commit(image);
+        });
+    } else if(item.kind === 'video') {
+        const video = document.createElement('video'); video.src = item.url; video.controls = true; video.autoplay = true; video.playsInline = true; commit(video);
+    } else {
+        const audio = document.createElement('audio'); audio.src = item.url; audio.controls = true; audio.autoplay = true; commit(audio);
+    }
 }
 
 function openStoragePreview(item, items){
@@ -1167,17 +1249,26 @@ function openStoragePreview(item, items){
 
 function stepStoragePreview(direction){
     if(storagePreviewItems.length < 2) return;
-    storagePreviewIndex = (storagePreviewIndex + direction + storagePreviewItems.length) % storagePreviewItems.length;
+    storagePreviewIndex = ((storagePreviewIndex + direction) % storagePreviewItems.length + storagePreviewItems.length) % storagePreviewItems.length;
     renderStoragePreview();
 }
 
 function closeStoragePreview(){
     if(!storagePreview) return;
+    const currentItem = storagePreviewItems[storagePreviewIndex];
+    storagePreviewRenderToken++;
     storagePreview.classList.remove('open');
     storagePreview.setAttribute('aria-hidden','true');
     storagePreviewBody.innerHTML = '';
+    storagePreviewDialog?.classList.remove('media-selected');
     storagePreviewItems = [];
     storagePreviewIndex = -1;
+    storagePreviewWheelDelta = 0;
+    if(currentItem) requestAnimationFrame(() => {
+        const cards = currentItem.id ? storageTrashGrid?.querySelectorAll('.storage-card') : storageMediaGrid?.querySelectorAll('.storage-card');
+        const card = [...(cards || [])].find(entry => currentItem.id ? entry.dataset.trashId === currentItem.id : entry.dataset.storagePath === currentItem.path);
+        card?.scrollIntoView({behavior:'smooth', block:'center', inline:'nearest'});
+    });
 }
 
 function updateStorageSelection(){
@@ -1196,7 +1287,7 @@ function renderStorageCandidates(){
     if(!items.length){
         storageMediaGrid.innerHTML = `<div class="storage-empty"><i data-lucide="sparkles"></i><strong>当前筛选条件下没有未引用媒体</strong><span>可以调整时间范围或其他筛选条件后重试。</span></div>`;
     } else {
-        storageMediaGrid.innerHTML = items.map(item => `<article class="storage-card ${storageSelected.has(item.path) ? 'selected' : ''}" data-storage-path="${escapeAttr(item.path)}"><input class="storage-check" type="checkbox" ${storageSelected.has(item.path) ? 'checked' : ''}><div class="storage-thumb">${storageThumb(item)}</div>${item.recent ? '<span class="storage-recent">近期</span>' : ''}<div class="storage-card-info"><div class="storage-card-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</div><div class="storage-card-meta"><span>${item.source === 'input' ? '输入副本' : '生成结果'}</span><span>${formatBytes(item.size)} · ${storageDate(item.modified_at)}</span></div></div></article>`).join('');
+        storageMediaGrid.innerHTML = items.map(item => `<article class="storage-card ${storageSelected.has(item.path) ? 'selected' : ''}" data-storage-path="${escapeAttr(item.path)}"><input class="storage-check" type="checkbox" ${storageSelected.has(item.path) ? 'checked' : ''}><div class="storage-thumb">${storageThumb(item)}</div><span class="storage-recent">${escapeHtml(storageRelativeDate(item.modified_at))}</span><div class="storage-card-info"><div class="storage-card-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</div><div class="storage-card-meta"><span>${item.source === 'input' ? '输入副本' : '生成结果'}</span><span>${formatBytes(item.size)} · ${storageDate(item.modified_at)}</span></div></div></article>`).join('');
         storageMediaGrid.querySelectorAll('.storage-card').forEach(card => {
             card.onclick = event => {
                 if(event.target.closest('audio')) return;
@@ -1257,7 +1348,7 @@ async function loadStorageTrash(){
 
 function renderStorageTrash(){
     if(!storageTrashItems.length) storageTrashGrid.innerHTML = '<div class="storage-empty"><i data-lucide="trash-2"></i><strong>媒体回收站为空</strong><span>从“未引用媒体”移入的文件会显示在这里。</span></div>';
-    else storageTrashGrid.innerHTML = storageTrashItems.map(item => `<article class="storage-card ${storageTrashSelected.has(item.id) ? 'selected' : ''}" data-trash-id="${escapeAttr(item.id)}"><input class="storage-check" type="checkbox" ${storageTrashSelected.has(item.id) ? 'checked' : ''}><div class="storage-thumb">${storageThumb(item,true)}</div><div class="storage-card-info"><div class="storage-card-name" title="${escapeAttr(item.original_path)}">${escapeHtml(item.name)}</div><div class="storage-card-meta"><span>${formatBytes(item.size)}</span><span>${storageDate(item.trashed_at)}</span></div></div></article>`).join('');
+    else storageTrashGrid.innerHTML = storageTrashItems.map(item => `<article class="storage-card ${storageTrashSelected.has(item.id) ? 'selected' : ''}" data-trash-id="${escapeAttr(item.id)}"><input class="storage-check" type="checkbox" ${storageTrashSelected.has(item.id) ? 'checked' : ''}><div class="storage-thumb">${storageThumb(item,true)}</div><span class="storage-recent">${escapeHtml(storageRelativeDate(item.trashed_at, '刚刚删除'))}</span><div class="storage-card-info"><div class="storage-card-name" title="${escapeAttr(item.original_path)}">${escapeHtml(item.name)}</div><div class="storage-card-meta"><span>${formatBytes(item.size)}</span><span>${storageDate(item.trashed_at)}</span></div></div></article>`).join('');
     storageTrashGrid.querySelectorAll('.storage-card').forEach(card => {
         card.onclick = event => {
             if(event.target.closest('audio')) return;
@@ -1281,6 +1372,9 @@ function renderStorageTrash(){
 function updateStorageTrashSelection(){
     const chosen = storageTrashItems.filter(item => storageTrashSelected.has(item.id));
     document.getElementById('storageTrashSelectedSummary').textContent = chosen.length ? `已选择 ${chosen.length} 个 · ${formatBytes(chosen.reduce((s,x)=>s+Number(x.size||0),0))}` : '未选择文件';
+    storageTrashSelectAll.checked = Boolean(storageTrashItems.length) && chosen.length === storageTrashItems.length;
+    storageTrashSelectAll.indeterminate = Boolean(chosen.length) && chosen.length < storageTrashItems.length;
+    storageTrashSelectAll.disabled = !storageTrashItems.length;
     storageRestoreSelectedBtn.disabled = !chosen.length;
     storagePurgeSelectedBtn.disabled = !chosen.length;
 }
@@ -1289,7 +1383,6 @@ function switchStorageTab(name){
     document.querySelectorAll('[data-storage-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.storageTab === name));
     document.querySelectorAll('.storage-pane').forEach(pane => pane.classList.remove('active'));
     document.getElementById(name === 'cache' ? 'storageCachePane' : name === 'trash' ? 'storageTrashPane' : 'storageCandidatesPane').classList.add('active');
-    if(name === 'trash') loadStorageTrash();
 }
 
 async function storageJsonAction(url, body){
@@ -1301,28 +1394,40 @@ async function storageJsonAction(url, body){
 
 storageManagerBtn?.addEventListener('click', () => {
     storageModal.classList.add('open'); storageModal.setAttribute('aria-hidden','false');
-    document.body.style.overflow = 'hidden'; switchStorageTab('candidates'); scanStorage(); refreshIcons();
+    document.body.style.overflow = 'hidden'; switchStorageTab('candidates'); scanStorage(); loadStorageTrash(); refreshIcons();
 });
 document.querySelectorAll('[data-storage-close]').forEach(btn => btn.addEventListener('click', () => { storageModal.classList.remove('open'); storageModal.setAttribute('aria-hidden','true'); document.body.style.overflow = ''; }));
 document.querySelectorAll('[data-storage-preview-close]').forEach(btn => btn.addEventListener('click', closeStoragePreview));
 storagePreviewPrev?.addEventListener('click', () => stepStoragePreview(-1));
 storagePreviewNext?.addEventListener('click', () => stepStoragePreview(1));
+storagePreviewBody?.addEventListener('click', event => {
+    if(event.target === storagePreviewBody) toggleStoragePreviewSelection();
+});
 storagePreview?.addEventListener('wheel', event => {
-    if(!storagePreview.classList.contains('open') || Math.abs(event.deltaY) < 8) return;
+    if(!storagePreview.classList.contains('open') || !event.deltaY) return;
     event.preventDefault();
-    const now = Date.now(); if(now - storagePreviewWheelAt < 350) return;
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1);
+    if(storagePreviewWheelDelta && Math.sign(delta) !== Math.sign(storagePreviewWheelDelta)) storagePreviewWheelDelta = 0;
+    storagePreviewWheelDelta += delta;
+    const now = Date.now();
+    if(now - storagePreviewWheelAt < 70 || Math.abs(storagePreviewWheelDelta) < 90) return;
+    const steps = Math.sign(storagePreviewWheelDelta) * Math.min(4, Math.max(1, Math.floor(Math.abs(storagePreviewWheelDelta) / 90)));
+    storagePreviewWheelDelta -= steps * 90;
     storagePreviewWheelAt = now;
-    stepStoragePreview(event.deltaY > 0 ? 1 : -1);
+    stepStoragePreview(steps);
 }, {passive:false});
 document.querySelectorAll('[data-storage-tab]').forEach(btn => btn.addEventListener('click', () => switchStorageTab(btn.dataset.storageTab)));
 document.getElementById('storageRescanBtn')?.addEventListener('click', scanStorage);
 [storageSearch,storageKindFilter,storageSourceFilter,storageTimeFilter,storageSort].forEach(el => el?.addEventListener(el === storageSearch ? 'input' : 'change', renderStorageCandidates));
 storageSelectVisible?.addEventListener('change', () => { storageFilteredCandidates().forEach(item => storageSelectVisible.checked ? storageSelected.add(item.path) : storageSelected.delete(item.path)); renderStorageCandidates(); });
+storageTrashSelectAll?.addEventListener('change', () => {
+    storageTrashItems.forEach(item => storageTrashSelectAll.checked ? storageTrashSelected.add(item.id) : storageTrashSelected.delete(item.id));
+    renderStorageTrash();
+});
 storageTrashSelectedBtn?.addEventListener('click', async () => {
     const paths = [...storageSelected]; if(!paths.length) return;
-    if(!confirm(`将 ${paths.length} 个文件移入媒体回收站？\n操作前会再次检查引用，仍在使用的文件会被跳过。`)) return;
     storageTrashSelectedBtn.disabled = true;
-    try { const data = await storageJsonAction('/api/storage/media-trash',{paths}); storageSelected.clear(); setStatus(`已移入 ${data.moved?.length || 0} 个文件，跳过 ${data.skipped?.length || 0} 个`); await scanStorage(); }
+    try { const data = await storageJsonAction('/api/storage/media-trash',{paths}); storageSelected.clear(); setStatus(`已移入 ${data.moved?.length || 0} 个文件，跳过 ${data.skipped?.length || 0} 个`); await Promise.all([scanStorage(), loadStorageTrash()]); }
     catch(err){ alert(err.message || String(err)); }
 });
 storageRestoreSelectedBtn?.addEventListener('click', async () => { try { const data=await storageJsonAction('/api/storage/media-trash/restore',{ids:[...storageTrashSelected]}); storageTrashSelected.clear(); setStatus(`已恢复 ${data.restored?.length || 0} 个文件`); await loadStorageTrash(); } catch(err){ alert(err.message || String(err)); } });

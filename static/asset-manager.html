@@ -19,7 +19,7 @@
     <script src="/static/vendor/js/lucide.js?v=2027.01.1.1.1783154657"></script>
     <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2027.01.1.1.1783674343">
-    <link rel="stylesheet" href="/static/css/asset-manager.css?v=2027.01.1.1.1783964803">
+    <link rel="stylesheet" href="/static/css/asset-manager.css?v=2027.01.1.1.1784000707">
 </head>
 <body>
     <div class="asset-page">
@@ -35,12 +35,25 @@
         </header>
 
         <div class="asset-tabs">
-            <button id="assetTabAssets" class="active" type="button" data-tab="assets"><i data-lucide="image"></i><span>图片资产</span></button>
+            <button id="assetTabAssets" type="button" data-tab="assets"><i data-lucide="image"></i><span>图片资产</span></button>
             <button id="assetTabWorkflows" type="button" data-tab="workflows"><i data-lucide="workflow"></i><span>工作流管理</span></button>
             <button id="assetTabPrompts" type="button" data-tab="prompts"><i data-lucide="text-cursor-input"></i><span>提示词库</span></button>
             <button id="assetTabCanvasAssets" type="button" data-tab="canvas-assets"><i data-lucide="layout-dashboard"></i><span>画布资产</span></button>
             <button id="assetTabLocal" type="button" data-tab="local"><i data-lucide="folder-open"></i><span>本地素材</span></button>
         </div>
+        <script>
+            (function(){
+                var allowed = ['assets', 'workflows', 'prompts', 'canvas-assets', 'local'];
+                var tab = 'assets';
+                try {
+                    var saved = localStorage.getItem('asset_manager_active_tab_v1') || '';
+                    if(allowed.indexOf(saved) !== -1) tab = saved;
+                } catch(e) {}
+                document.querySelectorAll('.asset-tabs [data-tab]').forEach(function(button){
+                    button.classList.toggle('active', button.getAttribute('data-tab') === tab);
+                });
+            })();
+        </script>
 
         <main id="assetManagerRoot" class="asset-manager-root"></main>
     </div>
