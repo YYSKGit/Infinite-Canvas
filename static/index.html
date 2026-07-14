@@ -4,11 +4,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" id="pwa-theme-color" content="#ffffff">
+    <meta name="theme-color" id="pwa-theme-color" content="#0f141d">
     <link rel="manifest" href="/static/manifest.json?v=2027.01.1.1.1784023663">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
     <title>AI Studio</title>
     <style>
+        /*
+         * PWA cold-start paint barrier.
+         * Keep the browser's native launch surface, the document canvas and the
+         * eventual app shell on a deterministic colour before any external
+         * script or stylesheet can block parsing.
+         */
+        html {
+            background: #ffffff;
+            color-scheme: light;
+        }
+
+        html.studio-theme-dark {
+            background: #0f141d;
+            color-scheme: dark;
+        }
+
+        body {
+            margin: 0;
+            background: inherit;
+        }
+
         html.studio-route-booting body {
             visibility: hidden !important;
         }
@@ -17,10 +38,13 @@
         (function(){
             try {
                 var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
-                if(theme === 'dark') {
+                var dark = theme === 'dark';
+                if(dark) {
                     document.documentElement.classList.add('studio-theme-dark');
                     document.documentElement.classList.add('theme-dark');
                 }
+                var themeMeta = document.getElementById('pwa-theme-color');
+                if(themeMeta) themeMeta.setAttribute('content', dark ? '#0f141d' : '#ffffff');
                 document.documentElement.classList.add('studio-route-booting');
             } catch(e) {}
         })();
@@ -415,6 +439,12 @@
         }
 
         iframe.active {
+            /* A newly navigated iframe is an opaque white about:blank surface. */
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        iframe.active.studio-frame-ready {
             opacity: 1;
             transform: scale(1);
             filter: blur(0);
@@ -1903,7 +1933,10 @@
             document.querySelectorAll('iframe').forEach(f => f.classList.remove('active'));
             const target = document.getElementById('frame-' + id);
             target.classList.add('active');
-            if (!target.src) target.src = target.dataset.src;
+            if (!target.src) {
+                target.classList.remove('studio-frame-ready');
+                target.src = target.dataset.src;
+            }
             if(target && target.contentWindow){
                 try {
                     target.contentWindow.postMessage({
@@ -2160,6 +2193,9 @@
                 syncThemeToFrame(f);
                 syncLanguageToFrame(f);
                 syncScaleToFrame(f);
+                // Reveal only after the real child document has produced a load
+                // event; until then the host stage colour covers about:blank.
+                f.classList.add('studio-frame-ready');
             });
         });
 
