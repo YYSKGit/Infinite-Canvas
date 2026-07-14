@@ -1057,6 +1057,9 @@ const storageModal = document.getElementById('storageModal');
 const storageMediaGrid = document.getElementById('storageMediaGrid');
 const storageTrashGrid = document.getElementById('storageTrashGrid');
 const storageWarning = document.getElementById('storageWarning');
+const storageProtectedSummary = document.getElementById('storageProtectedSummary');
+const storageProtectedPopover = document.getElementById('storageProtectedPopover');
+const storageProtectedBreakdown = document.getElementById('storageProtectedBreakdown');
 const storageSearch = document.getElementById('storageSearch');
 const storageKindFilter = document.getElementById('storageKindFilter');
 const storageSourceFilter = document.getElementById('storageSourceFilter');
@@ -1085,6 +1088,19 @@ let storagePreviewWheelAt = 0;
 let storagePreviewWheelDelta = 0;
 let storagePreviewRenderToken = 0;
 const storagePreviewImageCache = new Map();
+
+function setStorageProtectedPopover(open){
+    if(!storageProtectedPopover || !storageProtectedSummary) return;
+    storageProtectedPopover.hidden = !open;
+    storageProtectedSummary.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function renderStorageProtectedBreakdown(){
+    if(!storageProtectedBreakdown) return;
+    const rows = (storageScan?.protected_breakdown || []).filter(item => Number(item.count || 0) > 0);
+    const total = Number(storageScan?.protected_count || 0);
+    storageProtectedBreakdown.innerHTML = rows.map(item => `<div class="storage-protected-row"><span>${escapeHtml(item.label || '其他引用')}</span><strong>${Number(item.count || 0)}</strong></div>`).join('') + `<div class="storage-protected-row storage-protected-total"><span>文件合计</span><strong>${total}</strong></div>`;
+}
 
 function formatBytes(value){
     const bytes = Math.max(0, Number(value) || 0);
@@ -1323,6 +1339,7 @@ async function scanStorage(){
         document.getElementById('storageCandidateCount').textContent = (storageScan.candidates || []).length;
         document.getElementById('storageCandidateSize').textContent = formatBytes(storageScan.candidate_bytes);
         document.getElementById('storageProtectedCount').textContent = storageScan.protected_count || 0;
+        renderStorageProtectedBreakdown();
         document.getElementById('storageCacheSize').textContent = formatBytes(storageScan.preview_cache?.bytes);
         document.getElementById('storageCacheCount').textContent = `${storageScan.preview_cache?.files || 0} 个缓存文件`;
         const invalid = storageScan.invalid_files || [];
@@ -1396,7 +1413,13 @@ storageManagerBtn?.addEventListener('click', () => {
     storageModal.classList.add('open'); storageModal.setAttribute('aria-hidden','false');
     document.body.style.overflow = 'hidden'; switchStorageTab('candidates'); scanStorage(); loadStorageTrash(); refreshIcons();
 });
-document.querySelectorAll('[data-storage-close]').forEach(btn => btn.addEventListener('click', () => { storageModal.classList.remove('open'); storageModal.setAttribute('aria-hidden','true'); document.body.style.overflow = ''; }));
+document.querySelectorAll('[data-storage-close]').forEach(btn => btn.addEventListener('click', () => { setStorageProtectedPopover(false); storageModal.classList.remove('open'); storageModal.setAttribute('aria-hidden','true'); document.body.style.overflow = ''; }));
+storageProtectedSummary?.addEventListener('click', () => setStorageProtectedPopover(storageProtectedPopover?.hidden));
+document.addEventListener('click', event => {
+    if(storageProtectedPopover?.hidden) return;
+    if(storageProtectedPopover.contains(event.target) || storageProtectedSummary?.contains(event.target)) return;
+    setStorageProtectedPopover(false);
+});
 document.querySelectorAll('[data-storage-preview-close]').forEach(btn => btn.addEventListener('click', closeStoragePreview));
 storagePreviewPrev?.addEventListener('click', () => stepStoragePreview(-1));
 storagePreviewNext?.addEventListener('click', () => stepStoragePreview(1));

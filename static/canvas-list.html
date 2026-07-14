@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1783663211"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1783387674"></script>
-    <link rel="stylesheet" href="/static/css/canvas-list.css?v=2027.01.1.1.1783999953">
+    <link rel="stylesheet" href="/static/css/canvas-list.css?v=2027.01.1.1.1784006793">
     <link rel="stylesheet" href="/static/css/theme.css?v=2027.01.1.1.1783674343">
 </head>
 <body>
@@ -98,7 +98,8 @@
             <nav class="storage-tabs"><button class="active" data-storage-tab="candidates">未引用媒体</button><button data-storage-tab="cache">预览缓存</button><button data-storage-tab="trash">媒体回收站</button></nav>
             <div id="storageCandidatesPane" class="storage-pane active">
                 <div id="storageWarning" class="storage-warning" hidden></div>
-                <div class="storage-summary"><div><strong id="storageCandidateCount">--</strong><span>候选文件</span></div><div><strong id="storageCandidateSize">--</strong><span>可管理空间</span></div><div><strong id="storageProtectedCount">--</strong><span>受保护文件</span></div><div><strong id="storageSelectedCount">0</strong><span>已选文件</span></div><div><strong id="storageSelectedSize">0 B</strong><span>选中文件大小</span></div><button id="storageRescanBtn" class="storage-secondary" type="button"><i data-lucide="scan-search"></i>重新扫描</button></div>
+                <div class="storage-summary"><div><strong id="storageCandidateCount">--</strong><span>候选文件</span></div><div><strong id="storageCandidateSize">--</strong><span>可管理空间</span></div><button id="storageProtectedSummary" class="storage-summary-card" type="button" aria-expanded="false" aria-controls="storageProtectedPopover"><strong id="storageProtectedCount">--</strong><span>受保护文件</span><i data-lucide="chevron-down"></i></button><div><strong id="storageSelectedCount">0</strong><span>已选文件</span></div><div><strong id="storageSelectedSize">0 B</strong><span>选中文件大小</span></div><button id="storageRescanBtn" class="storage-secondary" type="button"><i data-lucide="scan-search"></i>重新扫描</button></div>
+                <div id="storageProtectedPopover" class="storage-protected-popover" hidden><div class="storage-protected-head"><div><strong>文件明细</strong><span>已按最高优先级归类</span></div></div><div id="storageProtectedBreakdown" class="storage-protected-list"></div></div>
                 <div class="storage-controlbar"><div class="storage-tools"><input id="storageSearch" type="search" placeholder="搜索文件名"><select id="storageKindFilter"><option value="all">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option></select><select id="storageSourceFilter"><option value="all">全部来源</option><option value="output">生成结果</option><option value="input">输入副本</option></select><select id="storageTimeFilter" aria-label="时间范围"><option value="all">全部时间</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option></select><select id="storageSort"><option value="newest">时间：新到旧</option><option value="oldest">时间：旧到新</option><option value="largest">大小：大到小</option></select></div><div class="storage-selectbar"><label><input id="storageSelectVisible" type="checkbox"> 选择当前结果</label></div></div>
                 <div id="storageMediaGrid" class="storage-grid"></div>
                 <footer class="storage-actions"><button class="storage-secondary" type="button" data-storage-close>取消</button><button id="storageTrashSelected" class="storage-danger" type="button" disabled><i data-lucide="trash-2"></i>移入媒体回收站</button></footer>
@@ -114,6 +115,6 @@
             <div class="storage-preview-stage"><button id="storagePreviewPrev" class="storage-preview-nav prev" type="button" aria-label="上一个媒体"><i data-lucide="chevron-left"></i></button><div id="storagePreviewBody" class="storage-preview-body" aria-label="单击空白区域选择或取消选择当前媒体"></div><button id="storagePreviewNext" class="storage-preview-nav next" type="button" aria-label="下一个媒体"><i data-lucide="chevron-right"></i></button></div>
         </section>
     </div>
-    <script src="/static/js/canvas-list.js?v=2027.01.1.1.1784000705"></script>
+    <script src="/static/js/canvas-list.js?v=2027.01.1.1.1784006961"></script>
 </body>
 </html>

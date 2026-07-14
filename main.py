@@ -15020,6 +15020,12 @@ def storage_collect_urls(value, refs):
 def storage_reference_snapshot():
     refs = set()
     invalid = []
+    origins = {}
+
+    def add_origins(urls, category):
+        for url in urls:
+            origins.setdefault(url, set()).add(category)
+
     json_paths = []
     for current, dirs, files in os.walk(DATA_DIR):
         dirs[:] = [name for name in dirs if name not in {"media_previews", "media_trash", "update_backups", "update_staging"}]
@@ -15034,17 +15040,44 @@ def storage_reference_snapshot():
             with open(path, "r", encoding="utf-8") as handle:
                 raw = handle.read()
             try:
-                storage_collect_urls(json.loads(raw), refs)
+                parsed = json.loads(raw)
+                found = set()
+                storage_collect_urls(parsed, found)
+                refs.update(found)
+                rel = os.path.relpath(path, BASE_DIR).replace("\\", "/")
+                if rel.startswith("data/canvases/") and isinstance(parsed, dict):
+                    current_assets = {
+                        storage_normalize_local_url(item.get("url"))
+                        for item in extract_canvas_assets(parsed)
+                    } if not parsed.get("deleted_at") else set()
+                    current_assets.discard("")
+                    log_refs = set()
+                    storage_collect_urls(parsed.get("logs") or [], log_refs)
+                    add_origins(found, "other_canvas_data")
+                    add_origins(log_refs, "canvas_run_history")
+                    add_origins(current_assets, "current_canvas_assets")
+                elif rel == "history.json":
+                    add_origins(found, "global_history")
+                elif rel.startswith("data/conversations/"):
+                    add_origins(found, "conversations")
+                else:
+                    add_origins(found, "other_data")
             except Exception as exc:
                 rel = os.path.relpath(path, BASE_DIR).replace("\\", "/")
                 invalid.append({"path": rel, "error": str(exc)[:180]})
-                storage_collect_urls(raw, refs)
+                found = set()
+                storage_collect_urls(raw, found)
+                refs.update(found)
+                add_origins(found, "other_data")
         except Exception as exc:
             rel = os.path.relpath(path, BASE_DIR).replace("\\", "/")
             invalid.append({"path": rel, "error": str(exc)[:180]})
     with CANVAS_TASK_LOCK:
-        storage_collect_urls(list(CANVAS_TASKS.values()), refs)
-    return refs, invalid
+        task_refs = set()
+        storage_collect_urls(list(CANVAS_TASKS.values()), task_refs)
+        refs.update(task_refs)
+        add_origins(task_refs, "runtime_tasks")
+    return refs, invalid, origins
 
 def storage_media_kind(path):
     mime = (mimetypes.guess_type(path)[0] or "").lower()
@@ -15070,9 +15103,10 @@ def storage_candidate_path(url):
     return "", ""
 
 def storage_scan_payload():
-    refs, invalid = storage_reference_snapshot()
+    refs, invalid, origins = storage_reference_snapshot()
     now = now_ms()
     candidates = []
+    protected_urls = set()
     protected_count = 0
     protected_bytes = 0
     for root, prefix in ((OUTPUT_INPUT_DIR, "/assets/input/"), (OUTPUT_OUTPUT_DIR, "/assets/output/")):
@@ -15092,6 +15126,7 @@ def storage_scan_payload():
                 except OSError:
                     continue
                 if normalized_url in refs:
+                    protected_urls.add(normalized_url)
                     protected_count += 1
                     protected_bytes += stat.st_size
                     continue
@@ -15116,11 +15151,30 @@ def storage_scan_payload():
                     preview_files += 1
                 except OSError:
                     pass
+    category_meta = [
+        ("current_canvas_assets", "当前画布资产"),
+        ("canvas_run_history", "画布运行历史"),
+        ("other_canvas_data", "其他画布数据"),
+        ("global_history", "全局历史记录"),
+        ("conversations", "会话记录"),
+        ("runtime_tasks", "运行中任务"),
+        ("other_data", "其他数据引用"),
+    ]
+    protected_breakdown = []
+    remaining_protected = set(protected_urls)
+    for key, label in category_meta:
+        matched = {url for url in remaining_protected if key in origins.get(url, set())}
+        protected_breakdown.append({"key": key, "label": label, "count": len(matched)})
+        remaining_protected.difference_update(matched)
+    if remaining_protected:
+        protected_breakdown.append({"key": "unclassified", "label": "其他运行时引用", "count": len(remaining_protected)})
+
     return {
         "candidates": candidates,
         "candidate_bytes": sum(item["size"] for item in candidates),
         "protected_count": protected_count,
         "protected_bytes": protected_bytes,
+        "protected_breakdown": protected_breakdown,
         "invalid_files": invalid,
         "preview_cache": {"files": preview_files, "bytes": preview_bytes},
         "scanned_at": now,
