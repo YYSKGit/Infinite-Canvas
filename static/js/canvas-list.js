@@ -63,6 +63,7 @@ const boardResetViewBtn = document.getElementById('boardResetView');
 const pasteCanvasBtn = document.getElementById('pasteCanvasBtn');
 const emptyCreateCanvasBtn = document.getElementById('emptyCreateCanvasBtn');
 const statusEl = document.getElementById('boardStatus');
+if(statusEl && statusEl.parentElement !== document.body) document.body.appendChild(statusEl);
 
 /* ===== State ===== */
 let projects = [];
@@ -1059,7 +1060,7 @@ const storageWarning = document.getElementById('storageWarning');
 const storageSearch = document.getElementById('storageSearch');
 const storageKindFilter = document.getElementById('storageKindFilter');
 const storageSourceFilter = document.getElementById('storageSourceFilter');
-const storageShowRecent = document.getElementById('storageShowRecent');
+const storageTimeFilter = document.getElementById('storageTimeFilter');
 const storageSort = document.getElementById('storageSort');
 const storageSelectVisible = document.getElementById('storageSelectVisible');
 const storageTrashSelectedBtn = document.getElementById('storageTrashSelected');
@@ -1069,7 +1070,9 @@ const storagePreview = document.getElementById('storagePreview');
 const storagePreviewBody = document.getElementById('storagePreviewBody');
 const storagePreviewPrev = document.getElementById('storagePreviewPrev');
 const storagePreviewNext = document.getElementById('storagePreviewNext');
-const storagePreviewMeta = document.getElementById('storagePreviewMeta');
+const storagePreviewProgress = document.getElementById('storagePreviewProgress');
+const storagePreviewSize = document.getElementById('storagePreviewSize');
+const storagePreviewDate = document.getElementById('storagePreviewDate');
 let storageScan = null;
 let storageTrashItems = [];
 const storageSelected = new Set();
@@ -1092,13 +1095,28 @@ function storageDate(value){
     return new Date(Number(value)).toLocaleDateString(langIsEn() ? 'en-US' : 'zh-CN');
 }
 
+function storageRelativeDate(value){
+    const elapsed = Date.now() - Number(value || 0);
+    if(!Number.isFinite(elapsed) || elapsed < 0) return '刚刚创建';
+    const minutes = Math.floor(elapsed / 60000);
+    if(minutes < 5) return '刚刚创建';
+    if(minutes < 60) return `${minutes} 分钟前`;
+    const hours = Math.floor(minutes / 60);
+    if(hours < 24) return `${hours} 小时前`;
+    return `${Math.floor(hours / 24)} 天前`;
+}
+
 function storageFilteredCandidates(){
     let items = [...(storageScan?.candidates || [])];
     const query = (storageSearch?.value || '').trim().toLowerCase();
     if(query) items = items.filter(item => `${item.name} ${item.path}`.toLowerCase().includes(query));
     if(storageKindFilter?.value !== 'all') items = items.filter(item => item.kind === storageKindFilter.value);
     if(storageSourceFilter?.value !== 'all') items = items.filter(item => item.source === storageSourceFilter.value);
-    if(!storageShowRecent?.checked) items = items.filter(item => !item.recent);
+    const days = Number(storageTimeFilter?.value || 0);
+    if(days) {
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        items = items.filter(item => Number(item.modified_at) >= cutoff);
+    }
     if(storageSort?.value === 'oldest') items.sort((a,b) => a.modified_at - b.modified_at);
     else if(storageSort?.value === 'largest') items.sort((a,b) => b.size - a.size);
     else items.sort((a,b) => b.modified_at - a.modified_at);
@@ -1122,10 +1140,14 @@ function renderStoragePreview(){
     const url = escapeAttr(item.url);
     const name = item.name || '媒体预览';
     document.getElementById('storagePreviewTitle').textContent = name;
+    const fileIcon = document.querySelector('.storage-preview-file-icon');
+    if(fileIcon) fileIcon.innerHTML = `<i data-lucide="${item.kind === 'video' ? 'film' : item.kind === 'audio' ? 'audio-lines' : 'image'}"></i>`;
     if(item.kind === 'video') storagePreviewBody.innerHTML = `<video src="${url}" controls autoplay playsinline></video>`;
     else if(item.kind === 'audio') storagePreviewBody.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
     else storagePreviewBody.innerHTML = `<img src="${url}" alt="${escapeAttr(name)}">`;
-    storagePreviewMeta.textContent = `${storagePreviewIndex + 1} / ${storagePreviewItems.length} · ${name}`;
+    storagePreviewProgress.textContent = `${storagePreviewIndex + 1} / ${storagePreviewItems.length}`;
+    storagePreviewSize.textContent = formatBytes(item.size);
+    storagePreviewDate.textContent = storageRelativeDate(item.modified_at || item.trashed_at);
     const single = storagePreviewItems.length < 2;
     storagePreviewPrev.disabled = single;
     storagePreviewNext.disabled = single;
@@ -1161,7 +1183,8 @@ function closeStoragePreview(){
 function updateStorageSelection(){
     const chosen = (storageScan?.candidates || []).filter(item => storageSelected.has(item.path));
     const bytes = chosen.reduce((sum,item) => sum + Number(item.size || 0), 0);
-    document.getElementById('storageSelectedSummary').textContent = chosen.length ? `已选择 ${chosen.length} 个文件 · ${formatBytes(bytes)}` : '未选择文件';
+    document.getElementById('storageSelectedCount').textContent = chosen.length;
+    document.getElementById('storageSelectedSize').textContent = formatBytes(bytes);
     storageTrashSelectedBtn.disabled = !chosen.length || Boolean(storageScan?.invalid_files?.length);
     const visible = storageFilteredCandidates();
     storageSelectVisible.checked = Boolean(visible.length) && visible.every(item => storageSelected.has(item.path));
@@ -1171,7 +1194,7 @@ function updateStorageSelection(){
 function renderStorageCandidates(){
     const items = storageFilteredCandidates();
     if(!items.length){
-        storageMediaGrid.innerHTML = `<div class="storage-empty"><i data-lucide="sparkles"></i><strong>当前筛选条件下没有未引用媒体</strong><span>${storageShowRecent?.checked ? '所有可识别媒体都有引用或目录为空。' : '可以勾选“显示最近 7 天”查看近期候选。'}</span></div>`;
+        storageMediaGrid.innerHTML = `<div class="storage-empty"><i data-lucide="sparkles"></i><strong>当前筛选条件下没有未引用媒体</strong><span>可以调整时间范围或其他筛选条件后重试。</span></div>`;
     } else {
         storageMediaGrid.innerHTML = items.map(item => `<article class="storage-card ${storageSelected.has(item.path) ? 'selected' : ''}" data-storage-path="${escapeAttr(item.path)}"><input class="storage-check" type="checkbox" ${storageSelected.has(item.path) ? 'checked' : ''}><div class="storage-thumb">${storageThumb(item)}</div>${item.recent ? '<span class="storage-recent">近期</span>' : ''}<div class="storage-card-info"><div class="storage-card-name" title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</div><div class="storage-card-meta"><span>${item.source === 'input' ? '输入副本' : '生成结果'}</span><span>${formatBytes(item.size)} · ${storageDate(item.modified_at)}</span></div></div></article>`).join('');
         storageMediaGrid.querySelectorAll('.storage-card').forEach(card => {
@@ -1293,7 +1316,7 @@ storagePreview?.addEventListener('wheel', event => {
 }, {passive:false});
 document.querySelectorAll('[data-storage-tab]').forEach(btn => btn.addEventListener('click', () => switchStorageTab(btn.dataset.storageTab)));
 document.getElementById('storageRescanBtn')?.addEventListener('click', scanStorage);
-[storageSearch,storageKindFilter,storageSourceFilter,storageShowRecent,storageSort].forEach(el => el?.addEventListener(el === storageSearch ? 'input' : 'change', renderStorageCandidates));
+[storageSearch,storageKindFilter,storageSourceFilter,storageTimeFilter,storageSort].forEach(el => el?.addEventListener(el === storageSearch ? 'input' : 'change', renderStorageCandidates));
 storageSelectVisible?.addEventListener('change', () => { storageFilteredCandidates().forEach(item => storageSelectVisible.checked ? storageSelected.add(item.path) : storageSelected.delete(item.path)); renderStorageCandidates(); });
 storageTrashSelectedBtn?.addEventListener('click', async () => {
     const paths = [...storageSelected]; if(!paths.length) return;
