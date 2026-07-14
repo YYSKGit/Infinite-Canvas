@@ -1,5 +1,5 @@
 const params = new URLSearchParams(location.search);
-const canvasId = params.get('id') || '';
+let canvasId = params.get('id') || '';
 const sourceProjectId = params.get('project') || '';
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
 const shell = document.getElementById('shell');
@@ -1899,6 +1899,7 @@ async function importSmartWorkflowFile(file, options={}){
 const RECENT_SMART_SETTINGS_KEY = 'smart_canvas_recent_run_settings_v1';
 const initialSmartSettings = cloneSmartSettings(settings);
 let canvasDefaultSmartSettings = cloneSmartSettings(settings);
+let smartCanvasLoadBaseSettings = null;
 let recentSmartSettingsByMode = {};
 let recentPromptNodeLlmSettings = {};
 function smartSettingsModeKey(source=settings){
@@ -2182,12 +2183,90 @@ function setSmartCanvasSwitcherOpen(open){
     smartCanvasSwitcherMenu.hidden = !open;
     smartCanvasSwitcherBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
-async function switchToSmartCanvas(nextCanvasId){
-    if(!nextCanvasId || nextCanvasId === canvasId) return setSmartCanvasSwitcherOpen(false);
-    savePromptDraftForCurrent();
-    if(canvas) await saveCanvas();
-    const projectId = rememberCanvasListProject(canvas?.project || sourceProjectId || 'default');
-    window.location.href = `/static/smart-canvas.html?id=${encodeURIComponent(nextCanvasId)}&project=${encodeURIComponent(projectId)}`;
+let smartCanvasSwitchInFlight = false;
+function smartCanvasHasLiveAsyncWork(){
+    return Boolean(
+        activeSmartTaskPolls.size
+        || activePromptNodeStreams.size
+        || smartCascadeAnyRunning()
+        || nodes.some(node => smartNodeInFlight(node))
+    );
+}
+function smartCanvasUrl(nextCanvasId, projectId=canvas?.project || sourceProjectId || 'default'){
+    return `/static/smart-canvas.html?id=${encodeURIComponent(nextCanvasId)}&project=${encodeURIComponent(rememberCanvasListProject(projectId))}`;
+}
+function resetSmartCanvasTransientStateForSwitch(){
+    stopAllSmartCanvasVideos();
+    smartVideoUserPausedKeys.clear();
+    smartVideoPostPreviewFirstFrameKeys.clear();
+    smartVideoPreviewHandoff = null;
+    smartVideoPreviewSource = null;
+    smartVideoPreviewOpeningKey = '';
+    clearTimeout(canvasSyncTimer);
+    canvasSyncTimer = null;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    pendingUndoSnapshot = null;
+    selectedId = '';
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    selectedConnectionKey = '';
+    hoveredConnectionNodeId = '';
+    hoveredConnectionKey = '';
+    dragState = null;
+    selectionState = null;
+    resizeState = null;
+    thumbDragState = null;
+    detachedVideoDomHandoff = null;
+    viewport = {x:0, y:0, scale:1};
+    activeComposerSubject = null;
+    lastComposerNodeId = '';
+    setComposerExpanded(false);
+    setComposerOpen(false);
+    closeMentionPicker();
+    createMenu?.classList.remove('open');
+    world.querySelectorAll('.image-node').forEach(nodeEl => nodeEl.remove());
+    settings = cloneSmartSettings(smartCanvasLoadBaseSettings || initialSmartSettings);
+    canvasDefaultSmartSettings = cloneSmartSettings(settings);
+}
+async function switchToSmartCanvas(nextCanvasId, options={}){
+    if(!nextCanvasId || nextCanvasId === canvasId){
+        setSmartCanvasSwitcherOpen(false);
+        return true;
+    }
+    if(smartCanvasSwitchInFlight) return false;
+    smartCanvasSwitchInFlight = true;
+    setSmartCanvasSwitcherOpen(false);
+    const previousCanvasId = canvasId;
+    const previousUrl = smartCanvasUrl(previousCanvasId);
+    try {
+        savePromptDraftForCurrent();
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        if(canvas) await saveCanvas();
+        // A conflict response may schedule a retry for the canvas being left.
+        // Never let that delayed callback run after canvasId changes.
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        const nextUrl = smartCanvasUrl(nextCanvasId);
+        if(smartCanvasHasLiveAsyncWork()){
+            window.location.href = nextUrl;
+            return true;
+        }
+        const loaded = await loadCanvas(nextCanvasId, {switching:true});
+        if(!loaded){
+            if(options.history === false) history.replaceState({canvasId:previousCanvasId}, '', previousUrl);
+            canvasId = previousCanvasId;
+            window.location.href = previousUrl;
+            return false;
+        }
+        if(options.history === false) history.replaceState({canvasId:nextCanvasId}, '', nextUrl);
+        else history.pushState({canvasId:nextCanvasId}, '', nextUrl);
+        renderSmartCanvasSwitcher();
+        return true;
+    } finally {
+        smartCanvasSwitchInFlight = false;
+    }
 }
 let smartCanvasSwitcherItems = null;
 let smartCanvasSwitcherLoadPromise = null;
@@ -2264,6 +2343,10 @@ document.addEventListener('pointerdown', e => {
 });
 document.addEventListener('keydown', e => {
     if(e.key === 'Escape' && smartCanvasSwitcher?.classList.contains('open')) setSmartCanvasSwitcherOpen(false);
+});
+window.addEventListener('popstate', () => {
+    const nextCanvasId = new URLSearchParams(location.search).get('id') || '';
+    if(nextCanvasId && nextCanvasId !== canvasId) switchToSmartCanvas(nextCanvasId, {history:false});
 });
 function promptPlainText(){
     return originalPromptTextFromParts(collectPromptParts());
@@ -7850,12 +7933,97 @@ function migrateSmartGroupImageMembers(){
     });
     return changed;
 }
-async function loadCanvas(){
-    if(!canvasId) return;
+function nextSmartCanvasPaint(){
+    return new Promise(resolve => requestAnimationFrame(resolve));
+}
+function waitForSmartCanvasPromise(promise, timeout){
+    return new Promise(resolve => {
+        let timer = 0;
+        const finish = () => {
+            if(timer) clearTimeout(timer);
+            timer = 0;
+            resolve();
+        };
+        Promise.resolve(promise).then(finish, finish);
+        timer = setTimeout(finish, Math.max(0, timeout));
+    });
+}
+async function waitForSmartCanvasImageDecode(img, deadline){
+    if(!img?.isConnected) return;
+    while(img.isConnected && Date.now() < deadline){
+        const source = img.currentSrc || img.getAttribute('src') || '';
+        if(!source) return;
+        if(img.complete){
+            if(img.naturalWidth > 0){
+                const decode = img.decode?.();
+                if(decode) await waitForSmartCanvasPromise(decode, Math.max(0, deadline - Date.now()));
+                if(source === (img.currentSrc || img.getAttribute('src') || '') && img.naturalWidth > 0) return;
+                continue;
+            }
+            // Existing preview fallbacks replace src synchronously from their
+            // error handler. Give that handler one frame before treating the
+            // current source as terminally broken.
+            await nextSmartCanvasPaint();
+            if(source === (img.currentSrc || img.getAttribute('src') || '')) return;
+            continue;
+        }
+        const remaining = Math.max(0, deadline - Date.now());
+        if(!remaining) return;
+        await new Promise(resolve => {
+            let timer = 0;
+            const finish = () => {
+                img.removeEventListener('load', finish);
+                img.removeEventListener('error', finish);
+                if(timer) clearTimeout(timer);
+                resolve();
+            };
+            img.addEventListener('load', finish, {once:true});
+            img.addEventListener('error', finish, {once:true});
+            timer = setTimeout(finish, remaining);
+        });
+        await Promise.resolve();
+    }
+}
+function initialSmartCanvasMediaImages(){
+    const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    const bounds = {
+        left:-viewportWidth,
+        top:-viewportHeight,
+        right:viewportWidth * 2,
+        bottom:viewportHeight * 2,
+    };
+    const images = [];
+    world.querySelectorAll('.image-node').forEach(nodeEl => {
+        const rect = nodeEl.getBoundingClientRect();
+        if(rect.right < bounds.left || rect.left > bounds.right || rect.bottom < bounds.top || rect.top > bounds.bottom) return;
+        nodeEl.querySelectorAll('img[src]').forEach(img => images.push(img));
+    });
+    return [...new Set(images)];
+}
+async function revealSmartCanvasAfterInitialMedia(){
+    const deadline = Date.now() + 4000;
     try {
-        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
-        if(!res.ok) return;
+        const images = initialSmartCanvasMediaImages();
+        await Promise.allSettled(images.map(img => waitForSmartCanvasImageDecode(img, deadline)));
+        await nextSmartCanvasPaint();
+        await nextSmartCanvasPaint();
+    } finally {
+        world.classList.add('smart-initial-media-reveal');
+        world.classList.remove('smart-initial-media-preparing');
+    }
+}
+let initialSmartCanvasRendered = false;
+async function loadCanvas(targetCanvasId=canvasId, options={}){
+    const requestedCanvasId = String(targetCanvasId || '');
+    if(!requestedCanvasId) return false;
+    try {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(requestedCanvasId)}`);
+        if(!res.ok) return false;
         const data = await res.json();
+        if(!data?.canvas) return false;
+        if(options.switching) resetSmartCanvasTransientStateForSwitch();
+        canvasId = requestedCanvasId;
         canvas = data.canvas;
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
@@ -7883,6 +8051,7 @@ async function loadCanvas(){
         const cleanedDetachedInputs = cleanupDetachedRunInputRefs();
         viewport = {...viewport, ...(canvas.viewport || {})};
         viewport.scale = safeScale(viewport.scale);
+        settings = cloneSmartSettings(smartCanvasLoadBaseSettings || settings);
         if(canvas.settings) settings = {...settings, ...canvas.settings};
         normalizeSmartVideoModeSettings(settings, true);
         nodes.forEach(node => {
@@ -7895,12 +8064,21 @@ async function loadCanvas(){
         if(settings.comfy_params && !settings.comfyParams) settings.comfyParams = settings.comfy_params;
         updateProviderModels();
         applyViewport();
+        world.classList.remove('smart-initial-media-reveal');
+        world.classList.add('smart-initial-media-preparing');
         render();
+        initialSmartCanvasRendered = true;
+        await revealSmartCanvasAfterInitialMedia();
         if(cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
         startCanvasMetaPoll();
-    } catch(e) { toast(tr('smart.toastCanvasFail')); }
+        return true;
+    } catch(e) {
+        world.classList.remove('smart-initial-media-preparing');
+        toast(tr('smart.toastCanvasFail'));
+        return false;
+    }
 }
 function scheduleSave(){
     clearTimeout(saveTimer);
@@ -21248,10 +21426,11 @@ window.onload = async () => {
     connectAssetLibrarySyncSocket();
     startVeniceCreditsAutoRefresh();
     await loadConfig();
+    smartCanvasLoadBaseSettings = cloneSmartSettings(settings);
     await loadAssetLibrary();
     await loadCanvas();
     loadSmartCanvasSwitcher();
     scheduleVeniceCreditsRefresh('', 80);
     syncApiKindToggleVisibility();
-    render();
+    if(!initialSmartCanvasRendered) render();
 };

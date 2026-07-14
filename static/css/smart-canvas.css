@@ -40,6 +40,8 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .shell.panning { cursor:grabbing; }
 .shell.zoom-preview { cursor:crosshair; }
 .world { position:absolute; left:0; top:0; width:6000px; height:4000px; transform-origin:0 0; }
+.world.smart-initial-media-preparing { opacity:0; pointer-events:none; }
+.world.smart-initial-media-reveal { transition:opacity .12s ease; }
 /* 画布缩放（非 1:1）时，关闭 world 内卡片的 backdrop-filter，避免合成层位图被缩放导致“参数设置”等组件发虚。
    底色本身接近不透明，关闭毛玻璃后观感几乎无差，但能在各浏览器下保持清晰。 */
 .world.canvas-scaled .image-node,
