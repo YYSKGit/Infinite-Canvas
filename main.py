@@ -4635,7 +4635,7 @@ async def codex_chat_text(payload, history_messages=None):
         if hasattr(payload, "images"):
             image_values.extend([{"url": item} for item in (getattr(payload, "images", None) or []) if item])
         if hasattr(payload, "reference_images"):
-            image_values.extend([ref.dict() for ref in (getattr(payload, "reference_images", None) or []) if getattr(ref, "url", "")])
+            image_values.extend([ref.model_dump() for ref in (getattr(payload, "reference_images", None) or []) if getattr(ref, "url", "")])
         image_paths, temp_paths = await codex_reference_paths(image_values)
         raw = await run_codex_cli(
             codex_chat_prompt(payload, history_messages),
@@ -4910,7 +4910,7 @@ def gemini_cli_chat_prompt(payload, history_messages=None):
     if hasattr(payload, "images"):
         image_values.extend([{"url": item} for item in (getattr(payload, "images", None) or []) if item])
     if hasattr(payload, "reference_images"):
-        image_values.extend([ref.dict() for ref in (getattr(payload, "reference_images", None) or []) if getattr(ref, "url", "")])
+        image_values.extend([ref.model_dump() for ref in (getattr(payload, "reference_images", None) or []) if getattr(ref, "url", "")])
     refs = []
     temp_paths = []
     return "\n\n".join(part for part in parts if part).strip(), image_values
@@ -8690,7 +8690,7 @@ def venice_video_reference_url(ref):
         return ""
     if text.startswith("http://") or text.startswith("https://"):
         return text
-    data_url = reference_to_data_url(ref.dict(), max_size=4096)
+    data_url = reference_to_data_url(ref.model_dump(), max_size=4096)
     return str(data_url or "").strip()
 
 def venice_aspect_ratio_value(value: str) -> float:
@@ -13403,7 +13403,7 @@ async def build_online_image_result(payload: OnlineImageRequest):
     provider = get_api_provider(payload.provider_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs = [ref.model_dump() for ref in payload.reference_images if ref.url]
     image_refs = image_references(refs)
     count = max(1, min(8, int(payload.n or 1)))
     async def generate_one():
@@ -14568,7 +14568,7 @@ async def canvas_video(payload: CanvasVideoRequest):
                             yuli_images.append(ref_url)
                         else:
                             # 本地/dataURL 图片转成 data URL 兜底传递
-                            data_url = reference_to_data_url(ref.dict(), max_size=1536)
+                            data_url = reference_to_data_url(ref.model_dump(), max_size=1536)
                             if data_url:
                                 yuli_images.append(data_url)
                     prompt_text = str(payload.prompt or "")
@@ -14591,7 +14591,7 @@ async def canvas_video(payload: CanvasVideoRequest):
                     image_payload = []
                     for ref in payload.images[:4]:
                         if ref.url:
-                            image_payload.append(reference_to_data_url(ref.dict(), max_size=1536))
+                            image_payload.append(reference_to_data_url(ref.model_dump(), max_size=1536))
                     body = {
                         "prompt": payload.prompt,
                         "model": selected_model(payload.model, "veo3-fast"),
@@ -16614,7 +16614,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs = [ref.model_dump() for ref in payload.reference_images if ref.url]
     image_refs = image_references(refs)
     user_message = {
         "id": uuid.uuid4().hex,
@@ -16745,7 +16745,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs = [ref.model_dump() for ref in payload.reference_images if ref.url]
     image_refs = image_references(refs)
     user_message = {
         "id": uuid.uuid4().hex,
@@ -16834,7 +16834,7 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs = [ref.model_dump() for ref in payload.reference_images if ref.url]
     user_message = {
         "id": uuid.uuid4().hex,
         "role": "user",
@@ -17933,7 +17933,9 @@ def runninghub_workflow_store_key(workflow_id: str) -> str:
 
 def runninghub_normalize_field(raw, fallback=None):
     fallback = fallback or {}
-    if hasattr(raw, "dict"):
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    elif hasattr(raw, "dict"):
         raw = raw.dict()
     if not isinstance(raw, dict):
         raw = {}
@@ -18160,8 +18162,8 @@ def save_workflow_config(name: str, payload: WorkflowConfig):
         raise HTTPException(status_code=404, detail="Workflow not found")
     cfg_path = workflow_config_path(name)
     with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(payload.dict(), f, ensure_ascii=False, indent=2)
-    return {"config": payload.dict()}
+        json.dump(payload.model_dump(), f, ensure_ascii=False, indent=2)
+    return {"config": payload.model_dump()}
 
 @app.delete("/api/workflows/{name:path}")
 def delete_workflow(name: str):
