@@ -438,6 +438,22 @@
             pointer-events: none;
         }
 
+        /* The canvas editor and canvas list navigate inside the same iframe.
+           While Chromium swaps those documents, the child surface can be
+           transparent for a frame and expose the lighter .stage background.
+           Match the iframe backing colour to the canvas page itself so that
+           internal route changes do not produce a blue flash. */
+        #frame-canvas {
+            background: #f6f7f9;
+        }
+
+        html.theme-dark #frame-canvas,
+        body.theme-dark #frame-canvas,
+        html.studio-theme-dark #frame-canvas,
+        body.studio-theme-dark #frame-canvas {
+            background: #0f141d;
+        }
+
         iframe.active {
             /* A newly navigated iframe is an opaque white about:blank surface. */
             opacity: 0;
