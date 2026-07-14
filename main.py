@@ -2837,6 +2837,7 @@ class AssetLibraryRenameRequest(BaseModel):
 class AssetLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
     library_id: str = ""
+    force: bool = False
 
 class AssetLibraryBatchMoveRequest(BaseModel):
     ids: List[str] = []
@@ -3508,6 +3509,8 @@ def extract_canvas_assets(canvas):
         node_id = str(node.get("id") or f"node_{node_index}")
         node_title = canvas_node_title(node)
         for field_path, raw, url in iter_canvas_asset_values(node):
+            if urllib.parse.unquote(str(url).split("?", 1)[0]).startswith("/assets/library/"):
+                continue
             dedupe_key = url
             if dedupe_key in seen:
                 continue
@@ -6234,6 +6237,40 @@ def remove_asset_library_file(item) -> None:
             os.remove(path)
     except Exception as exc:
         print(f"删除资产文件失败: {exc}")
+
+def asset_library_canvas_references(items) -> Dict[str, Any]:
+    urls = {storage_normalize_local_url(item.get("url")) for item in (items or []) if isinstance(item, dict)}
+    urls.discard("")
+    canvases = []
+    matched_urls = set()
+    if not urls:
+        return {"canvas_count": 0, "file_count": 0, "canvases": []}
+    for filename in os.listdir(CANVAS_DIR):
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(CANVAS_DIR, filename), "r", encoding="utf-8") as handle:
+                canvas = json.load(handle)
+        except Exception:
+            continue
+        if canvas.get("deleted_at"):
+            continue
+        found = set()
+        storage_collect_urls(canvas, found)
+        overlap = urls & found
+        if overlap:
+            matched_urls.update(overlap)
+            canvases.append({"id": canvas.get("id"), "title": canvas.get("title") or "未命名画布", "count": len(overlap)})
+    return {"canvas_count": len(canvases), "file_count": len(matched_urls), "canvases": canvases[:20]}
+
+def ensure_asset_library_items_deletable(items, force=False):
+    references = asset_library_canvas_references(items)
+    if references["canvas_count"] and not force:
+        raise HTTPException(status_code=409, detail={
+            "code": "asset_in_use",
+            "message": f"所选素材正在被 {references['canvas_count']} 个画布使用，删除后这些画布中的媒体会失效。",
+            **references,
+        })
 
 def make_asset_library_item(src: str, name: str = "", subdir: str = "") -> Tuple[str, Dict[str, Any]]:
     kind = asset_library_media_kind(src)
@@ -15881,13 +15918,18 @@ async def rename_asset_library(library_id: str, payload: AssetLibraryRenameReque
     return {"library": lib, "asset_library": library}
 
 @app.delete("/api/asset-library/libraries/{library_id}")
-async def delete_asset_library(library_id: str):
+async def delete_asset_library(library_id: str, force: bool = False):
     lib = load_asset_library()
     libraries = lib.get("libraries") or []
     if len(libraries) <= 1:
         raise HTTPException(status_code=400, detail="至少保留一个资产库")
     if not any(item.get("id") == library_id for item in libraries):
         raise HTTPException(status_code=404, detail="资产库不存在")
+    removed_library = next(item for item in libraries if item.get("id") == library_id)
+    removed_items = [item for cat in removed_library.get("categories", []) for item in (cat.get("items") or [])]
+    ensure_asset_library_items_deletable(removed_items, force)
+    for item in removed_items:
+        remove_asset_library_file(item)
     lib["libraries"] = [item for item in libraries if item.get("id") != library_id]
     if lib.get("active_library_id") == library_id:
         lib["active_library_id"] = lib["libraries"][0].get("id")
@@ -15925,13 +15967,14 @@ async def rename_asset_library_category(category_id: str, payload: AssetLibraryR
     return {"library": lib, "category": cat}
 
 @app.delete("/api/asset-library/categories/{category_id}")
-async def delete_asset_library_category(category_id: str, library_id: str = ""):
+async def delete_asset_library_category(category_id: str, library_id: str = "", force: bool = False):
     lib = load_asset_library()
     library, cat = find_asset_category_with_library(lib, category_id, library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
     if cat.get("type") == "workflow" and category_id == "workflows" and (library.get("id") or "") == "default":
         raise HTTPException(status_code=400, detail="默认工作流分类不能删除")
+    ensure_asset_library_items_deletable(cat.get("items") or [], force)
     # 删除分组时一并清理该分组下的本地文件 + 分组文件夹，避免磁盘残留。
     for item in (cat.get("items") or []):
         remove_asset_library_file(item)
@@ -16299,7 +16342,7 @@ async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterR
     return {"library": lib, "item": target_item}
 
 @app.delete("/api/asset-library/items/{item_id}")
-async def delete_asset_library_item(item_id: str):
+async def delete_asset_library_item(item_id: str, force: bool = False):
     lib = load_asset_library()
     removed = None
     for library in lib.get("libraries", []):
@@ -16313,6 +16356,7 @@ async def delete_asset_library_item(item_id: str):
             cat["items"] = keep
     if not removed:
         raise HTTPException(status_code=404, detail="资产不存在")
+    ensure_asset_library_items_deletable([removed], force)
     remove_asset_library_file(removed)  # 同时删除本地文件，避免磁盘上堆积
     save_asset_library(lib)
     return {"library": lib}
@@ -16337,6 +16381,7 @@ async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteReque
                 else:
                     keep.append(item)
             cat["items"] = keep
+    ensure_asset_library_items_deletable(removed_items, payload.force)
     for item in removed_items:  # 批量删除同时清理本地文件
         remove_asset_library_file(item)
     save_asset_library(lib)

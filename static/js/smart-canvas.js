@@ -7792,7 +7792,8 @@ function bindAssetItemEvents(){
             e.preventDefault(); e.stopPropagation();
             btn.disabled = true;
             try {
-                const data = await fetch(`/api/asset-library/items/${encodeURIComponent(btn.dataset.deleteAsset)}`, {method:'DELETE'}).then(r => r.json());
+                const data = await deleteSmartAssetLibraryResource(`/api/asset-library/items/${encodeURIComponent(btn.dataset.deleteAsset)}`);
+                if(!data){ btn.disabled = false; return; }
                 setAssetLibraryFromResponse(data);
             } catch(err){
                 btn.disabled = false;
@@ -7833,7 +7834,8 @@ function bindWorkflowAssetItemEvents(){
             if(!item) return;
             btn.disabled = true;
             try {
-                const data = await fetch(`/api/asset-library/items/${encodeURIComponent(item.id)}`, {method:'DELETE'}).then(r => r.json());
+                const data = await deleteSmartAssetLibraryResource(`/api/asset-library/items/${encodeURIComponent(item.id)}`);
+                if(!data){ btn.disabled = false; return; }
                 setAssetLibraryFromResponse(data);
             } catch(err){
                 btn.disabled = false;
@@ -7970,6 +7972,39 @@ function migrateSmartGroupImageMembers(){
         });
     });
     return changed;
+}
+function smartAssetDangerConfirm(message, title='确认强制删除'){
+    try { document.activeElement?.blur?.(); } catch(_) {}
+    hideAssetHoverPreview();
+    document.querySelectorAll('video').forEach(video => { try { video.pause(); } catch(_) {} });
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(2,6,23,.72);backdrop-filter:blur(5px)';
+        const panel = document.createElement('section');
+        panel.style.cssText = 'width:min(430px,calc(100vw - 32px));overflow:hidden;border:1px solid #334155;border-radius:14px;background:#151d2b;color:#e5e7eb;box-shadow:0 28px 90px rgba(0,0,0,.58)';
+        panel.innerHTML = `<div style="padding:15px 18px 12px;border-bottom:1px solid #293548"><strong style="display:block;font-size:14px;line-height:1.35">${escapeHtml(title)}</strong><p style="margin:7px 0 0;white-space:pre-line;color:#aeb9c9;font-size:11.5px;line-height:1.58">${escapeHtml(message)}</p></div><div style="display:flex;justify-content:flex-end;gap:8px;padding:10px 14px"><button type="button" data-confirm-cancel style="height:32px;padding:0 13px;border:1px solid #3a4659;border-radius:8px;background:#202a3a;color:#d7deea;cursor:pointer;font-size:12px;font-weight:750">取消</button><button type="button" data-confirm-ok style="height:32px;padding:0 13px;border:1px solid #dc2626;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;font-size:12px;font-weight:800">仍要删除</button></div>`;
+        overlay.appendChild(panel); document.body.appendChild(overlay);
+        const finish = value => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
+        const onKey = event => { if(event.key === 'Escape') finish(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('pointerdown', event => { if(event.target === overlay) finish(false); });
+        panel.querySelector('[data-confirm-cancel]').onclick = () => finish(false);
+        panel.querySelector('[data-confirm-ok]').onclick = () => finish(true);
+        requestAnimationFrame(() => panel.querySelector('[data-confirm-cancel]')?.focus());
+    });
+}
+async function deleteSmartAssetLibraryResource(url){
+    let res = await fetch(url, {method:'DELETE'});
+    let data = await res.json().catch(() => ({}));
+    if(res.status === 409){
+        const detail = data.detail && typeof data.detail === 'object' ? data.detail : {message:String(data.detail || '')};
+        const names = (detail.canvases || []).slice(0, 5).map(item => `“${item.title || '未命名画布'}”`).join('、');
+        if(!await smartAssetDangerConfirm(`${detail.message || '该素材当前仍被画布引用。'}${names ? `\n涉及画布：${names}${Number(detail.canvas_count || 0) > 5 ? ' 等' : ''}` : ''}\n\n此操作会导致这些画布中的媒体失效。`)) return null;
+        res = await fetch(`${url}${url.includes('?') ? '&' : '?'}force=true`, {method:'DELETE'});
+        data = await res.json().catch(() => ({}));
+    }
+    if(!res.ok) throw new Error(typeof data.detail === 'object' ? (data.detail.message || '删除失败') : (data.detail || '删除失败'));
+    return data;
 }
 function nextSmartCanvasPaint(){
     return new Promise(resolve => requestAnimationFrame(resolve));

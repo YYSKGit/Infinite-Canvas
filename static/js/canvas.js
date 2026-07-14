@@ -6783,10 +6783,54 @@ async function renameCanvasAssetItem(itemId){
     renderCanvasAssetLibrary();
     if(assetManagerModal?.classList.contains('open')) renderAssetManager();
 }
+function canvasDangerConfirm(message, title='确认强制删除'){
+    document.activeElement?.blur?.();
+    hideCanvasAssetHoverPreview();
+    document.querySelectorAll('video').forEach(video => video.pause());
+    document.querySelectorAll('[title]:hover').forEach(el => { el.dataset.confirmTitle = el.title; el.removeAttribute('title'); });
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(2,6,23,.72);backdrop-filter:blur(5px)';
+        const panel = document.createElement('section');
+        panel.style.cssText = 'width:min(430px,calc(100vw - 32px));overflow:hidden;border:1px solid #334155;border-radius:14px;background:#151d2b;color:#e5e7eb;box-shadow:0 28px 90px rgba(0,0,0,.58)';
+        panel.innerHTML = `<div style="padding:15px 18px 12px;border-bottom:1px solid #293548"><strong style="display:block;font-size:14px;line-height:1.35;letter-spacing:.01em">${escapeHtml(title)}</strong><p style="margin:7px 0 0;white-space:pre-line;color:#aeb9c9;font-size:11.5px;line-height:1.58">${escapeHtml(message)}</p></div><div style="display:flex;justify-content:flex-end;gap:8px;padding:10px 14px"><button type="button" data-confirm-cancel style="height:32px;padding:0 13px;border:1px solid #3a4659;border-radius:8px;background:#202a3a;color:#d7deea;cursor:pointer;font-size:12px;line-height:1;font-weight:750">取消</button><button type="button" data-confirm-ok style="height:32px;padding:0 13px;border:1px solid #dc2626;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;font-size:12px;line-height:1;font-weight:800">仍要删除</button></div>`;
+        overlay.appendChild(panel); document.body.appendChild(overlay);
+        const finish = value => {
+            overlay.remove();
+            document.querySelectorAll('[data-confirm-title]').forEach(el => { el.title = el.dataset.confirmTitle || ''; delete el.dataset.confirmTitle; });
+            document.removeEventListener('keydown', onKey);
+            resolve(value);
+        };
+        const onKey = event => { if(event.key === 'Escape') finish(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('pointerdown', event => { if(event.target === overlay) finish(false); });
+        panel.querySelector('[data-confirm-cancel]').onclick = () => finish(false);
+        panel.querySelector('[data-confirm-ok]').onclick = () => finish(true);
+        requestAnimationFrame(() => panel.querySelector('[data-confirm-cancel]')?.focus());
+    });
+}
+async function deleteCanvasLibraryResource(url, options={}){
+    let res = await fetch(url, options);
+    let data = await res.json().catch(() => ({}));
+    if(res.status === 409 && data.detail?.code === 'asset_in_use'){
+        const detail = data.detail;
+        const names = (detail.canvases || []).slice(0, 5).map(item => `“${item.title || '未命名画布'}”`).join('、');
+        if(!await canvasDangerConfirm(`${detail.message}${names ? `\n涉及画布：${names}${detail.canvas_count > 5 ? ' 等' : ''}` : ''}\n\n此操作会导致这些画布中的媒体失效。`)) return null;
+        if(String(options.method || '').toUpperCase() === 'POST'){
+            const body = JSON.parse(options.body || '{}');
+            options = {...options, body:JSON.stringify({...body, force:true})};
+        } else url += `${url.includes('?') ? '&' : '?'}force=true`;
+        res = await fetch(url, options);
+        data = await res.json().catch(() => ({}));
+    }
+    if(!res.ok) throw new Error(typeof data.detail === 'object' ? (data.detail.message || '删除失败') : (data.detail || '删除失败'));
+    return data;
+}
 async function deleteCanvasAssetItem(itemId){
     const item = currentCanvasAssetItem(itemId);
     if(!item || !window.confirm(`删除资产「${item.name || 'asset'}」？`)) return;
-    const data = await fetch(`/api/asset-library/items/${encodeURIComponent(item.id)}`, {method:'DELETE'}).then(r => r.json());
+    const data = await deleteCanvasLibraryResource(`/api/asset-library/items/${encodeURIComponent(item.id)}`, {method:'DELETE'});
+    if(!data) return;
     canvasAssetLibrary = data.library || canvasAssetLibrary;
     managerSelectedAssetIds.delete(item.id);
     managerSelectedWorkflowIds.delete(item.id);
@@ -12769,7 +12813,8 @@ assetManagerModal?.addEventListener('click', async event => {
     if(event.target.closest?.('[data-manager-asset-lib-delete]')){
         const lib = activeCanvasAssetLibrary();
         if(!lib || !window.confirm(`删除资产库「${lib.name || '资产库'}」？`)) return;
-        const data = await fetch(`/api/asset-library/libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'}).then(r => r.json());
+        const data = await deleteCanvasLibraryResource(`/api/asset-library/libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'});
+        if(!data) return;
         canvasAssetLibrary = data.library || canvasAssetLibrary;
         activeCanvasAssetLibraryId = canvasAssetLibrary.active_library_id || canvasAssetLibraries()[0]?.id || '';
         activeCanvasAssetCategoryId = '';
@@ -12794,14 +12839,16 @@ assetManagerModal?.addEventListener('click', async event => {
     if(event.target.closest?.('[data-manager-asset-cat-delete]')){
         const cat = activeCanvasMediaCategory();
         if(!cat || !window.confirm(`删除分组「${cat.name || '分组'}」？`)) return;
-        const data = await fetch(`/api/asset-library/categories/${encodeURIComponent(cat.id)}`, {method:'DELETE'}).then(r => r.json());
+        const data = await deleteCanvasLibraryResource(`/api/asset-library/categories/${encodeURIComponent(cat.id)}`, {method:'DELETE'});
+        if(!data) return;
         canvasAssetLibrary = data.library || canvasAssetLibrary;
         activeCanvasAssetCategoryId = canvasMediaCategories()[0]?.id || '';
         renderAssetManager(); renderCanvasAssetLibrary(); return;
     }
     if(event.target.closest?.('[data-manager-asset-delete]')){
         if(!managerSelectedAssetIds.size) return;
-        const data = await fetch('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeCanvasAssetLibraryId, ids:[...managerSelectedAssetIds]})}).then(r => r.json());
+        const data = await deleteCanvasLibraryResource('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeCanvasAssetLibraryId, ids:[...managerSelectedAssetIds]})});
+        if(!data) return;
         canvasAssetLibrary = data.library || canvasAssetLibrary;
         managerSelectedAssetIds.clear();
         renderAssetManager(); renderCanvasAssetLibrary(); return;

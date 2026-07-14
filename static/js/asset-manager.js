@@ -193,8 +193,56 @@ async function copyTextToClipboard(text){
 async function apiJson(url, options={}){
     const res = await fetch(url, options);
     const data = await res.json().catch(() => ({}));
-    if(!res.ok) throw new Error(data.detail || data.message || '操作失败');
+    if(!res.ok){
+        const detail = data.detail || data.message || '操作失败';
+        const error = new Error(typeof detail === 'object' ? (detail.message || '操作失败') : detail);
+        if(detail && typeof detail === 'object') error.detail = detail;
+        throw error;
+    }
     return data;
+}
+
+function inPageDangerConfirm(message, title='确认强制删除'){
+    document.activeElement?.blur?.();
+    closeDetailPreview();
+    document.querySelectorAll('video').forEach(video => video.pause());
+    document.querySelectorAll('[title]:hover').forEach(el => { el.dataset.confirmTitle = el.title; el.removeAttribute('title'); });
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(2,6,23,.72);backdrop-filter:blur(5px)';
+        const panel = document.createElement('section');
+        panel.style.cssText = 'width:min(430px,calc(100vw - 32px));overflow:hidden;border:1px solid #334155;border-radius:14px;background:#151d2b;color:#e5e7eb;box-shadow:0 28px 90px rgba(0,0,0,.58)';
+        panel.innerHTML = `<div style="padding:15px 18px 12px;border-bottom:1px solid #293548"><strong style="display:block;font-size:14px;line-height:1.35;letter-spacing:.01em">${escapeHtml(title)}</strong><p style="margin:7px 0 0;white-space:pre-line;color:#aeb9c9;font-size:11.5px;line-height:1.58">${escapeHtml(message)}</p></div><div style="display:flex;justify-content:flex-end;gap:8px;padding:10px 14px"><button type="button" data-confirm-cancel style="height:32px;padding:0 13px;border:1px solid #3a4659;border-radius:8px;background:#202a3a;color:#d7deea;cursor:pointer;font-size:12px;line-height:1;font-weight:750">取消</button><button type="button" data-confirm-ok style="height:32px;padding:0 13px;border:1px solid #dc2626;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;font-size:12px;line-height:1;font-weight:800">仍要删除</button></div>`;
+        overlay.appendChild(panel); document.body.appendChild(overlay);
+        const finish = value => {
+            overlay.remove();
+            document.querySelectorAll('[data-confirm-title]').forEach(el => { el.title = el.dataset.confirmTitle || ''; delete el.dataset.confirmTitle; });
+            document.removeEventListener('keydown', onKey);
+            resolve(value);
+        };
+        const onKey = event => { if(event.key === 'Escape') finish(false); };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('pointerdown', event => { if(event.target === overlay) finish(false); });
+        panel.querySelector('[data-confirm-cancel]').onclick = () => finish(false);
+        panel.querySelector('[data-confirm-ok]').onclick = () => finish(true);
+        requestAnimationFrame(() => panel.querySelector('[data-confirm-cancel]')?.focus());
+    });
+}
+
+async function assetDeleteJson(url, options={}){
+    try { return await apiJson(url, options); }
+    catch(error){
+        if(error.detail?.code !== 'asset_in_use') throw error;
+        const names = (error.detail.canvases || []).slice(0, 5).map(item => `“${item.title || '未命名画布'}”`).join('、');
+        const extra = names ? `\n涉及画布：${names}${error.detail.canvas_count > 5 ? ' 等' : ''}` : '';
+        if(!await inPageDangerConfirm(`${error.message}${extra}\n\n此操作会导致这些画布中的媒体失效。`)) throw new Error('已取消删除');
+        if(String(options.method || '').toUpperCase() === 'POST'){
+            const body = JSON.parse(options.body || '{}');
+            return apiJson(url, {...options, body:JSON.stringify({...body, force:true})});
+        }
+        const separator = url.includes('?') ? '&' : '?';
+        return apiJson(`${url}${separator}force=true`, options);
+    }
 }
 function formatDate(value){
     const num = Number(value || 0);
@@ -2750,7 +2798,7 @@ async function deleteWorkflowItem(id){
         setStatus('再次点击确认删除工作流');
         return;
     }
-    const data = await apiJson(`/api/asset-library/items/${encodeURIComponent(id)}`, {method:'DELETE'});
+    const data = await assetDeleteJson(`/api/asset-library/items/${encodeURIComponent(id)}`, {method:'DELETE'});
     assetLibrary = data.library || assetLibrary;
     selectedWorkflowIds.delete(id);
     selectedWorkflowId = '';
@@ -2761,7 +2809,7 @@ async function deleteWorkflowItem(id){
 async function deleteSelectedWorkflows(){
     const ids = [...selectedWorkflowIds];
     if(!ids.length) return;
-    const data = await apiJson('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeWorkflowLibraryId, ids})});
+    const data = await assetDeleteJson('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeWorkflowLibraryId, ids})});
     assetLibrary = data.library || assetLibrary;
     selectedWorkflowIds.clear();
     selectedWorkflowId = '';
@@ -3985,7 +4033,7 @@ async function deleteWorkflowCategory(){
         setStatus('再次点击确认删除工作流分组');
         return;
     }
-    const data = await apiJson(`/api/asset-library/categories/${encodeURIComponent(cat.id)}?library_id=${encodeURIComponent(libraryId)}`, {method:'DELETE'});
+    const data = await assetDeleteJson(`/api/asset-library/categories/${encodeURIComponent(cat.id)}?library_id=${encodeURIComponent(libraryId)}`, {method:'DELETE'});
     assetLibrary = data.library || assetLibrary;
     activeWorkflowCategoryId = '';
     selectedWorkflowId = '';
@@ -4013,7 +4061,7 @@ async function deleteAssetLibrary(){
         setStatus('再次点击确认删除资产库');
         return;
     }
-    const data = await apiJson(`/api/asset-library/libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'});
+    const data = await assetDeleteJson(`/api/asset-library/libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'});
     assetLibrary = data.library || assetLibrary;
     activeAssetLibraryId = assetLibrary.active_library_id || assetLibraries()[0]?.id || '';
     activeAssetCategoryId = '';
@@ -4052,7 +4100,7 @@ async function deleteAssetCategory(){
         setStatus('再次点击确认删除分组');
         return;
     }
-    const data = await apiJson(`/api/asset-library/categories/${encodeURIComponent(cat.id)}`, {method:'DELETE'});
+    const data = await assetDeleteJson(`/api/asset-library/categories/${encodeURIComponent(cat.id)}`, {method:'DELETE'});
     assetLibrary = data.library || assetLibrary;
     activeAssetCategoryId = '';
     activeAssetClassFilter = '';
@@ -4169,7 +4217,7 @@ function scheduleAvatarPoll(id, providerId){
 async function deleteAssetItem(id){
     const item = findAssetItem(id);
     if(!item) return;
-    const data = await apiJson(`/api/asset-library/items/${encodeURIComponent(id)}`, {method:'DELETE'});
+    const data = await assetDeleteJson(`/api/asset-library/items/${encodeURIComponent(id)}`, {method:'DELETE'});
     assetLibrary = data.library || assetLibrary;
     selectedAssetIds.delete(id);
     if(selectedAssetId === id) selectedAssetId = '';
@@ -4180,7 +4228,7 @@ async function deleteAssetItem(id){
 async function deleteSelectedAssets(){
     if(!selectedAssetIds.size) return;
     const ids = [...selectedAssetIds];
-    const data = await apiJson('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeAssetLibraryId, ids})});
+    const data = await assetDeleteJson('/api/asset-library/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:activeAssetLibraryId, ids})});
     assetLibrary = data.library || assetLibrary;
     if(ids.includes(selectedAssetId)) selectedAssetId = '';
     selectedAssetIds.clear();
