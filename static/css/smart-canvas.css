@@ -2,12 +2,12 @@
 :root {
     --page:#f8fafc; --grid:#d9e1ea; --panel:rgba(255,255,255,.9); --card:#fff;
     --text:#111827; --muted:#64748b; --faint:#94a3b8; --line:#e8edf3; --soft:#f8fafc;
-    --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff; --connection-flow:#0ea5e9;
+    --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff; --connection-flow:#3b82f6;
 }
 .theme-dark {
     --page:#0f141d; --grid:rgba(148,163,184,.18); --panel:rgba(23,29,41,.92); --card:#171d29;
     --text:#e5e9f0; --muted:#8f9aab; --faint:#657286; --line:#2a3444; --soft:#111722;
-    --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d; --connection-flow:#38bdf8;
+    --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d; --connection-flow:#60a5fa;
 }
 * { box-sizing:border-box; }
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
@@ -445,7 +445,8 @@ body.smart-prompt-split-resize .prompt-node-llm .prompt-node-select-control { po
 /* Bug fix: hide floating delete button whenever the loading overlay is present (node running with existing image) */
 .image-node:has(.node-loading-overlay):hover .floating-node-actions { opacity:0 !important; pointer-events:none !important; }
 /* Bug fix: when the done timer is visible, fade it out on hover so the delete button can appear at the same position without overlap */
-.image-node:has(.run-time-pill.done):hover .run-time-pill.done { opacity:0; transition:opacity .14s ease; }
+.image-node:has(.run-time-pill.done):hover .run-time-pill.done,
+.image-node:has(.run-time-pill.failed):hover .run-time-pill.failed { opacity:0; transition:opacity .14s ease; }
 .smart-node-floating-menu { position:absolute; left:50%; top:-66px; z-index:18; display:inline-flex; align-items:center; gap:4px; height:30px; max-width:min(760px, calc(100vw - 48px)); padding:3px 5px; border-radius:12px; border:1px solid var(--line); background:color-mix(in srgb, var(--panel) 88%, transparent); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(18px); transform-origin:50% 100%; transform:translateX(-50%) translateY(3px) scale(var(--canvas-counter-scale, 1)) scale(1.1); opacity:0; pointer-events:none; white-space:nowrap; cursor:default; transition:opacity .14s ease, transform .14s ease; }
 .image-node.selected .smart-node-floating-menu { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0) scale(var(--canvas-counter-scale, 1)) scale(1.1); }
 .world.smart-multi-selected .smart-node-floating-menu { opacity:0 !important; pointer-events:none !important; }
@@ -624,7 +625,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .connection-layer .conn-selected { stroke:var(--strong); opacity:1; }
 .connection-layer .conn-selected.conn-selected-dashed { opacity:0; }
 .connection-layer .conn-selection-flow { stroke:var(--connection-flow); stroke-width:2.8; stroke-linecap:round; stroke-dasharray:8 22; pointer-events:none; animation:connection-selection-flow 1.25s linear infinite; animation-delay:var(--connection-selection-delay, 0ms); }
-.connection-layer .conn-selection-flow-dashed { stroke-width:2.5; stroke-dasharray:6 5; animation-name:connection-selection-flow-dashed; animation-duration:1.25s; animation-delay:var(--connection-dashed-selection-delay, 0ms); }
+.connection-layer .conn-selection-flow-dashed { stroke-width:2.5; stroke-dasharray:5 4; animation-name:dash-flow-pending; animation-duration:.9s; animation-delay:var(--connection-dashed-selection-delay, 0ms); }
 .connection-layer .conn-hit { pointer-events:stroke; cursor:pointer; }
 .connection-layer .conn-cut { pointer-events:auto; cursor:pointer; opacity:.55; transition:opacity .14s ease; }
 .connection-layer .conn-cut:hover { opacity:1; }
@@ -640,7 +641,6 @@ video.node-img { object-fit:cover; background:#0f172a; }
 @keyframes dash-flow { to { stroke-dashoffset:-13; } }
 @keyframes dash-flow-pending { to { stroke-dashoffset:-9; } }
 @keyframes connection-selection-flow { to { stroke-dashoffset:-30; } }
-@keyframes connection-selection-flow-dashed { to { stroke-dashoffset:-44; } }
 @media (prefers-reduced-motion: reduce) {
     .connection-layer .conn-selection-flow { animation:none; stroke-dashoffset:0; }
 }
@@ -680,6 +680,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-node.drag-out { opacity:.5; }
 .run-time-pill { position:absolute; right:8px; top:8px; z-index:7; height:24px; padding:0 9px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(37,99,235,.92); color:#fff; font-size:10.5px; font-weight:800; font-variant-numeric:tabular-nums; box-shadow:0 8px 18px rgba(15,23,42,.18); pointer-events:none; }
 .run-time-pill.done { background:#10b981; color:#fff; }
+.run-time-pill.failed { background:#ef4444; color:#fff; }
 .theme-dark .run-time-pill { box-shadow:0 8px 18px rgba(0,0,0,.32); }
 .loading-skeleton { display:grid; gap:8px; }
 .loading-cell { border-radius:12px; background:linear-gradient(90deg, var(--soft) 0%, var(--card) 50%, var(--soft) 100%); background-size:200% 100%; animation:shimmer 1.5s infinite linear; animation-delay:var(--loading-shimmer-delay, 0ms); border:1px solid var(--line); }

@@ -297,6 +297,7 @@ function restoreNodesPreservingLiveRuns(snapshotNodes){
             runStartedAt:liveNode.runStartedAt,
             runFinishedAt:liveNode.runFinishedAt,
             runElapsedMs:liveNode.runElapsedMs,
+            runFailed:liveNode.runFailed,
             runTimerHidden:liveNode.runTimerHidden
         };
         // Keep the object identity used by the active async task, while applying
@@ -1732,6 +1733,7 @@ function clearSmartNodeTransientRunState(node, options={}){
         delete node.runStartedAt;
         delete node.runFinishedAt;
         delete node.runElapsedMs;
+        delete node.runFailed;
         delete node.runTimerHidden;
     }
     return node;
@@ -7053,6 +7055,7 @@ function markSmartNodeComplete(node, meta=null){
     node.runFinishedAt = Number(node.runFinishedAt || 0) || nowMs();
     if(!node.runStartedAt) node.runStartedAt = meta?.createdAt || node.runFinishedAt;
     node.runElapsedMs = Math.max(0, Number(node.runFinishedAt || nowMs()) - Number(node.runStartedAt || node.runFinishedAt || nowMs()));
+    delete node.runFailed;
     node.runTimerHidden = meta?.hideTimer === true || keepHidden;
     return node;
 }
@@ -7069,6 +7072,7 @@ function markSmartNodeRunFailed(node, options={}){
         node.runFinishedAt = nowMs();
         if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
+        node.runFailed = true;
         node.runTimerHidden = false;
     }
     return node;
@@ -8605,7 +8609,11 @@ function renderConnections(){
         );
         const isPersistentlySelectedLine = selectedConnectionKey === connectionSelectionKey;
         const isSelectedLine = isPersistentlySelectedLine || isConnectionHoveredLine || isNodeHoveredLine || isNodeLinkedLine;
-        if(isSelectedLine) selectedFlowCount += 1;
+        // Pending edges use the same selected treatment as the other dashed
+        // relations while keeping their own animation in the unselected state.
+        const hasSelectionFlow = isSelectedLine;
+        const hasDashedSelectionFlow = isDashedRelation || isPendingLine;
+        if(hasSelectionFlow) selectedFlowCount += 1;
         const fx = isHistory ? fr.x + fr.width / 2 : fr.x + fr.width;
         const fy = isHistory ? fr.y + fr.height : fr.y + fr.height / 2;
         const tx = isHistory ? tr.x + tr.width / 2 : tr.x;
@@ -8623,14 +8631,14 @@ function renderConnections(){
             isCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
             isCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
             isDashedRelation ? 'conn-history' : '',
-            isSelectedLine ? 'conn-selected' : '',
-            isSelectedLine && isDashedRelation ? 'conn-selected-dashed' : ''
+            hasSelectionFlow ? 'conn-selected' : '',
+            hasSelectionFlow && hasDashedSelectionFlow ? 'conn-selected-dashed' : ''
         ].filter(Boolean).join(' ');
-        const color = isCascade ? '#16a34a' : isHistory ? 'rgba(100,116,139,0.46)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
-        const opacity = isPendingLine ? '.82' : '1';
-        const width = kind === 'input' ? '1.9' : '1.6';
-        const selectedFlow = isSelectedLine
-            ? `<path class="conn-selection-flow${isDashedRelation ? ' conn-selection-flow-dashed' : ''}" data-conn-flow="${dataIndex}" d="${curve}"${isDashedRelation ? '' : ' pathLength="100"'} fill="none"></path>`
+        const color = isCascade ? '#16a34a' : hasDashedSelectionFlow ? 'rgba(100,116,139,0.46)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
+        const opacity = '1';
+        const width = hasDashedSelectionFlow ? '1.6' : kind === 'input' ? '1.9' : '1.6';
+        const selectedFlow = hasSelectionFlow
+            ? `<path class="conn-selection-flow${hasDashedSelectionFlow ? ' conn-selection-flow-dashed' : ''}" data-conn-flow="${dataIndex}" d="${curve}"${hasDashedSelectionFlow ? '' : ' pathLength="100"'} fill="none"></path>`
             : '';
         // Hovering a line itself is a visual preview only. Do not introduce the
         // midpoint delete control under the pointer, which would steal hover.
@@ -8643,7 +8651,7 @@ function renderConnections(){
     // controls, but avoid running dozens of continuous SVG animations.
     if(selectedFlowCount > 24) reduceMotion = true;
     const selectionDelay = continuousAnimationDelay(1250);
-    const dashedSelectionDelay = continuousAnimationDelay(1250);
+    const dashedSelectionDelay = continuousAnimationDelay(900);
     const dashDelay = continuousAnimationDelay(900);
     return `<svg class="connection-layer ${reduceMotion ? 'conn-reduce-motion' : ''}" style="--connection-selection-delay:${selectionDelay}ms;--connection-dashed-selection-delay:${dashedSelectionDelay}ms;--connection-dash-delay:${dashDelay}ms" width="6000" height="4000" viewBox="0 0 6000 4000" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
 }
@@ -8651,24 +8659,10 @@ function refreshConnectionLayer(){
     connectionLayerRaf = 0;
     const oldSvg = world.querySelector('svg.connection-layer');
     if(!oldSvg) return;
-    // Preserve the exact phase of pixel-based dashed animations when the SVG
-    // is replaced during drag and on the final mouseup refresh.
-    const dashedAnimationTimes = new Map();
-    oldSvg.querySelectorAll('.conn-selection-flow-dashed[data-conn-flow]').forEach(path => {
-        const animation = path.getAnimations?.()[0];
-        if(animation && animation.currentTime != null) dashedAnimationTimes.set(path.dataset.connFlow, animation.currentTime);
-    });
     const tpl = document.createElement('template');
     tpl.innerHTML = renderConnections().trim();
     const nextSvg = tpl.content.firstElementChild;
-    if(nextSvg){
-        oldSvg.replaceWith(nextSvg);
-        nextSvg.querySelectorAll('.conn-selection-flow-dashed[data-conn-flow]').forEach(path => {
-            const currentTime = dashedAnimationTimes.get(path.dataset.connFlow);
-            const animation = path.getAnimations?.()[0];
-            if(animation && currentTime != null) animation.currentTime = currentTime;
-        });
-    }
+    if(nextSvg) oldSvg.replaceWith(nextSvg);
     bindConnectionEvents();
 }
 function scheduleConnectionLayerRefresh(){
@@ -10091,7 +10085,7 @@ function runTimePillHtml(node){
     if(!node || node.runTimerHidden || node.type === 'smart-prompt') return '';
     const running = Boolean(node.pending || node.running || node.jimengPending);
     if(!running && !node.runFinishedAt) return '';
-    const cls = running ? '' : ' done';
+    const cls = running ? '' : node.runFailed ? ' failed' : ' done';
     return `<span class="run-time-pill${cls}" data-run-timer="${escapeHtml(node.id)}">${formatRunDuration(nodeRunElapsedMs(node))}</span>`;
 }
 function hideRunTimerForNode(node){
@@ -10109,7 +10103,9 @@ function refreshRunTimerPills(){
             return;
         }
         el.textContent = formatRunDuration(nodeRunElapsedMs(node));
-        el.classList.toggle('done', Boolean(!node.pending && !node.running && !node.jimengPending && node.runFinishedAt));
+        const finished = Boolean(!node.pending && !node.running && !node.jimengPending && node.runFinishedAt);
+        el.classList.toggle('done', finished && !node.runFailed);
+        el.classList.toggle('failed', finished && node.runFailed === true);
     });
     if(active && !runTimerInterval) runTimerInterval = setInterval(refreshRunTimerPills, 1000);
     if(!active && runTimerInterval){ clearInterval(runTimerInterval); runTimerInterval = null; }
@@ -10375,8 +10371,9 @@ function ensurePortDragPathElement(){
     if(!path){
         path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('class', 'port-drag-temp conn-pending');
-        path.setAttribute('stroke', 'rgba(100,116,139,0.92)');
-        path.setAttribute('stroke-width', '1.9');
+        path.setAttribute('stroke', 'var(--connection-flow)');
+        path.setAttribute('stroke-width', '2.2');
+        path.setAttribute('opacity', '0.9');
         path.setAttribute('fill', 'none');
         path.setAttribute('stroke-linecap', 'round');
         svg.appendChild(path);
@@ -16996,6 +16993,7 @@ function createLoopOutputSlot(rootNode, roundIndex, roundOffset=0, options={}){
     delete output.runInputRefs;
     delete output.runFinishedAt;
     delete output.runElapsedMs;
+    delete output.runFailed;
     // 同 createParallelLoopOutputNode：清空克隆带来的 inputNodeIds，否则输出槽虽只用 flow
     // 连接到 root，却会因继承 root 的 inputNodeIds 而误显示上游提示词输入。
     output.inputNodeIds = [];
@@ -17129,6 +17127,7 @@ function showDirectLoopRoundPreview(loopNode, target, refs, loopIndex, total){
     target.runStartedAt = nowMs();
     delete target.runFinishedAt;
     delete target.runElapsedMs;
+    delete target.runFailed;
     target.runTimerHidden = false;
     target.runInputRefs = cleanRefs.map(ref => ({
         url:ref.url || '',
@@ -17801,6 +17800,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     outputNode.runStartedAt = nowMs();
     delete outputNode.runFinishedAt;
     delete outputNode.runElapsedMs;
+    delete outputNode.runFailed;
     outputNode.runTimerHidden = false;
     rememberRecentSmartSettings(runSettings, requestNode);
     render();
@@ -17885,6 +17885,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         outputSlot.runStartedAt = nowMs();
         delete outputSlot.runFinishedAt;
         delete outputSlot.runElapsedMs;
+        delete outputSlot.runFailed;
         outputSlot.runTimerHidden = false;
         const runPath = smartCascadePathForCtx(ctx);
         if(runPath?.states) {
@@ -18318,6 +18319,7 @@ async function runGeneration(){
         pendingNode.runStartedAt = nowMs();
         delete pendingNode.runFinishedAt;
         delete pendingNode.runElapsedMs;
+        delete pendingNode.runFailed;
         pendingNode.runTimerHidden = false;
         if(!cleanHistoryImages(pendingNode.images || []).length){
             const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs, settings:activeSettings});
@@ -19074,6 +19076,7 @@ function setNodeJimengPending(node, signal){
     if(!node.runStartedAt) node.runStartedAt = node.jimengPending.startedAt;
     delete node.runFinishedAt;
     delete node.runElapsedMs;
+    delete node.runFailed;
     node.runTimerHidden = false;
     render();
     scheduleSave();
@@ -19102,6 +19105,7 @@ function finalizeJimengPending(node, urls, kind='image'){
     node.runFinishedAt = nowMs();
     if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
     node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
+    delete node.runFailed;
     node.runTimerHidden = false;
     render();
     scheduleSave();
@@ -19305,6 +19309,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         node.runFinishedAt = nowMs();
         if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
+        delete node.runFailed;
         node.runTimerHidden = false;
         node.running = false;
         node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : 'Image');
