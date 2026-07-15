@@ -12,10 +12,22 @@ function L(zh, en){ return langIsEn() ? en : zh; }
 function compactLabel(fullZh, compactZh, en){ return window.innerWidth <= 760 ? L(compactZh, en) : L(fullZh, en); }
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
 const LAST_CANVAS_ROUTE_KEY = 'studio_last_canvas_route';
+const RESTORE_TRASH_VIEW = new URLSearchParams(location.search).get('trash') === '1';
 
 // Returning to the list is an intentional destination. Record it so reopening
 // the site does not jump back into an editor the user already left.
 try { localStorage.setItem(LAST_CANVAS_ROUTE_KEY, location.pathname + location.search); } catch(e){}
+
+function rememberCanvasListView({trash=false}={}){
+    try {
+        const url = new URL(location.href);
+        if(trash) url.searchParams.set('trash', '1');
+        else url.searchParams.delete('trash');
+        const route = url.pathname + url.search;
+        history.replaceState({trash}, '', route);
+        localStorage.setItem(LAST_CANVAS_ROUTE_KEY, route);
+    } catch(e){}
+}
 
 function rememberedProjectId(){
     try {
@@ -985,7 +997,8 @@ async function refreshTrashCount(){
         trashBadge.classList.toggle('visible', n > 0);
     } catch(e){}
 }
-async function openTrashView(){
+async function openTrashView({remember=true}={}){
+    if(remember) rememberCanvasListView({trash:true});
     trashEntryBtn.classList.add('active');
     trashPanel.classList.add('active');
     document.querySelector('.ws-main')?.classList.add('trash-mode');
@@ -998,7 +1011,8 @@ async function openTrashView(){
     closeCardMenu(); closeCreateCard();
     await loadTrash();
 }
-function closeTrashView(){
+function closeTrashView({remember=true}={}){
+    if(remember) rememberCanvasListView({trash:false});
     trashEntryBtn.classList.remove('active');
     trashPanel.classList.remove('active');
     document.querySelector('.ws-main')?.classList.remove('trash-mode');
@@ -1150,7 +1164,9 @@ window.addEventListener('message', event => {
 /* ===== Boot ===== */
 window.StudioI18n?.apply?.();
 applyViewport();
-loadAll();
+loadAll().then(() => {
+    if(RESTORE_TRASH_VIEW) openTrashView({remember:false});
+});
 refreshIcons();
 
 /* ===== Storage manager ===== */
