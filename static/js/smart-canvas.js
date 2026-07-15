@@ -3,8 +3,11 @@ let canvasId = params.get('id') || '';
 const sourceProjectId = params.get('project') || '';
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
 const LAST_CANVAS_ROUTE_KEY = 'studio_last_canvas_route';
+function rememberLastSmartCanvasRoute(route=location.pathname + location.search){
+    try { localStorage.setItem(LAST_CANVAS_ROUTE_KEY, route); } catch(e){}
+}
 try {
-    if(canvasId) localStorage.setItem(LAST_CANVAS_ROUTE_KEY, location.pathname + location.search);
+    if(canvasId) rememberLastSmartCanvasRoute();
 } catch(e){}
 const shell = document.getElementById('shell');
 const world = document.getElementById('world');
@@ -2287,7 +2290,9 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
             const finalTarget = pendingSmartCanvasSwitch?.canvasId || nextCanvasId;
             pendingSmartCanvasSwitch = null;
             if(finalTarget === canvasId) return false;
-            window.location.href = smartCanvasUrl(finalTarget);
+            const finalUrl = smartCanvasUrl(finalTarget);
+            rememberLastSmartCanvasRoute(finalUrl);
+            window.location.href = finalUrl;
             return true;
         }
         const loaded = await loadCanvas(nextCanvasId, {switching:true});
@@ -2307,6 +2312,7 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
         if(!superseded){
             if(options.history === false) history.replaceState({canvasId:nextCanvasId}, '', nextUrl);
             else history.pushState({canvasId:nextCanvasId}, '', nextUrl);
+            rememberLastSmartCanvasRoute(nextUrl);
         }
         renderSmartCanvasSwitcher();
         return true;
@@ -8138,11 +8144,12 @@ let initialSmartCanvasRendered = false;
 async function loadCanvas(targetCanvasId=canvasId, options={}){
     const requestedCanvasId = String(targetCanvasId || '');
     if(!requestedCanvasId) return false;
+    minimap?.classList.add('smart-minimap-loading');
     try {
         const res = await fetch(`/api/canvases/${encodeURIComponent(requestedCanvasId)}`);
-        if(!res.ok) return false;
+        if(!res.ok){ minimap?.classList.remove('smart-minimap-loading'); return false; }
         const data = await res.json();
-        if(!data?.canvas) return false;
+        if(!data?.canvas){ minimap?.classList.remove('smart-minimap-loading'); return false; }
         if(options.switching) resetSmartCanvasTransientStateForSwitch();
         smartCanvasLoadGeneration += 1;
         canvasId = requestedCanvasId;
@@ -8189,6 +8196,9 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         world.classList.remove('smart-initial-media-reveal');
         world.classList.add('smart-initial-media-preparing');
         render();
+        // Reveal only after the real nodes and viewport have been rendered, so
+        // the browser never paints the temporary default minimap geometry.
+        minimap?.classList.remove('smart-minimap-loading');
         initialSmartCanvasRendered = true;
         await revealSmartCanvasAfterInitialMedia();
         if(cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
@@ -8198,6 +8208,7 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         return true;
     } catch(e) {
         world.classList.remove('smart-initial-media-preparing');
+        minimap?.classList.remove('smart-minimap-loading');
         toast(tr('smart.toastCanvasFail'));
         return false;
     }
