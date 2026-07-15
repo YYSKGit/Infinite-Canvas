@@ -11330,6 +11330,11 @@ function deleteNode(id){
     nodes.forEach(node => {
         if(isHistoryGroupNode(node) && node.historyFor === id) deleteIds.add(node.id);
     });
+    deleteIds.forEach(nodeId => {
+        const removedNode = nodes.find(node => node.id === nodeId);
+        const removedRefs = (removedNode?.images || []).map((image, imageIndex) => ({...imageForDisplay(image), nodeId, imageIndex}));
+        syncDownstreamRunRefsAfterMediaRemoval(nodeId, removedRefs);
+    });
     nodes = nodes.filter(node => !deleteIds.has(node.id));
     if(canvas) canvas.connections = (canvas.connections || []).filter(c => !deleteIds.has(c.from) && !deleteIds.has(c.to));
     nodes.forEach(node => {
@@ -11351,7 +11356,9 @@ function clearNodeMediaBeforeDelete(id){
     const hadMedia = Boolean((node.images || []).length || node.pending);
     if(!hadMedia) return false;
     pushUndo();
+    const removedRefs = (node.images || []).map((image, imageIndex) => ({...imageForDisplay(image), nodeId:id, imageIndex}));
     node.images = [];
+    syncDownstreamRunRefsAfterMediaRemoval(id, removedRefs);
     node.pending = 0;
     node.running = false;
     node.title = tr('smart.createImportNode');
@@ -11464,7 +11471,11 @@ function deleteImage(id, imageIndex){
     if(!node || imageIndex < 0) return;
     pushUndo();
     const previousGroupLayout = isSmartGroupNode(node) ? smartGroupThumbLayout(node) : null;
+    const removedImage = node.images?.[imageIndex];
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
+    if(removedImage?.url){
+        syncDownstreamRunRefsAfterMediaRemoval(id, [{...imageForDisplay(removedImage), nodeId:id, imageIndex}]);
+    }
     if(!node.images.some(image => image?.url)){
         delete node.originalMediaSource;
     }
@@ -14150,7 +14161,11 @@ async function uploadImageBlobs(blobs){
 function replaceEditedImage(file, extra={}){
     const {node, index} = currentEditImage();
     if(!node || !file) return false;
+    const previousImage = node.images[index];
     node.images[index] = {...(node.images[index] || {}), url:file.url, name:file.name, kind:file.kind || mediaKindForItem(file), natural_w:0, natural_h:0, ...extra};
+    if(previousImage?.url && canonicalSmartMediaUrl(previousImage) !== canonicalSmartMediaUrl(file)){
+        syncDownstreamRunRefsAfterMediaRemoval(node.id, [{...imageForDisplay(previousImage), nodeId:node.id, imageIndex:index}]);
+    }
     if((node.images || []).length === 1){ delete node.w; delete node.h; }
     selectedId = node.id; selectedImage = {nodeId:node.id, index};
     return true;
@@ -15869,6 +15884,47 @@ function clearDetachedRunInputRefs(node){
     delete node.runPromptRefs;
     delete node.sourceNodeId;
 }
+function downstreamNodeIdsForMediaSource(sourceNodeId){
+    if(!sourceNodeId) return new Set();
+    const sources = new Set([sourceNodeId]);
+    const containingGroup = smartGroupContainingNode(sourceNodeId);
+    if(containingGroup) sources.add(containingGroup.id);
+    const downstream = new Set();
+    const queue = [...sources];
+    while(queue.length){
+        const fromId = queue.shift();
+        (canvas?.connections || []).forEach(conn => {
+            if(conn.from !== fromId || !['input','flow'].includes(conn.kind || 'flow') || downstream.has(conn.to)) return;
+            downstream.add(conn.to);
+            queue.push(conn.to);
+        });
+    }
+    sources.forEach(id => downstream.delete(id));
+    return downstream;
+}
+function smartRefMatchesRemovedMedia(ref, removedRef){
+    const refUrl = canonicalSmartMediaUrl(ref);
+    const removedUrl = canonicalSmartMediaUrl(removedRef);
+    if(!refUrl || !removedUrl || refUrl !== removedUrl) return false;
+    if(ref?.nodeId && removedRef?.nodeId && ref.nodeId !== removedRef.nodeId) return false;
+    return true;
+}
+function syncDownstreamRunRefsAfterMediaRemoval(sourceNodeId, removedRefs=[]){
+    const removed = (removedRefs || []).filter(ref => ref?.url);
+    if(!sourceNodeId || !removed.length) return false;
+    let changed = false;
+    const downstreamIds = downstreamNodeIdsForMediaSource(sourceNodeId);
+    nodes.forEach(node => {
+        if(!downstreamIds.has(node.id)) return;
+        if(!Array.isArray(node.runInputRefs) || !node.runInputRefs.length) return;
+        const next = node.runInputRefs.filter(ref => !removed.some(removedRef => smartRefMatchesRemovedMedia(ref, removedRef)));
+        if(next.length === node.runInputRefs.length) return;
+        changed = true;
+        if(next.length) node.runInputRefs = next;
+        else delete node.runInputRefs;
+    });
+    return changed;
+}
 function cleanupDetachedRunInputRefs(){
     if(!canvasUsesConnections) return false;
     let changed = false;
@@ -16148,7 +16204,19 @@ function generationReferenceImagesForRun(node, consume=false, ctx=smartLoopConte
     if(!isSmartImageNode(node) || isHistoryGroupNode(node) || smartImageUsesWorkflowInput(node, ctx)) return defaults;
     if(isGeneratedSmartOutputNode(node)){
         const rawSavedInputs = Array.isArray(node.runInputRefs) ? node.runInputRefs.filter(ref => ref?.url) : [];
-        const savedInputs = cleanSavedRunRefsForNode(node, rawSavedInputs, {dropGeneratedOutputs:true});
+        // Saved inputs preserve an uploaded self-reference after this node's output
+        // replaces it. References owned by another node are valid only while that
+        // exact media URL is still present on the live upstream line. Without this
+        // guard, deleting/replacing an upstream image combines its stale snapshot
+        // with the newly uploaded image and sends both to the backend.
+        const liveUpstreamUrls = new Set(upstreamLineNodeIds(node)
+            .filter(nodeId => nodeId !== node.id)
+            .flatMap(nodeId => imagesForNode(nodes.find(candidate => candidate.id === nodeId)))
+            .map(ref => canonicalSmartMediaUrl(ref))
+            .filter(Boolean));
+        const liveSavedInputs = rawSavedInputs
+            .filter(ref => !ref.nodeId || ref.nodeId === node.id || liveUpstreamUrls.has(canonicalSmartMediaUrl(ref)));
+        const savedInputs = cleanSavedRunRefsForNode(node, liveSavedInputs, {dropGeneratedOutputs:true});
         const filteredDefaults = cleanSavedRunRefsForNode(node, defaults);
         return uniqueReferenceImages([...filteredDefaults, ...savedInputs]);
     }
