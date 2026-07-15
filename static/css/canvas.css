@@ -186,7 +186,7 @@ body.studio-theme-dark .canvas-meta-pop .emoji-option:hover { background:#263449
 @media (max-width: 900px) {
     .toolbar { max-width:calc(100vw - 48px); }
 }
-.board { position:absolute; inset:0; cursor:grab; background-color:var(--page); background-image:radial-gradient(var(--grid) 1px, transparent 1px); background-size:24px 24px; }
+.board { position:absolute; inset:0; cursor:grab; background-color:var(--page); background-image:linear-gradient(var(--canvas-major-grid-color, transparent) 1px, transparent 1px), linear-gradient(90deg, var(--canvas-major-grid-color, transparent) 1px, transparent 1px), radial-gradient(circle at var(--canvas-grid-dot-radius, .75px) var(--canvas-grid-dot-radius, .75px), var(--canvas-grid-color, var(--grid)) var(--canvas-grid-dot-radius, .75px), transparent calc(var(--canvas-grid-dot-radius, .75px) + .01px)); background-size:120px 120px, 120px 120px, 24px 24px; }
 .shell.zoom-preview .board,
 body.canvas-zoom-preview .node { cursor:crosshair !important; }
 body.canvas-knife .board,

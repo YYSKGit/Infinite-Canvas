@@ -13,7 +13,7 @@
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
 button,input,select,textarea { font:inherit; }
 button { border:0; cursor:pointer; }
-.shell { position:relative; width:100vw; height:100vh; overflow:hidden; background-color:var(--page); background-image:radial-gradient(var(--grid) 1px, transparent 1px); background-size:24px 24px; cursor:grab; }
+.shell { position:relative; width:100vw; height:100vh; overflow:hidden; background-color:var(--page); background-image:linear-gradient(var(--canvas-major-grid-color, transparent) 1px, transparent 1px), linear-gradient(90deg, var(--canvas-major-grid-color, transparent) 1px, transparent 1px), radial-gradient(circle at var(--canvas-grid-dot-radius, .75px) var(--canvas-grid-dot-radius, .75px), var(--canvas-grid-color, var(--grid)) var(--canvas-grid-dot-radius, .75px), transparent calc(var(--canvas-grid-dot-radius, .75px) + .01px)); background-size:120px 120px, 120px 120px, 24px 24px; cursor:grab; }
 html[data-studio-scale="off"].studio-scale-managed .smart-back,
 html[data-studio-scale="off"].studio-scale-managed .smart-canvas-switcher,
 html[data-studio-scale="off"].studio-scale-managed .smart-title,

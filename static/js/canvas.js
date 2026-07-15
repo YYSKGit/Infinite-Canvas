@@ -1147,8 +1147,33 @@ function screenToWorld(clientX, clientY){
     const rect = board.getBoundingClientRect();
     return { x:(clientX - rect.left - viewport.x) / viewport.scale, y:(clientY - rect.top - viewport.y) / viewport.scale };
 }
+function canvasGridFade(scale){
+    const progress = Math.max(0, Math.min(1, (scale - 0.20) / 0.55));
+    return progress * progress * (3 - 2 * progress);
+}
+function canvasGridPixelMetrics(){
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const snap = value => Math.round(value * dpr) / dpr;
+    return {dpr, snap, dotRadius:Math.max(0.5, 1 / dpr)};
+}
+function canvasMajorGridSize(scale, grid){
+    let worldSize = 120;
+    for(let i = 0; i < 20 && worldSize * scale < 48; i++) worldSize *= 2;
+    return Math.max(1 / grid.dpr, grid.snap(worldSize * scale));
+}
 function applyViewport(){
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
+    const grid = canvasGridPixelMetrics();
+    const majorSize = canvasMajorGridSize(viewport.scale, grid);
+    const gridSize = Math.max(1 / grid.dpr, grid.snap(24 * viewport.scale));
+    const gridX = grid.snap(viewport.x);
+    const gridY = grid.snap(viewport.y);
+    board.style.backgroundSize = `${majorSize}px ${majorSize}px, ${majorSize}px ${majorSize}px, ${gridSize}px ${gridSize}px`;
+    board.style.backgroundPosition = `${gridX}px ${gridY}px, ${gridX}px ${gridY}px, ${gridX}px ${gridY}px`;
+    board.style.setProperty('--canvas-grid-dot-radius', `${grid.dotRadius}px`);
+    const fineGridFade = canvasGridFade(viewport.scale);
+    board.style.setProperty('--canvas-grid-color', `color-mix(in srgb, var(--grid) ${fineGridFade * 100}%, transparent)`);
+    board.style.setProperty('--canvas-major-grid-color', `color-mix(in srgb, var(--grid) ${(1 - fineGridFade) * 30}%, transparent)`);
     scheduleMinimapRender();
 }
 function estimatedNodeRect(n){

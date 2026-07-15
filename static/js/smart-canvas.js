@@ -3352,6 +3352,20 @@ function arrangeSelectedSmartNodes(){
     scheduleSave();
     toast('已整理选中节点');
 }
+function canvasGridFade(scale){
+    const progress = Math.max(0, Math.min(1, (scale - 0.20) / 0.55));
+    return progress * progress * (3 - 2 * progress);
+}
+function canvasGridPixelMetrics(){
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const snap = value => Math.round(value * dpr) / dpr;
+    return {dpr, snap, dotRadius:Math.max(0.5, 1 / dpr)};
+}
+function canvasMajorGridSize(scale, grid){
+    let worldSize = 120;
+    for(let i = 0; i < 20 && worldSize * scale < 48; i++) worldSize *= 2;
+    return Math.max(1 / grid.dpr, grid.snap(worldSize * scale));
+}
 function applyViewport(){
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
     world.style.setProperty('--canvas-counter-scale', String(1 / viewport.scale));
@@ -3363,8 +3377,17 @@ function applyViewport(){
     // 缩小时位图被降采样 → 组件发虚。缩放态下关闭这些 backdrop-filter（底色本身已接近不透明，
     // 观感几乎无差），让卡片随矢量重新栅格化，保持清晰。
     world.classList.toggle('canvas-scaled', Math.abs(viewport.scale - 1) > 0.001);
-    shell.style.backgroundSize = '24px 24px';
-    shell.style.backgroundPosition = '0 0';
+    const grid = canvasGridPixelMetrics();
+    const majorSize = canvasMajorGridSize(viewport.scale, grid);
+    const gridSize = Math.max(1 / grid.dpr, grid.snap(24 * viewport.scale));
+    const gridX = grid.snap(viewport.x);
+    const gridY = grid.snap(viewport.y);
+    shell.style.backgroundSize = `${majorSize}px ${majorSize}px, ${majorSize}px ${majorSize}px, ${gridSize}px ${gridSize}px`;
+    shell.style.backgroundPosition = `${gridX}px ${gridY}px, ${gridX}px ${gridY}px, ${gridX}px ${gridY}px`;
+    shell.style.setProperty('--canvas-grid-dot-radius', `${grid.dotRadius}px`);
+    const fineGridFade = canvasGridFade(viewport.scale);
+    shell.style.setProperty('--canvas-grid-color', `color-mix(in srgb, var(--grid) ${fineGridFade * 100}%, transparent)`);
+    shell.style.setProperty('--canvas-major-grid-color', `color-mix(in srgb, var(--grid) ${(1 - fineGridFade) * 30}%, transparent)`);
     renderMinimap();
 }
 function screenToWorld(event){
