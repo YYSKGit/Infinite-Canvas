@@ -1,4 +1,6 @@
 /__pycache__/
+/.vscode/tasks.json
+/.vscode/deploy-webhook.ps1
 /API/
 /assets/
 /data/
