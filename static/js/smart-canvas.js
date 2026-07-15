@@ -4399,6 +4399,12 @@ function renderVeniceImageQuoteAmount(unitQuote){
         `${unitQuote} 积分/张 × ${count} = ${creditsText} 积分 ≈ $${totalUsd.toFixed(2)} × 7${veniceQuoteRemainingShareText(totalQuote)}`
     );
 }
+function veniceImageQuoteHasReferenceImage(subject){
+    if(!subject) return false;
+    const defaultRefs = generationReferenceImagesForRun(subject, false, smartLoopContext);
+    const request = buildPromptRequest(subject, defaultRefs, false, smartLoopContext);
+    return imageRefsOnly(request.refs).length > 0;
+}
 function syncVeniceImageQuote(){
     const active = settings.engine === 'api'
         && settings.apiKind !== 'video'
@@ -4407,17 +4413,18 @@ function syncVeniceImageQuote(){
         hideVeniceImageQuote();
         return;
     }
+    const subject = activeSettingsSubject() || activeComposerNode();
     const payload = {
         provider_id:String(settings.provider_id || 'venice'),
         model:String(settings.model || ''),
-        resolution:veniceImageQuoteResolution()
+        resolution:veniceImageQuoteResolution(),
+        has_reference_image:veniceImageQuoteHasReferenceImage(subject)
     };
     if(!payload.model){
         setVeniceImageQuoteStatus('error', '暂无报价');
         return;
     }
     const signature = JSON.stringify(payload);
-    const subject = activeSettingsSubject() || activeComposerNode();
     const subjectId = String(subject?.id || 'unbound');
     const activeKey = `${subjectId}:${signature}`;
     const cached = subject?.veniceImageQuoteCache?.signature === signature
@@ -14680,6 +14687,7 @@ function renderInputThumbsRow(node){
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
+    syncVeniceImageQuote();
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const addActive = mentionInsertMode === 'manual-ref';
     // 仅当参考图集合/状态真正变化时才重建缩略图 DOM。否则每敲一个字都重建并重新解码所有图片，

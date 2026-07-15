@@ -2543,6 +2543,7 @@ class VeniceImageQuoteRequest(BaseModel):
     provider_id: str = "venice"
     model: str = "grok-imagine-image-quality"
     resolution: str = "1K"
+    has_reference_image: bool = False
 
 class TempShUploadRequest(BaseModel):
     url: str = ""
@@ -8562,6 +8563,12 @@ VENICE_IMAGE_EDIT_MODEL_ALIASES = {
     "seedream-v5-lite": "seedream-v5-lite-edit",
     "seedream-v4": "seedream-v4-edit"
 }
+VENICE_FREE_IMAGE_MODELS = frozenset({
+    "chroma",
+    "firered-image-edit",
+    "z-image-turbo",
+    "qwen-edit-uncensored",
+})
 VENICE_FACE_CONSENT_MODELS = ("seedance-2-0", "seedance2.0", "sd2.0")
 VENICE_VIDEO_ALLOWED_ASPECTS = ("21:9", "16:9", "4:3", "1:1", "3:4", "9:16")
 VENICE_SEEDANCE_FACE_CONSENT = {
@@ -13673,8 +13680,22 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
     provider = get_api_provider(payload.provider_id)
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
-    model = selected_model(payload.model, "grok-imagine-image-quality")
+    requested_model = selected_model(payload.model, "grok-imagine-image-quality")
+    model = venice_image_edit_model(requested_model) if payload.has_reference_image else requested_model
+    if not model:
+        raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {requested_model} 没有对应的编辑模型。")
     resolution = venice_size_resolution(payload.resolution)
+    if str(model).strip().lower().replace("_", "-") in VENICE_FREE_IMAGE_MODELS:
+        return {
+            "provider_id": str(provider.get("id") or payload.provider_id),
+            "model": model,
+            "requested_model": requested_model,
+            "is_edit": bool(payload.has_reference_image),
+            "resolution": resolution,
+            "quote": 0,
+            "usd": 0,
+            "cny": 0,
+        }
     body = {
         "variants": [{
             "modelId": model,
@@ -13705,6 +13726,8 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
     return {
         "provider_id": str(provider.get("id") or payload.provider_id),
         "model": model,
+        "requested_model": requested_model,
+        "is_edit": bool(payload.has_reference_image),
         "resolution": resolution,
         "quote": quote,
         "usd": round(quote / 100, 4),
