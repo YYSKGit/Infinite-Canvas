@@ -17,6 +17,21 @@ const smartCanvasSwitcherBtn = document.getElementById('smartCanvasSwitcherBtn')
 const smartCanvasSwitcherMenu = document.getElementById('smartCanvasSwitcherMenu');
 const smartCanvasSwitcherList = document.getElementById('smartCanvasSwitcherList');
 const smartCanvasSwitcherLabel = document.getElementById('smartCanvasSwitcherLabel');
+function cachedSmartCanvasTitle(id){
+    if(!id) return '';
+    try { return localStorage.getItem(`smart_canvas_title:${id}`) || ''; } catch(e){ return ''; }
+}
+function setSmartCanvasTitle(title, id=canvasId){
+    const next = String(title || '').trim() || '智能画布';
+    if(smartCanvasSwitcherLabel) smartCanvasSwitcherLabel.textContent = next;
+    if(id){
+        try { localStorage.setItem(`smart_canvas_title:${id}`, next); } catch(e){}
+    }
+}
+// Restore before any initialization requests start, avoiding the delayed title
+// caused by waiting for config, assets and the full canvas payload.
+const initialCachedSmartCanvasTitle = cachedSmartCanvasTitle(canvasId);
+if(initialCachedSmartCanvasTitle) setSmartCanvasTitle(initialCachedSmartCanvasTitle, canvasId);
 const promptInput = document.getElementById('promptInput');
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
@@ -2254,6 +2269,8 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
     }
     smartCanvasSwitchInFlight = true;
     setSmartCanvasSwitcherOpen(false);
+    const nextTitle = smartCanvasSwitcherItems?.find(item => item.id === nextCanvasId)?.title || cachedSmartCanvasTitle(nextCanvasId);
+    if(nextTitle) setSmartCanvasTitle(nextTitle, nextCanvasId);
     const previousCanvasId = canvasId;
     const previousUrl = smartCanvasUrl(previousCanvasId);
     try {
@@ -8135,7 +8152,7 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         document.title = canvas.title || tr('canvas.smartCanvas');
         const titleEl = document.getElementById('smartTitle');
         if(titleEl) titleEl.textContent = canvas.title || tr('canvas.smartCanvas');
-        if(smartCanvasSwitcherLabel) smartCanvasSwitcherLabel.textContent = canvas.title || tr('canvas.smartCanvas');
+        setSmartCanvasTitle(canvas.title || tr('canvas.smartCanvas'), requestedCanvasId);
         nodes = (Array.isArray(canvas.nodes) ? canvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
         migrateSmartGroupImageMembers();
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];

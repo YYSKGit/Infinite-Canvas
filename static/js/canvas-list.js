@@ -549,6 +549,11 @@ function openCanvas(c){
     const enc = encodeURIComponent(c.id);
     const project = encodeURIComponent(c.project || currentProjectId || 'default');
     rememberProjectId(c.project || currentProjectId || 'default');
+    // Give the smart-canvas header a synchronous title on the next page load.
+    // The editor will refresh this cache from the API, so renames remain correct.
+    if(c.kind === 'smart'){
+        try { localStorage.setItem(`smart_canvas_title:${c.id}`, c.title || '智能画布'); } catch(e){}
+    }
     window.location.href = (c.kind === 'smart')
         ? `/static/smart-canvas.html?id=${enc}&project=${project}&v=2026.07.03.4`
         : `/static/canvas.html?id=${enc}&project=${project}&v=2026.07.03.4`;
