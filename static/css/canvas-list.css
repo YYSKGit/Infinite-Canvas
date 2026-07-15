@@ -40,6 +40,7 @@
 .ws-board-name[aria-expanded="true"]::after { margin-top:5px; margin-bottom:0; transform:rotate(225deg); }
 .ws-board-name.trash-context::after { display:none; }
 .ws-board-name.trash-context::before { display:none; }
+.ws-board-name.trash-context { padding-right:14px; }
 .ws-context-icon { width:18px; height:18px; flex:0 0 18px; color:var(--muted); stroke-width:2; }
 .ws-back-icon { margin-right:-3px; }
 .ws-main.trash-mode .ws-topbar-right { display:none !important; }

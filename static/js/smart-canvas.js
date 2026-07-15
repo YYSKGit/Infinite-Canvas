@@ -8143,13 +8143,13 @@ async function revealSmartCanvasAfterInitialMedia(){
 let initialSmartCanvasRendered = false;
 async function loadCanvas(targetCanvasId=canvasId, options={}){
     const requestedCanvasId = String(targetCanvasId || '');
-    if(!requestedCanvasId) return false;
+    if(!requestedCanvasId){ shell.classList.remove('smart-grid-loading'); return false; }
     minimap?.classList.add('smart-minimap-loading');
     try {
         const res = await fetch(`/api/canvases/${encodeURIComponent(requestedCanvasId)}`);
-        if(!res.ok){ minimap?.classList.remove('smart-minimap-loading'); return false; }
+        if(!res.ok){ shell.classList.remove('smart-grid-loading'); minimap?.classList.remove('smart-minimap-loading'); return false; }
         const data = await res.json();
-        if(!data?.canvas){ minimap?.classList.remove('smart-minimap-loading'); return false; }
+        if(!data?.canvas){ shell.classList.remove('smart-grid-loading'); minimap?.classList.remove('smart-minimap-loading'); return false; }
         if(options.switching) resetSmartCanvasTransientStateForSwitch();
         smartCanvasLoadGeneration += 1;
         canvasId = requestedCanvasId;
@@ -8193,6 +8193,10 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         if(settings.comfy_params && !settings.comfyParams) settings.comfyParams = settings.comfy_params;
         updateProviderModels();
         applyViewport();
+        // CSS initially suppresses the default 1x dot grid. At this point the
+        // saved viewport has set the correct dot/grid blend and spacing, so the
+        // first painted background already matches the actual canvas zoom.
+        shell.classList.remove('smart-grid-loading');
         world.classList.remove('smart-initial-media-reveal');
         world.classList.add('smart-initial-media-preparing');
         render();
@@ -8207,6 +8211,7 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         startCanvasMetaPoll();
         return true;
     } catch(e) {
+        shell.classList.remove('smart-grid-loading');
         world.classList.remove('smart-initial-media-preparing');
         minimap?.classList.remove('smart-minimap-loading');
         toast(tr('smart.toastCanvasFail'));
