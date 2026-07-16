@@ -6249,13 +6249,26 @@ function bindDynamicParams(){
         }
     }));
 }
-async function loadConfig(){
+const smartConfigActivePointers = new Set();
+const smartConfigPointerIdleWaiters = new Set();
+let smartConfigRefreshAfterPointer = false;
+function waitForSmartConfigPointerIdle(){
+    if(!smartConfigActivePointers.size) return Promise.resolve();
+    return new Promise(resolve => smartConfigPointerIdleWaiters.add(resolve));
+}
+function releaseSmartConfigPointerIdleWaiters(){
+    if(smartConfigActivePointers.size) return;
+    smartConfigPointerIdleWaiters.forEach(resolve => resolve());
+    smartConfigPointerIdleWaiters.clear();
+}
+async function loadConfig(options={}){
     try {
         const cfg = await fetch('/api/config').then(r => r.json());
         apiProviders = Array.isArray(cfg.api_providers) ? cfg.api_providers : [];
         comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
+        if(options.waitForPointerIdle) await waitForSmartConfigPointerIdle();
         updateProviderModels();
         const wf = await fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}));
         comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
@@ -6267,6 +6280,7 @@ async function loadConfig(){
         }));
         lastConfigRefreshAt = Date.now();
         sanitizeSmartApiSelection(settings);
+        if(options.waitForPointerIdle) await waitForSmartConfigPointerIdle();
         updateProviderModels();
         scheduleVeniceCreditsRefresh('', 80);
     } catch(e) {
@@ -6275,7 +6289,8 @@ async function loadConfig(){
     }
 }
 async function refreshSmartConfigFromSettings(){
-    await loadConfig();
+    await loadConfig({waitForPointerIdle:true});
+    await waitForSmartConfigPointerIdle();
     renderDynamicParams();
     const node = selectedNode();
     if(node?.type === 'smart-prompt') {
@@ -20639,6 +20654,8 @@ window.addEventListener('keyup', e => {
 window.addEventListener('blur', () => {
     isRKeyDown = false;
     setHoveredConnectionKey('');
+    smartConfigActivePointers.clear();
+    releaseSmartConfigPointerIdleWaiters();
 });
 shell.addEventListener('mouseleave', () => setHoveredConnectionKey(''));
 if(engineSelect){
@@ -21658,8 +21675,34 @@ try {
         if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
     };
 } catch(e) {}
+// Re-entering this iframe focuses it on the first pointer press.  Refreshing
+// config immediately from that focus event can rebuild dynamicParams between
+// pointerdown and click, detaching the model option that the user pressed.  In
+// that case the popover closes but the option's click handler never runs.
+// Queue focus-driven refreshes until the complete pointer/click gesture ends.
+function flushSmartConfigRefreshAfterPointer(){
+    if(!smartConfigRefreshAfterPointer || smartConfigActivePointers.size) return;
+    smartConfigRefreshAfterPointer = false;
+    refreshSmartConfigFromSettings();
+}
+function queueSmartConfigRefreshAfterPointer(){
+    smartConfigRefreshAfterPointer = true;
+    window.setTimeout(flushSmartConfigRefreshAfterPointer, 0);
+}
+document.addEventListener('pointerdown', event => {
+    smartConfigActivePointers.add(event.pointerId);
+}, true);
+function finishSmartConfigPointer(event){
+    smartConfigActivePointers.delete(event.pointerId);
+    releaseSmartConfigPointerIdleWaiters();
+    // click is dispatched after pointerup; a new task guarantees that the
+    // selected option has persisted before any refresh replaces its DOM.
+    window.setTimeout(flushSmartConfigRefreshAfterPointer, 0);
+}
+window.addEventListener('pointerup', finishSmartConfigPointer, true);
+window.addEventListener('pointercancel', finishSmartConfigPointer, true);
 window.addEventListener('focus', () => {
-    if(Date.now() - lastConfigRefreshAt > 1200) refreshSmartConfigFromSettings();
+    if(Date.now() - lastConfigRefreshAt > 1200) queueSmartConfigRefreshAfterPointer();
 });
 window.addEventListener('message', event => {
     if(event.origin && event.origin !== location.origin) return;

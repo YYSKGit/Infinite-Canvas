@@ -379,7 +379,10 @@
             align-items: center;
             padding: 0 0 6px;
             overscroll-behavior: contain;
-            scrollbar-gutter: stable;
+            /* Reserve equal space on both sides.  A one-sided stable gutter
+               shifts every collapsed nav button left even when no scrollbar
+               is visible, while the logo and footer controls stay centered. */
+            scrollbar-gutter: stable both-edges;
             -webkit-overflow-scrolling: touch;
             scrollbar-width: thin;
             scrollbar-color: rgba(148, 163, 184, .34) transparent;
