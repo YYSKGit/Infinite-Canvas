@@ -258,6 +258,21 @@ const undoStack = [];
 const redoStack = [];
 let undoSuppressed = false;
 let pendingUndoSnapshot = null;
+const SMART_UNDO_HISTORY_DB = 'infinite-canvas-smart-history';
+const SMART_UNDO_HISTORY_STORE = 'canvas-histories';
+const SMART_UNDO_HISTORY_SCHEMA = 1;
+const SMART_UNDO_HISTORY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SMART_UNDO_HISTORY_MAX_BYTES = 20 * 1024 * 1024;
+const SMART_UNDO_HISTORY_IGNORED_KEYS = new Set([
+    'running', 'pending', 'queued', 'jimengPending', 'pendingTasks', '_runMetaTargetId',
+    '_undoPreRunBox',
+    'runStartedAt', 'runFinishedAt', 'runElapsedMs', 'runFailed', 'runTimerHidden',
+    '_naturalSizeLoading', '_inlineVideoActive', '_dom', 'veniceImageQuoteCache',
+    'cloudUrl', 'uploadedUrl', 'originalRemoteUrl', 'tempCloudUrl'
+]);
+let smartUndoHistoryDbPromise = null;
+let smartUndoHistoryPersistTimer = null;
+let smartUndoHistoryWriteChain = Promise.resolve();
 let runningHubWorkflowCache = {};
 function activeSmartCascadeCount(){ return smartCascadeRuns.size; }
 function smartCascadeRunForLoop(loopId){ return loopId ? smartCascadeRuns.get(loopId) || null : null; }
@@ -284,17 +299,181 @@ function smartCascadePathForCtx(ctx=null){
     return ctx?.runState?.runPath || ctx?.runPath || smartCascadeRunPath;
 }
 function capturePendingUndo(){ pendingUndoSnapshot = snapshotForUndo(); }
+function sameSmartUndoSnapshot(a, b){
+    return Boolean(a && b && stableSmartUndoJson(a) === stableSmartUndoJson(b));
+}
+function appendUndoSnapshot(snapshot){
+    if(!snapshot) return false;
+    redoStack.length = 0;
+    if(sameSmartUndoSnapshot(undoStack[undoStack.length - 1], snapshot)) return false;
+    undoStack.push(snapshot);
+    if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+    return true;
+}
 function commitPendingUndo(){
     if(pendingUndoSnapshot){
-        redoStack.length = 0;
-        undoStack.push(pendingUndoSnapshot);
-        if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+        appendUndoSnapshot(pendingUndoSnapshot);
         pendingUndoSnapshot = null;
     }
 }
 function discardPendingUndo(){ pendingUndoSnapshot = null; }
 function nodesForUndoSnapshot(list=nodes){
     return JSON.parse(JSON.stringify(list || [])).map(node => clearSmartNodeTransientRunState(node));
+}
+function stableSmartUndoJson(value){
+    if(value === null || typeof value !== 'object') return JSON.stringify(value);
+    if(Array.isArray(value)) return `[${value.map(item => stableSmartUndoJson(item === undefined ? null : item)).join(',')}]`;
+    const entries = Object.keys(value)
+        .filter(key => value[key] !== undefined && !SMART_UNDO_HISTORY_IGNORED_KEYS.has(key))
+        .sort()
+        .map(key => `${JSON.stringify(key)}:${stableSmartUndoJson(value[key])}`);
+    return `{${entries.join(',')}}`;
+}
+function smartUndoHistoryBaseline(){
+    return stableSmartUndoJson({
+        nodes:nodesForUndoSnapshot(),
+        connections:JSON.parse(JSON.stringify(canvas?.connections || []))
+    });
+}
+function openSmartUndoHistoryDb(){
+    if(!window.indexedDB) return Promise.reject(new Error('IndexedDB unavailable'));
+    if(smartUndoHistoryDbPromise) return smartUndoHistoryDbPromise;
+    smartUndoHistoryDbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(SMART_UNDO_HISTORY_DB, 1);
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            if(!db.objectStoreNames.contains(SMART_UNDO_HISTORY_STORE)) db.createObjectStore(SMART_UNDO_HISTORY_STORE, {keyPath:'canvasId'});
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('Failed to open undo history'));
+        request.onblocked = () => reject(new Error('Undo history database is blocked'));
+    }).catch(error => {
+        smartUndoHistoryDbPromise = null;
+        throw error;
+    });
+    return smartUndoHistoryDbPromise;
+}
+async function smartUndoHistoryRecord(canvasKey){
+    const db = await openSmartUndoHistoryDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(SMART_UNDO_HISTORY_STORE, 'readonly');
+        const request = tx.objectStore(SMART_UNDO_HISTORY_STORE).get(canvasKey);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error || new Error('Failed to read undo history'));
+    });
+}
+async function putSmartUndoHistoryRecord(record){
+    const db = await openSmartUndoHistoryDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(SMART_UNDO_HISTORY_STORE, 'readwrite');
+        tx.objectStore(SMART_UNDO_HISTORY_STORE).put(record);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error || new Error('Failed to save undo history'));
+        tx.onabort = () => reject(tx.error || new Error('Undo history save aborted'));
+    });
+}
+async function deleteSmartUndoHistoryRecord(canvasKey){
+    if(!canvasKey) return;
+    const db = await openSmartUndoHistoryDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(SMART_UNDO_HISTORY_STORE, 'readwrite');
+        tx.objectStore(SMART_UNDO_HISTORY_STORE).delete(canvasKey);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error || new Error('Failed to delete undo history'));
+        tx.onabort = () => reject(tx.error || new Error('Undo history delete aborted'));
+    });
+}
+function queueSmartUndoHistoryWrite(operation){
+    const queued = smartUndoHistoryWriteChain.catch(() => {}).then(operation);
+    smartUndoHistoryWriteChain = queued.catch(() => {});
+    return queued;
+}
+function normalizedStoredUndoSnapshot(snapshot){
+    if(!snapshot || !Array.isArray(snapshot.nodes) || !Array.isArray(snapshot.connections)) return null;
+    const restoredNodes = nodesForUndoSnapshot(snapshot.nodes).map(normalizeLegacySmartNode).filter(Boolean);
+    return {
+        nodes:restoredNodes,
+        connections:JSON.parse(JSON.stringify(snapshot.connections || [])),
+        selectedId:String(snapshot.selectedId || ''),
+        selectedIds:Array.isArray(snapshot.selectedIds) ? snapshot.selectedIds.map(String) : [],
+        selectedImage:{
+            nodeId:String(snapshot.selectedImage?.nodeId || ''),
+            index:Number.isFinite(Number(snapshot.selectedImage?.index)) ? Number(snapshot.selectedImage.index) : -1
+        }
+    };
+}
+function historyStacksForStorage(){
+    const storedUndo = undoStack.slice(-UNDO_LIMIT).map(normalizedStoredUndoSnapshot).filter(Boolean);
+    const storedRedo = redoStack.slice(-UNDO_LIMIT).map(normalizedStoredUndoSnapshot).filter(Boolean);
+    let estimatedBytes = JSON.stringify([storedUndo, storedRedo]).length * 2;
+    while(estimatedBytes > SMART_UNDO_HISTORY_MAX_BYTES && (storedUndo.length || storedRedo.length)){
+        if(storedUndo.length >= storedRedo.length && storedUndo.length) storedUndo.shift();
+        else if(storedRedo.length) storedRedo.shift();
+        estimatedBytes = JSON.stringify([storedUndo, storedRedo]).length * 2;
+    }
+    return {undo:storedUndo, redo:storedRedo};
+}
+function persistSmartUndoHistoryNow(targetCanvasId=canvasId){
+    clearTimeout(smartUndoHistoryPersistTimer);
+    smartUndoHistoryPersistTimer = null;
+    const canvasKey = String(targetCanvasId || '');
+    if(!canvasKey || canvasKey !== canvasId || !canvas) return Promise.resolve(false);
+    const stacks = historyStacksForStorage();
+    if(!stacks.undo.length && !stacks.redo.length){
+        return queueSmartUndoHistoryWrite(() => deleteSmartUndoHistoryRecord(canvasKey)).catch(() => false);
+    }
+    const record = {
+        canvasId:canvasKey,
+        schema:SMART_UNDO_HISTORY_SCHEMA,
+        savedAt:Date.now(),
+        baseline:smartUndoHistoryBaseline(),
+        undoStack:stacks.undo,
+        redoStack:stacks.redo
+    };
+    return queueSmartUndoHistoryWrite(() => putSmartUndoHistoryRecord(record)).then(() => true).catch(() => false);
+}
+function scheduleSmartUndoHistoryPersist(delay=700){
+    clearTimeout(smartUndoHistoryPersistTimer);
+    const scheduledCanvasId = canvasId;
+    smartUndoHistoryPersistTimer = setTimeout(() => {
+        smartUndoHistoryPersistTimer = null;
+        if(scheduledCanvasId === canvasId) persistSmartUndoHistoryNow(scheduledCanvasId);
+    }, delay);
+}
+function removeStoredSmartUndoHistory(targetCanvasId=canvasId){
+    const canvasKey = String(targetCanvasId || '');
+    if(!canvasKey) return Promise.resolve(false);
+    return queueSmartUndoHistoryWrite(() => deleteSmartUndoHistoryRecord(canvasKey)).then(() => true).catch(() => false);
+}
+function clearSmartUndoHistory(options={}){
+    clearTimeout(smartUndoHistoryPersistTimer);
+    smartUndoHistoryPersistTimer = null;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    pendingUndoSnapshot = null;
+    return options.removeStored ? removeStoredSmartUndoHistory(options.canvasId || canvasId) : Promise.resolve(true);
+}
+async function restoreSmartUndoHistory(targetCanvasId=canvasId){
+    const canvasKey = String(targetCanvasId || '');
+    if(!canvasKey || canvasKey !== canvasId || !canvas) return false;
+    await smartUndoHistoryWriteChain.catch(() => {});
+    try {
+        const record = await smartUndoHistoryRecord(canvasKey);
+        if(!record) return false;
+        const expired = !Number(record.savedAt) || Date.now() - Number(record.savedAt) > SMART_UNDO_HISTORY_TTL_MS;
+        if(record.schema !== SMART_UNDO_HISTORY_SCHEMA || expired || record.baseline !== smartUndoHistoryBaseline()){
+            await clearSmartUndoHistory({removeStored:true, canvasId:canvasKey});
+            return false;
+        }
+        const restoredUndo = (record.undoStack || []).slice(-UNDO_LIMIT).map(normalizedStoredUndoSnapshot).filter(Boolean);
+        const restoredRedo = (record.redoStack || []).slice(-UNDO_LIMIT).map(normalizedStoredUndoSnapshot).filter(Boolean);
+        undoStack.splice(0, undoStack.length, ...restoredUndo);
+        redoStack.splice(0, redoStack.length, ...restoredRedo);
+        pendingUndoSnapshot = null;
+        return Boolean(restoredUndo.length || restoredRedo.length);
+    } catch(e) {
+        return false;
+    }
 }
 function nodeHasLiveRunState(node){
     return Boolean(node && (node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
@@ -316,7 +495,8 @@ function restoreNodesPreservingLiveRuns(snapshotNodes){
             runFinishedAt:liveNode.runFinishedAt,
             runElapsedMs:liveNode.runElapsedMs,
             runFailed:liveNode.runFailed,
-            runTimerHidden:liveNode.runTimerHidden
+            runTimerHidden:liveNode.runTimerHidden,
+            _undoPreRunBox:liveNode._undoPreRunBox
         };
         // Keep the object identity used by the active async task, while applying
         // the undoable content from the snapshot around its live run state.
@@ -342,9 +522,7 @@ function snapshotForUndo(){
 function pushUndo(){
     if(undoSuppressed) return;
     if(!canvas) return;
-    redoStack.length = 0;
-    undoStack.push(snapshotForUndo());
-    if(undoStack.length > UNDO_LIMIT) undoStack.shift();
+    appendUndoSnapshot(snapshotForUndo());
 }
 function restoreUndoSnapshot(snap){
     if(!snap) return;
@@ -1805,6 +1983,14 @@ function smartWorkflowFilename(ext='json'){
 }
 function clearSmartNodeTransientRunState(node, options={}){
     if(!node) return node;
+    const undoBox = node._undoPreRunBox;
+    if(undoBox && typeof undoBox === 'object'){
+        if(undoBox.hasW) node.w = undoBox.w;
+        else delete node.w;
+        if(undoBox.hasH) node.h = undoBox.h;
+        else delete node.h;
+    }
+    delete node._undoPreRunBox;
     node.running = false;
     node.pending = 0;
     node.queued = false;
@@ -1819,6 +2005,26 @@ function clearSmartNodeTransientRunState(node, options={}){
         delete node.runTimerHidden;
     }
     return node;
+}
+function rememberSmartNodePreRunBox(node){
+    if(!node || node._undoPreRunBox) return;
+    node._undoPreRunBox = {
+        hasW:Object.prototype.hasOwnProperty.call(node, 'w'),
+        hasH:Object.prototype.hasOwnProperty.call(node, 'h'),
+        w:node.w,
+        h:node.h
+    };
+}
+function clearSmartNodePreRunBox(node, restore=false){
+    if(!node) return;
+    const undoBox = node._undoPreRunBox;
+    if(restore && undoBox && typeof undoBox === 'object'){
+        if(undoBox.hasW) node.w = undoBox.w;
+        else delete node.w;
+        if(undoBox.hasH) node.h = undoBox.h;
+        else delete node.h;
+    }
+    delete node._undoPreRunBox;
 }
 function serializableSmartNode(node){
     const base = JSON.parse(JSON.stringify(node || {}));
@@ -2261,8 +2467,12 @@ function canvasListUrlForProject(projectId){
     const pid = rememberCanvasListProject(projectId);
     return `/static/canvas-list.html?project=${encodeURIComponent(pid)}`;
 }
-function backToCanvasList(){
+async function backToCanvasList(){
     savePromptDraftForCurrent();
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    if(canvas) await saveCanvas();
+    await persistSmartUndoHistoryNow();
     window.location.href = canvasListUrlForProject(canvas?.project || sourceProjectId || 'default');
 }
 function setSmartCanvasSwitcherOpen(open){
@@ -2293,9 +2503,7 @@ function resetSmartCanvasTransientStateForSwitch(){
     smartVideoPreviewOpeningKey = '';
     clearTimeout(canvasSyncTimer);
     canvasSyncTimer = null;
-    undoStack.length = 0;
-    redoStack.length = 0;
-    pendingUndoSnapshot = null;
+    clearSmartUndoHistory();
     selectedId = '';
     selectedIds = [];
     selectedImage = {nodeId:'', index:-1};
@@ -2345,6 +2553,7 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
         clearTimeout(saveTimer);
         saveTimer = null;
         if(canvas) await saveCanvas();
+        await persistSmartUndoHistoryNow(previousCanvasId);
         // A conflict response may schedule a retry for the canvas being left.
         // Never let that delayed callback run after canvasId changes.
         clearTimeout(saveTimer);
@@ -7242,6 +7451,7 @@ function clearSmartNodeBusyState(node){
 }
 function markSmartNodeComplete(node, meta=null){
     if(!node) return node;
+    clearSmartNodePreRunBox(node);
     const keepHidden = node.runTimerHidden === true;
     clearSmartNodeBusyState(node);
     node.runFinishedAt = Number(node.runFinishedAt || 0) || nowMs();
@@ -7429,11 +7639,13 @@ function mergeSmartConnections(localConns, remoteConns, nodeIds){
 }
 function applyMergedServerCanvas(serverCanvas){
     if(!serverCanvas || !canvas) return false;
+    const previousUndoBaseline = smartUndoHistoryBaseline();
     const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
     const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
     const nodeIds = new Set(mergedNodes.map(n => n.id));
     nodes = mergedNodes;
     canvas.connections = mergeSmartConnections(canvas.connections, serverCanvas.connections, nodeIds);
+    if(previousUndoBaseline !== smartUndoHistoryBaseline()) clearSmartUndoHistory({removeStored:true});
     const cleanedState = clearCompletedNodeBusyStates();
     const recoveredLoopOutputs = recoverStuckLoopOutputsFromLogs();
     canvas.updated_at = Number(serverCanvas.updated_at || canvas.updated_at || 0);
@@ -8347,6 +8559,7 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         const recoveredLoopOutputs = recoverStuckLoopOutputsFromLogs();
         const hiddenCompletedTimers = hideCompletedRunTimers();
         const cleanedDetachedInputs = cleanupDetachedRunInputRefs();
+        await restoreSmartUndoHistory(requestedCanvasId);
         viewport = {...viewport, ...(canvas.viewport || {})};
         viewport.scale = safeScale(viewport.scale);
         settings = cloneSmartSettings(smartCanvasLoadBaseSettings || settings);
@@ -8390,6 +8603,7 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
 function scheduleSave(){
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
+    scheduleSmartUndoHistoryPersist();
 }
 async function saveCanvas(){
     if(!canvasId || !canvas) return;
@@ -8427,6 +8641,7 @@ async function saveCanvas(){
         if(res.ok){
             const data = await res.json();
             if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
+            await persistSmartUndoHistoryNow(requestedCanvasId);
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
             // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
@@ -18590,6 +18805,7 @@ async function runGeneration(){
         delete pendingNode.runFailed;
         pendingNode.runTimerHidden = false;
         if(!cleanHistoryImages(pendingNode.images || []).length){
+            rememberSmartNodePreRunBox(pendingNode);
             const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs, settings:activeSettings});
             pendingNode.w = pendingBox.w;
             pendingNode.h = pendingBox.h;
@@ -18718,8 +18934,7 @@ async function runGeneration(){
             pendingNode.pending = 0;
             delete pendingNode._replaceExistingOutputsOnNextResult;
             if(!(pendingNode.images || []).length){
-                delete pendingNode.w;
-                delete pendingNode.h;
+                clearSmartNodePreRunBox(pendingNode, true);
             }
         }
         markSmartNodeRunFailed(pendingNode, {keepRecoverableTasks:true});
@@ -19572,6 +19787,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     node.images = [...existing, ...embedGenPromptIntoImages(additions, node)];
     if(additions.length) node.outputKind = kind;
     if(!node.pending && smartPendingTasks(node).length === 0){
+        clearSmartNodePreRunBox(node);
         delete node.pendingTasks;
         delete node._replaceExistingOutputsOnNextResult;
         node.runFinishedAt = nowMs();
@@ -19645,8 +19861,7 @@ async function resumeSmartPendingNode(node, logContext={}){
                 delete node.pendingTasks;
                 markSmartNodeRunFailed(node);
                 if(!(node.images || []).length){
-                    delete node.w;
-                    delete node.h;
+                    clearSmartNodePreRunBox(node, true);
                 }
             }
             failures.push(e);
@@ -21938,3 +22153,7 @@ window.onload = async () => {
     syncApiKindToggleVisibility();
     if(!initialSmartCanvasRendered) render();
 };
+
+window.addEventListener('pagehide', () => {
+    persistSmartUndoHistoryNow();
+});
