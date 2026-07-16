@@ -17001,7 +17001,6 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
         scale:MEDIA_NODE_DEFAULT_SCALE,
         created_at:Date.now()
     };
-    output._selectAfterRunId = options.selectOutput ? output.id : sourceNode.id;
     nodes.push(output);
     if(options.connectSource === false) addConnection(sourceNode.id, output.id, 'flow');
     else connectInputNode(sourceNode.id, output.id);
@@ -17181,14 +17180,11 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
     if(metaTarget) attachRunMeta(metaTarget, meta);
     pendingNode.images = (pendingNode.images || []).map(img => stripImageGenerationMeta(img));
     clearSourceBusyStateIfDownstreamDone(nodes.find(n => n.id === meta?.sourceNodeId));
-    // 生成完成不抢占选择:仅当用户仍停留在该生成节点上(或当前无选择)时才切换选择;
-    // 否则保留用户当前选择 —— 支持并发生成时去调整/编辑别的卡片,A 节点的参数栏不被打断。
-    const afterRunSelection = pendingNode._selectAfterRunId || pendingNode.id;
-    if(!selectedId || selectedId === pendingNode.id) selectedId = afterRunSelection;
+    // Completion must not change selection. An empty canvas, another selected
+    // node, and an individual selected media item are all user-owned states.
     delete pendingNode._runMetaTargetId;
     delete pendingNode._selectAfterRunId;
     if(activeComposerSubject?.id && selectedId === activeComposerSubject.id) lastComposerNodeId = `${selectedId}:node`;
-    selectedImage = {nodeId:'', index:-1};
     notifySmartTaskSuccess(kind, imgs.length);
 }
 function restoreFromExtraction(node, extracted){
@@ -18434,7 +18430,7 @@ async function runGeneration(){
     const shouldCreateBranchOutput = groupRun;
     const pendingMeta = shouldCreateBranchOutput ? stripRunInputMeta(meta) : meta;
     undoSuppressed = true;
-    if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, selectOutput:true, refs});
+    if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
     if(!branchNode) markReplaceExistingOutputsOnNextResult(pendingNode);
