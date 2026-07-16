@@ -1,5 +1,5 @@
 (function(){
-    const VERSION = '2026.07.15.smart-back.1';
+    const VERSION = '2026.07.16.undo-history-reasons.1';
     const scripts = [
         '/static/js/i18n-core.js',
         '/static/js/i18n/common.js',
