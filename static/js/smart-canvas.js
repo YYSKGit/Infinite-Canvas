@@ -951,6 +951,8 @@ function scheduleSmartVideoResetFrame(video, expectedEpoch){
 }
 function resetSmartCanvasVideo(video){
     if(!video) return;
+    delete video.dataset.smartDragSuspended;
+    delete video.dataset.smartDragResumePending;
     const playbackKey = smartVideoPlaybackKey(video);
     if(playbackKey) smartVideoUserPausedKeys.delete(playbackKey);
     if(video.dataset.smartReset === '1'){
@@ -998,6 +1000,62 @@ let smartVideoAltCopyDragActive = false;
 function stopAllSmartCanvasVideos(){
     world?.querySelectorAll?.('.smart-canvas-video').forEach(resetSmartCanvasVideo);
 }
+function suspendSmartCanvasVideosForNodeDrag(drag){
+    if(!drag) return;
+    const ids = new Set(drag.groupIds?.length ? drag.groupIds : [drag.id]);
+    const suspensions = [];
+    world?.querySelectorAll?.('.image-node').forEach(nodeEl => {
+        if(!ids.has(nodeEl.dataset.id)) return;
+        nodeEl.querySelectorAll('.smart-canvas-video').forEach(video => {
+            const wasPlaying = !video.paused || video.dataset.smartPlaybackWanted === '1';
+            if(!wasPlaying) return;
+            video.dataset.smartDragSuspended = '1';
+            delete video.dataset.smartWaiting;
+            video.pause?.();
+            video.closest('.smart-canvas-video-host')?.classList.remove('is-waiting');
+            suspensions.push({video});
+        });
+    });
+    drag.smartVideoSuspensions = suspensions;
+}
+function resumeSmartCanvasVideosAfterNodeDrag(drag, releasePoint=null){
+    const suspensions = (drag?.smartVideoSuspensions || []).filter(({video}) => video?.dataset.smartDragSuspended === '1');
+    if(!suspensions.length) return;
+    suspensions.forEach(({video}) => {
+        if(video) delete video.dataset.smartDragSuspended;
+    });
+    requestAnimationFrame(() => {
+        suspensions.forEach(({video}) => {
+            if(!video?.isConnected) return;
+            const host = video.closest('.smart-canvas-video-host');
+            const nodeId = host?.closest('.image-node')?.dataset?.id || '';
+            const hoverOnly = smartVideoContainerIsGroup(nodes.find(node => node.id === nodeId));
+            if(nodeId && !hoverOnly && isNodeSelected(nodeId)){
+                playSmartCanvasVideo(video);
+                return;
+            }
+            const rect = host?.getBoundingClientRect?.();
+            const pointerInside = Boolean(rect && releasePoint
+                && releasePoint.x >= rect.left && releasePoint.x <= rect.right
+                && releasePoint.y >= rect.top && releasePoint.y <= rect.bottom);
+            if(!host?.matches(':hover') && !pointerInside){
+                resetSmartCanvasVideo(video);
+                return;
+            }
+            // Pointer hit-testing can lag one frame behind removing the global
+            // pointer-events:none drag style. Keep the paused frame/time stable
+            // during the normal hover delay instead of letting selection sync
+            // reset to zero and a late mouseenter immediately replay from zero.
+            video.dataset.smartDragResumePending = '1';
+            setTimeout(() => {
+                if(video.dataset.smartDragResumePending !== '1') return;
+                delete video.dataset.smartDragResumePending;
+                if(video.isConnected && host.isConnected && host.matches(':hover')) playSmartCanvasVideo(video);
+                else resetSmartCanvasVideo(video);
+            }, 400);
+        });
+    });
+}
 function stopAndDeselectSmartDragVideos(drag){
     if(!drag) return;
     const ids = new Set(drag.groupIds?.length ? drag.groupIds : [drag.id]);
@@ -1027,6 +1085,11 @@ function smartVideoContainerIsGroup(node){
 function playSmartCanvasVideo(video){
     if(!video) return;
     if(smartVideoAltCopyDragActive){ resetSmartCanvasVideo(video); return; }
+    if(video.dataset.smartDragSuspended === '1'){
+        video.pause?.();
+        return;
+    }
+    delete video.dataset.smartDragResumePending;
     const playbackKey = smartVideoPlaybackKey(video);
     if(playbackKey && smartVideoPostPreviewFirstFrameKeys.has(playbackKey)){
         video.dataset.smartPlaybackWanted = '0';
@@ -1538,6 +1601,7 @@ function syncSmartCanvasVideoSelection(){
         const video = host.querySelector('.smart-canvas-video');
         const nodeId = host.closest('.image-node')?.dataset?.id || '';
         if(!video || !nodeId) return;
+        if(video.dataset.smartDragResumePending === '1') return;
         if(smartVideoContainerIsGroup(nodes.find(node => node.id === nodeId))){
             delete host.dataset.selectionPlayback;
             if(!host.matches(':hover')) resetSmartCanvasVideo(video);
@@ -9210,6 +9274,17 @@ function restoreMediaPlaybackState(media, state){
     if(media.readyState >= 1) applyTime();
     else media.addEventListener('loadedmetadata', applyTime, {once:true});
 }
+function syncSmartCanvasVideoHostShell(oldHost, newHost){
+    if(!oldHost || !newHost) return;
+    // The freshly rendered host contains layout classes/styles, while the old
+    // host owns presentation state that must survive a render. In particular,
+    // dropping has-presented-video-frame for a single frame makes the initial
+    // poster fade across an already-playing video.
+    const transientClasses = [...oldHost.classList].filter(name => /^(?:is-|has-|autoplay-)/.test(name));
+    oldHost.className = newHost.className;
+    transientClasses.forEach(name => oldHost.classList.add(name));
+    oldHost.style.cssText = newHost.style.cssText;
+}
 function transplantSmartMediaElements(oldNodeEl, newNodeEl){
     const oldItems = [...(oldNodeEl?.querySelectorAll?.('.thumb-item,.image-wrap') || [])];
     const newItems = [...(newNodeEl?.querySelectorAll?.('.thumb-item,.image-wrap') || [])];
@@ -9251,6 +9326,21 @@ function transplantSmartMediaElements(oldNodeEl, newNodeEl){
             return;
         }
         const state = captureMediaPlaybackState(oldMedia);
+        if(selector === 'video' && oldMedia.matches('.smart-canvas-video') && newMedia.matches('.smart-canvas-video')){
+            const oldHost = oldMedia.closest('.smart-canvas-video-host');
+            const newHost = newMedia.closest('.smart-canvas-video-host');
+            if(oldHost && newHost && oldItem.contains(oldHost) && newItem.contains(newHost)){
+                // Keep the entire decoded player surface, including its poster,
+                // reset-frame canvas, controls and binding. Replacing only the
+                // <video> briefly reconnects a fresh visible poster and causes
+                // the first-frame fade seen during hover-to-selected playback.
+                syncSmartCanvasVideoHostShell(oldHost, newHost);
+                newHost.replaceWith(oldHost);
+                restoreMediaPlaybackState(oldMedia, state);
+                requestAnimationFrame(() => restoreMediaPlaybackState(oldMedia, state));
+                return;
+            }
+        }
         newMedia.replaceWith(oldMedia);
         restoreMediaPlaybackState(oldMedia, state);
         requestAnimationFrame(() => restoreMediaPlaybackState(oldMedia, state));
@@ -9271,8 +9361,7 @@ function applyDetachedVideoDomHandoff(){
     delete oldHost._smartShowControls;
     delete oldHost._smartSyncControlsPinned;
     delete oldHost._smartCloseCaptureMenu;
-    oldHost.className = freshHost.className;
-    oldHost.style.cssText = freshHost.style.cssText;
+    syncSmartCanvasVideoHostShell(oldHost, freshHost);
     freshHost.replaceWith(oldHost);
 }
 function mediaPlaybackStateKey(media){
@@ -11014,6 +11103,65 @@ function pickMediaForSmartNode(nodeId){
     document.body.appendChild(input);
     input.click();
 }
+const SMART_NODE_DRAG_ACTIVATION_PX = 5;
+function smartNodeDragGroupSnapshot(node){
+    if(!node) return [];
+    let dragIds = selectedIds.includes(node.id) ? selectedIds.slice() : [node.id];
+    if(isSmartGroupNode(node)){
+        const memberIds = smartGroupMembers(node).map(member => member.id);
+        dragIds = Array.from(new Set([...dragIds, ...memberIds]));
+    }
+    return dragIds.map(dragId => {
+        const item = nodes.find(candidate => candidate.id === dragId);
+        return item ? {id:item.id, ox:Number(item.x) || 0, oy:Number(item.y) || 0} : null;
+    }).filter(Boolean);
+}
+function syncSmartNodeDraggingClasses(drag=dragState){
+    const ids = new Set(drag?.groupIds?.length ? drag.groupIds : (drag?.id ? [drag.id] : []));
+    world?.querySelectorAll?.('.image-node').forEach(nodeEl => {
+        nodeEl.classList.toggle('dragging', ids.has(nodeEl.dataset.id));
+    });
+}
+function activatePendingSmartNodeDrag(){
+    if(!dragState || dragState.activated) return Boolean(dragState);
+    let node = nodes.find(candidate => candidate.id === dragState.id);
+    if(!node){
+        dragState = null;
+        return false;
+    }
+    if(dragState.altCopy){
+        smartVideoAltCopyDragActive = true;
+        stopAllSmartCanvasVideos();
+        node = duplicateForAltDrag(node, true);
+        stopAllSmartCanvasVideos();
+        if(!node){
+            smartVideoAltCopyDragActive = false;
+            dragState = null;
+            return false;
+        }
+    }
+    window.getSelection?.()?.removeAllRanges?.();
+    if(document.activeElement?.blur) document.activeElement.blur();
+    const group = smartNodeDragGroupSnapshot(node);
+    Object.assign(dragState, {
+        id:node.id,
+        ox:Number(node.x) || 0,
+        oy:Number(node.y) || 0,
+        group,
+        groupIds:group.map(item => item.id),
+        activated:true
+    });
+    // Alt-copy renders while dragState still points at the source node. Repair
+    // the transient class immediately so the moving copy owns drag z-index 12
+    // instead of emerging from behind a stale source.dragging element.
+    syncSmartNodeDraggingClasses(dragState);
+    if(!dragState.altCopy) suspendSmartCanvasVideosForNodeDrag(dragState);
+    document.body.classList.add('smart-node-drag');
+    // duplicateForAltDrag records its own undo entry. Normal movement starts
+    // an undo transaction only after the pointer has crossed the drag threshold.
+    if(!dragState.altCopy) capturePendingUndo();
+    return true;
+}
 function bindNodeEvents(){
     world.querySelectorAll('.image-node').forEach(el => {
         const id = el.dataset.id;
@@ -11058,20 +11206,19 @@ function bindNodeEvents(){
                 }
                 selectedImage = {nodeId:'', index:-1};
                 if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
-                render();
-                return;
-            }
-            const alreadySelected = selectedId === id && selectedIds.length === 0 && selectedImage.nodeId === '';
-            selectedId = id;
-            selectedIds = [];
-            selectedImage = {nodeId:'', index:-1};
-            if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
-            if(alreadySelected){
                 syncSelectionUi();
                 updateComposer();
                 return;
             }
-            render();
+            selectedId = id;
+            selectedIds = [];
+            selectedImage = {nodeId:'', index:-1};
+            if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
+            // Selection is presentation-only. Rebuilding the node here is both
+            // unnecessary and dangerous for live media: a click promoted from
+            // hover playback could reconnect a fresh first-frame poster.
+            syncSelectionUi();
+            updateComposer();
         };
         if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => e.stopPropagation();
         const nodeDrop = el.querySelector('.node-drop');
@@ -11323,31 +11470,17 @@ function bindNodeEvents(){
             if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             e.preventDefault(); e.stopPropagation();
-            window.getSelection?.()?.removeAllRanges?.();
-            if(document.activeElement?.blur) document.activeElement.blur();
-            let node = nodes.find(n => n.id === id);
+            const node = nodes.find(n => n.id === id);
             if(!node) return;
             const altCopy = Boolean(e.altKey);
-            if(altCopy){
-                smartVideoAltCopyDragActive = true;
-                stopAllSmartCanvasVideos();
-                node = duplicateForAltDrag(node, true);
-                stopAllSmartCanvasVideos();
-            }
-            let dragIds = selectedIds.includes(node.id) ? selectedIds.slice() : [node.id];
-            if(isSmartGroupNode(node)){
-                const memberIds = smartGroupMembers(node).map(member => member.id);
-                dragIds = Array.from(new Set([...dragIds, ...memberIds]));
-            }
-            const group = dragIds.map(dragId => {
-                const n = nodes.find(x => x.id === dragId);
-                return n ? {id:n.id, ox:Number(n.x) || 0, oy:Number(n.y) || 0} : null;
-            }).filter(Boolean);
-            dragState = {id:node.id, startX:e.clientX, startY:e.clientY, ox:node.x || 0, oy:node.y || 0, group, groupIds:group.map(item => item.id), ctrlGroup:Boolean(e.ctrlKey), altCopy};
-            document.body.classList.add('smart-node-drag');
-            // duplicateForAltDrag already records the pre-copy snapshot.  A
-            // second snapshot here would turn copy+drag into two undo steps.
-            if(!altCopy) capturePendingUndo();
+            dragState = {
+                id:node.id,
+                startX:e.clientX,
+                startY:e.clientY,
+                ctrlGroup:Boolean(e.ctrlKey),
+                altCopy,
+                activated:false
+            };
         };
         el.querySelectorAll('.node-port').forEach(port => {
             port.addEventListener('mousedown', e => {
@@ -19994,7 +20127,7 @@ window.onmousemove = e => {
     lastMouseWorld = screenToWorld(e);
     if(!portDragState && !dragState) updateMagneticPort(e);
     else resetMagneticPort();
-    if(portDragState || dragState) updateSmartEdgePan(e);
+    if(portDragState || dragState?.activated) updateSmartEdgePan(e);
     if(smartMinimapDrag){
         e.preventDefault();
         centerViewportOnWorldPoint(minimapEventToWorld(e));
@@ -20241,7 +20374,7 @@ window.onmousemove = e => {
                         };
                     }
                     undoSuppressed = false;
-                    dragState = {id:newNode.id, startX:e.clientX, startY:e.clientY, ox:newNode.x, oy:newNode.y, thumbDetached:true};
+                    dragState = {id:newNode.id, startX:e.clientX, startY:e.clientY, ox:newNode.x, oy:newNode.y, thumbDetached:true, activated:true};
                     thumbDragState.detached = true;
                     render();
                 }
@@ -20260,6 +20393,12 @@ window.onmousemove = e => {
         return;
     }
     if(!dragState) return;
+    if(!dragState.activated){
+        const pointerDistance = Math.hypot(e.clientX - dragState.startX, e.clientY - dragState.startY);
+        if(pointerDistance < SMART_NODE_DRAG_ACTIVATION_PX) return;
+        if(!activatePendingSmartNodeDrag()) return;
+        updateSmartEdgePan(e);
+    }
     const node = nodes.find(n => n.id === dragState.id);
     if(!node) return;
     const moveDx = (e.clientX - dragState.startX) / viewport.scale;
@@ -20372,9 +20511,20 @@ window.onmouseup = e => {
     if(smartMinimapDrag){
         smartMinimapDrag = false;
     }
+    if(dragState && !dragState.activated){
+        // A press/release inside the activation radius is a click, not a drag.
+        // Leave the video as the click target and avoid a no-op save/undo entry.
+        dragState = null;
+        clearDropHighlight();
+        loopInsertPreview = null;
+        setAssetDragOver(false);
+        requestAnimationFrame(() => syncSmartCanvasVideoSelection());
+        return;
+    }
     if(dragState){
+        const completedDrag = dragState;
         const draggedNode = nodes.find(n => n.id === dragState.id);
-        let stateChanged = false;
+        let stateChanged = Boolean(dragState.altCopy || dragState.thumbDetached);
         const hit = document.elementFromPoint(e.clientX, e.clientY);
         const droppedOnAssetPanel = assetLibraryOpen && hit && assetPanel?.contains(hit);
         if(droppedOnAssetPanel && draggedNode && assetTab === 'workflow'){
@@ -20482,6 +20632,13 @@ window.onmouseup = e => {
         }) || (draggedNode && (Math.abs((draggedNode.x || 0) - dragState.ox) > 1 || Math.abs((draggedNode.y || 0) - dragState.oy) > 1))){
             stateChanged = true;
         }
+        // The activation threshold is measured in screen pixels. At high zoom,
+        // that can be less than the legacy one-world-pixel change test, so keep
+        // any actual position delta instead of leaving an unsaved in-memory move.
+        if(!stateChanged && (dragState.group || [{id:dragState.id, ox:dragState.ox, oy:dragState.oy}]).some(item => {
+            const n = nodes.find(x => x.id === item.id);
+            return n && (Math.abs((Number(n.x) || 0) - item.ox) > .001 || Math.abs((Number(n.y) || 0) - item.oy) > .001);
+        })) stateChanged = true;
         if(dragState.thumbDetached) stateChanged = true;
         // 拖出（没落到任何分组上）：普通节点退出所在分组；子分组退出时把它并入过的成员从主分组里撤掉。
         if(draggedNode && !smartGroupTarget && pruneSmartGroupMembershipsForNode(draggedNode)){
@@ -20490,7 +20647,10 @@ window.onmouseup = e => {
         }
         if(stateChanged) commitPendingUndo();
         else discardPendingUndo();
-        if(stateChanged || dragState.thumbDetached) suppressNodeClickUntil = Date.now() + 180;
+        const shouldPersistDrag = stateChanged || dragState.thumbDetached;
+        // Once the threshold was crossed, never reinterpret the gesture as a
+        // click even if the pointer returned to its exact starting position.
+        suppressNodeClickUntil = Date.now() + 180;
         clearDropHighlight();
         loopInsertPreview = null;
         dragState = null;
@@ -20499,8 +20659,9 @@ window.onmouseup = e => {
         // clear it explicitly. That stale class suppresses ports and hover tools.
         world.querySelectorAll('.image-node.dragging').forEach(el => el.classList.remove('dragging'));
         finishSmartVideoAltCopyDrag();
+        resumeSmartCanvasVideosAfterNodeDrag(completedDrag, {x:e.clientX, y:e.clientY});
         requestAnimationFrame(() => syncSmartCanvasVideoSelection());
-        scheduleSave();
+        if(shouldPersistDrag) scheduleSave();
         scheduleConnectionLayerRefresh();
     }
 };
