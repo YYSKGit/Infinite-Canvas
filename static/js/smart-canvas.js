@@ -11424,7 +11424,7 @@ function activatePendingSmartNodeDrag(){
     if(dragState.altCopy){
         smartVideoAltCopyDragActive = true;
         stopAllSmartCanvasVideos();
-        node = duplicateForAltDrag(node, true);
+        node = duplicateForAltDrag(node, dragState.preserveConnections);
         stopAllSmartCanvasVideos();
         if(!node){
             smartVideoAltCopyDragActive = false;
@@ -11771,6 +11771,7 @@ function bindNodeEvents(){
                 startY:e.clientY,
                 ctrlGroup:Boolean(e.ctrlKey),
                 altCopy,
+                preserveConnections:altCopy && !e.shiftKey,
                 activated:false
             };
         };
