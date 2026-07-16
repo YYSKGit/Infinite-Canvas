@@ -1187,7 +1187,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .size-picker-scope button:disabled { opacity:.38; cursor:not-allowed; }
 .size-picker-pane { min-height:0; }
 .size-picker-preset { display:grid; grid-template-columns:minmax(118px,.86fr) minmax(0,1.14fr); }
-.size-picker-list { min-height:0; max-height:226px; overflow:auto; padding:7px; display:flex; flex-direction:column; gap:4px; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.42) transparent; }
+.size-picker-list { min-height:0; max-height:256px; overflow:auto; padding:7px; display:flex; flex-direction:column; gap:4px; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.42) transparent; }
 .size-picker-list + .size-picker-list { border-left:1px solid var(--line); }
 .size-picker-option { width:100%; min-height:32px; padding:6px 8px; border-radius:9px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px; background:transparent; border:1px solid transparent; color:var(--muted); text-align:left; transition:background .14s ease, color .14s ease, border-color .14s ease; }
 .size-picker-option:hover { background:var(--soft); color:var(--text); border-color:var(--line); }

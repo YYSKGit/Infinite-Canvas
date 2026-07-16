@@ -4674,11 +4674,11 @@ function dynamicParamsScrollSnapshot(){
         left:dynamicParams.scrollLeft || 0,
         sizePickers:[...dynamicParams.querySelectorAll('.size-picker-control')].map(ctrl => ({
             key:controlTypeKey(ctrl),
-            lists:[...ctrl.querySelectorAll('.size-picker-list')].map(list => ({top:list.scrollTop || 0, left:list.scrollLeft || 0}))
+            lists:[...ctrl.querySelectorAll('.size-picker-list')].map(list => ({top:list.scrollTop || 0, left:list.scrollLeft || 0, remembered:list._hasRememberedScroll === true}))
         })),
         modelLists:[...dynamicParams.querySelectorAll('.smart-control')].map(ctrl => ({
             key:controlTypeKey(ctrl),
-            lists:[...ctrl.querySelectorAll('.model-list, .direct-picker-col')].map(list => ({top:list.scrollTop || 0}))
+            lists:[...ctrl.querySelectorAll('.model-list, .direct-picker-col')].map(list => ({top:list.scrollTop || 0, remembered:list._hasRememberedScroll === true}))
         }))
     };
 }
@@ -4697,8 +4697,11 @@ function restoreDynamicParamsScroll(snapshot){
             (item.lists || []).forEach((pos, listIndex) => {
                 const list = lists[listIndex];
                 if(!list) return;
-                list.scrollTop = pos.top || 0;
-                list.scrollLeft = pos.left || 0;
+                if(pos.remembered){
+                    list._hasRememberedScroll = true;
+                    list.scrollTop = pos.top || 0;
+                    list.scrollLeft = pos.left || 0;
+                }
             });
         });
         const usedModel = new Set();
@@ -4709,7 +4712,10 @@ function restoreDynamicParamsScroll(snapshot){
             usedModel.add(index);
             const lists = [...ctrls[index].querySelectorAll('.model-list, .direct-picker-col')];
             item.lists.forEach((pos, listIndex) => {
-                if(lists[listIndex]) lists[listIndex].scrollTop = pos.top || 0;
+                if(lists[listIndex] && pos.remembered){
+                    lists[listIndex]._hasRememberedScroll = true;
+                    lists[listIndex].scrollTop = pos.top || 0;
+                }
             });
         });
     };
@@ -5956,10 +5962,62 @@ function markControlInteracting(el){
     const ctrl = el?.closest?.('.smart-control');
     if(ctrl && !ctrl.classList.contains('pinned')) ctrl.classList.add('interacting');
 }
+const pickerScrollMemory = new Map();
+function pickerScrollMemoryKey(list){
+    const ctrl = list?.closest?.('.smart-control');
+    if(!ctrl) return '';
+    const subjectKey = activeSettingsSubject()?.id || 'composer';
+    const selector = list.classList.contains('size-picker-list') ? '.size-picker-list' : '.model-list, .direct-picker-col';
+    const listIndex = [...ctrl.querySelectorAll(selector)].indexOf(list);
+    return `${subjectKey}:${controlTypeKey(ctrl)}:${listIndex}`;
+}
+function applyAutomaticPickerScroll(list, position){
+    if(!list) return;
+    list._automaticPickerScroll = true;
+    list.scrollTop = Math.max(0, Number(position?.top) || 0);
+    list.scrollLeft = Math.max(0, Number(position?.left) || 0);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        list._automaticPickerScroll = false;
+    }));
+}
+function rememberPickerScroll(list){
+    if(!list || list._automaticPickerScroll) return;
+    const memoryKey = pickerScrollMemoryKey(list);
+    if(!memoryKey) return;
+    list._hasRememberedScroll = true;
+    pickerScrollMemory.set(memoryKey, {top:list.scrollTop || 0, left:list.scrollLeft || 0});
+}
+function centerCurrentPickerOption(ctrl){
+    if(!ctrl) return;
+    const list = ctrl.classList.contains('size-picker-control')
+        ? ctrl.querySelector('.size-picker-list')
+        : (ctrl.classList.contains('model-control') ? ctrl.querySelector('.model-list') : null);
+    if(!list || list._pickerPositionApplied) return;
+    if(list.clientHeight <= 0){
+        requestAnimationFrame(() => centerCurrentPickerOption(ctrl));
+        return;
+    }
+    const memoryKey = pickerScrollMemoryKey(list);
+    if(memoryKey && pickerScrollMemory.has(memoryKey)){
+        const position = pickerScrollMemory.get(memoryKey);
+        list._hasRememberedScroll = true;
+        list._pickerPositionApplied = true;
+        applyAutomaticPickerScroll(list, position);
+        return;
+    }
+    const active = list.querySelector('.active');
+    if(!active) return;
+    list._pickerPositionApplied = true;
+    const activeTop = active.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    applyAutomaticPickerScroll(list, {top:activeTop - (list.clientHeight - active.offsetHeight) / 2});
+}
 function bindDynamicParams(){
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => ctrl.classList.remove('interacting');
+        ctrl.onmouseenter = () => centerCurrentPickerOption(ctrl);
+        ctrl.onmouseover = () => centerCurrentPickerOption(ctrl);
+        ctrl.onfocusin = () => centerCurrentPickerOption(ctrl);
     });
     dynamicParams.querySelectorAll('.smart-control > .smart-pill').forEach(pill => {
         pill.onclick = event => {
@@ -5968,7 +6026,10 @@ function bindDynamicParams(){
             const ctrl = pill.parentElement;
             const wasPinned = ctrl.classList.contains('pinned');
             closeAllSmartPopovers();
-            if(!wasPinned) ctrl.classList.add('pinned');
+            if(!wasPinned){
+                ctrl.classList.add('pinned');
+                centerCurrentPickerOption(ctrl);
+            }
         };
     });
     dynamicParams.querySelectorAll('[data-smart-param]:not(.size-picker-control [data-smart-param])').forEach(btn => {
@@ -6172,13 +6233,21 @@ function bindDynamicParams(){
             toggleSmartRhRandom(btn.dataset.rhRandom);
         };
     });
-    // 记住 model-list / direct-picker-col 的滚动位置，供下次重渲染后恢复。
-    dynamicParams.querySelectorAll('.model-list, .direct-picker-col').forEach(list => {
+    // 用户滚动独立持久化；程序自动定位期间产生的 scroll 事件不写入记忆。
+    dynamicParams.querySelectorAll('.model-list, .direct-picker-col, .size-picker-list').forEach(list => {
         list.onscroll = () => {
+            rememberPickerScroll(list);
             const ctrl = list.closest('.smart-control');
             if(ctrl) ctrl._modelListScrollTop = list.scrollTop;
         };
+        list.onwheel = () => requestAnimationFrame(() => rememberPickerScroll(list));
     });
+    // 节点重新选中时控件可能直接在静止的鼠标下方重建，此时不会重新触发 mouseenter。
+    requestAnimationFrame(() => dynamicParams.querySelectorAll('.model-control, .size-picker-control').forEach(ctrl => {
+        if(ctrl.matches(':hover') || ctrl.classList.contains('pinned') || ctrl.classList.contains('interacting')){
+            centerCurrentPickerOption(ctrl);
+        }
+    }));
 }
 async function loadConfig(){
     try {
