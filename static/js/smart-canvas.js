@@ -2611,6 +2611,20 @@ function isEditableTarget(target){
     const el = target || document.activeElement;
     return !!el?.closest?.('input, textarea, select, option, [contenteditable="true"], .prompt-node-control, .prompt-input');
 }
+function focusSmartCanvasKeyboardTarget(){
+    try { window.focus(); } catch(e) {}
+    if(!shell || isEditableTarget(document.activeElement)) return;
+    try {
+        shell.focus({preventScroll:true});
+    } catch(e) {
+        try { shell.focus(); } catch(_e) {}
+    }
+}
+shell?.addEventListener('pointerdown', event => {
+    if(event.button !== 0 && event.button !== 1) return;
+    if(isEditableTarget(event.target)) return;
+    focusSmartCanvasKeyboardTarget();
+}, true);
 function safeScale(value){
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? n : 1;

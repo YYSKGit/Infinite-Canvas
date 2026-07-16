@@ -1945,6 +1945,19 @@
             } catch(e) {}
         }
 
+        function focusActiveCanvasFrame(frame) {
+            if(!frame || frame.id !== 'frame-canvas' || !frame.classList.contains('active')) return;
+            requestAnimationFrame(() => {
+                if(!frame.classList.contains('active')) return;
+                try {
+                    frame.focus({ preventScroll:true });
+                } catch(e) {
+                    try { frame.focus(); } catch(_e) {}
+                }
+                try { frame.contentWindow?.focus(); } catch(e) {}
+            });
+        }
+
         function switchUI(el, id, options = {}) {
             resetStudioRootScroll();
             if(!PAGE_IDS.includes(id)) id = DEFAULT_PAGE_ID;
@@ -1992,6 +2005,7 @@
             // 切换到画布时通知刷新工作流列表（防止在 comfyui-settings 修改后画布未及时更新）
             if (id === 'canvas' && target.src) {
                 try { target.contentWindow?.postMessage({ type: 'canvas-focus' }, '*'); } catch(e) {}
+                focusActiveCanvasFrame(target);
             }
             resetStudioRootScroll();
         }
@@ -2227,6 +2241,7 @@
                 // Reveal only after the real child document has produced a load
                 // event; until then the host stage colour covers about:blank.
                 f.classList.add('studio-frame-ready');
+                focusActiveCanvasFrame(f);
             });
         });
 
