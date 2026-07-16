@@ -36,6 +36,7 @@ function setSmartCanvasTitle(title, id=canvasId){
 const initialCachedSmartCanvasTitle = cachedSmartCanvasTitle(canvasId);
 if(initialCachedSmartCanvasTitle) setSmartCanvasTitle(initialCachedSmartCanvasTitle, canvasId);
 const promptInput = document.getElementById('promptInput');
+const promptEditor = window.SmartPromptEditor ? new window.SmartPromptEditor(promptInput) : null;
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
 const composerHeadQuickActions = document.getElementById('composerHeadQuickActions');
@@ -138,7 +139,6 @@ let thumbDragState = null;
 let detachedVideoDomHandoff = null;
 let uploadTargetId = '';
 let pendingGroupUploadPoint = null;
-let mentionRange = null;
 let mentionAnchorEl = null;
 let mentionInsertMode = 'token';
 let panState = null;
@@ -163,6 +163,7 @@ let activeLocalAssetFolderId = '__root__';
 let mentionSource = 'input';
 let mentionAssetCategoryId = '';
 let mentionFocusIndex = -1;
+let mentionPreviewToken = null;
 let assetLibraryUpdatedAt = 0;
 let assetLibraryRefreshTimer = null;
 let assetReorderDragId = '';
@@ -2742,16 +2743,17 @@ window.addEventListener('popstate', () => {
     if(nextCanvasId && nextCanvasId !== canvasId) switchToSmartCanvas(nextCanvasId, {history:false});
 });
 function promptPlainText(){
-    return originalPromptTextFromParts(collectPromptParts());
+    return promptEditor ? promptEditor.getExchangeText().trim() : originalPromptTextFromParts(collectPromptParts());
 }
 function setPromptInputLocked(locked){
     promptInput.dataset.promptLocked = locked ? '1' : '0';
-    promptInput.setAttribute('contenteditable', locked ? 'false' : 'true');
+    promptEditor?.setEditable(!locked);
     promptInput.classList.toggle('prompt-input-locked', Boolean(locked));
     if(locked) closeMentionPicker();
 }
 function setPromptText(text){
-    promptInput.textContent = text || '';
+    if(promptEditor) promptEditor.setText(text || '', {silent:true});
+    else promptInput.textContent = text || '';
 }
 function clearPromptInput(options={}){
     if(options.preserveDraft){
@@ -2759,11 +2761,12 @@ function clearPromptInput(options={}){
         closeMentionPicker();
         return;
     }
-    promptInput.textContent = '';
+    if(promptEditor) promptEditor.clear({silent:true});
+    else promptInput.textContent = '';
     closeMentionPicker();
     if(activeComposerSubject){
-        activeComposerSubject.promptDraftHtml = '';
-        activeComposerSubject.promptDraftText = '';
+        activeComposerSubject.promptDoc = window.SmartPromptEditor?.emptyDocument?.();
+        activeComposerSubject.promptReferences = [];
     }
 }
 function applyTheme(theme){
@@ -8738,8 +8741,8 @@ function cloneGenPromptSnapshot(snapshot){
         runModelPrompt: snapshot.runModelPrompt || '',
         runSettings: snapshot.runSettings ? cloneSmartSettings(snapshot.runSettings) : undefined,
         runPromptRefs: Array.isArray(snapshot.runPromptRefs) ? snapshot.runPromptRefs.map(ref => ({...ref})) : [],
-        promptDraftHtml: snapshot.promptDraftHtml != null ? String(snapshot.promptDraftHtml) : undefined,
-        promptDraftText: snapshot.promptDraftText != null ? String(snapshot.promptDraftText) : undefined,
+        promptDoc:snapshot.promptDoc ? JSON.parse(JSON.stringify(snapshot.promptDoc)) : undefined,
+        promptReferences:Array.isArray(snapshot.promptReferences) ? snapshot.promptReferences.map(ref => ({...ref})) : [],
     };
 }
 function applyGenPromptSnapshotToNode(node, snapshot){
@@ -8750,12 +8753,11 @@ function applyGenPromptSnapshotToNode(node, snapshot){
     if(snap.runSettings) node.runSettings = snap.runSettings;
     if(Array.isArray(snap.runPromptRefs)) node.runPromptRefs = snap.runPromptRefs;
     node.runSnapshotSettings = snap.runSettings ? cloneSmartSettings(snap.runSettings) : undefined;
-    node.runSnapshotPromptDraftHtml = snap.promptDraftHtml != null ? String(snap.promptDraftHtml) : undefined;
-    node.runSnapshotPromptDraftText = snap.promptDraftText != null ? String(snap.promptDraftText) : undefined;
-    if(snap.promptDraftHtml != null) node.promptDraftHtml = snap.promptDraftHtml;
-    else delete node.promptDraftHtml;
-    if(snap.promptDraftText != null) node.promptDraftText = snap.promptDraftText;
-    else delete node.promptDraftText;
+    node.runSnapshotPromptDoc = snap.promptDoc ? JSON.parse(JSON.stringify(snap.promptDoc)) : undefined;
+    node.runSnapshotPromptReferences = snap.promptReferences.map(ref => ({...ref}));
+    if(snap.promptDoc) node.promptDoc = JSON.parse(JSON.stringify(snap.promptDoc));
+    else delete node.promptDoc;
+    node.promptReferences = snap.promptReferences.map(ref => ({...ref}));
 }
 function applyNodeMetaToImage(image, node){
     if(image && node && !image._genPrompt) {
@@ -8777,10 +8779,12 @@ function syncHistoryNodePromptFromImages(historyNode){
         delete historyNode.runSettings;
         delete historyNode.runPromptRefs;
         delete historyNode.runSnapshotSettings;
-        delete historyNode.runSnapshotPromptDraftHtml;
-        delete historyNode.runSnapshotPromptDraftText;
+        delete historyNode.runSnapshotPromptDoc;
+        delete historyNode.runSnapshotPromptReferences;
         delete historyNode.promptDraftHtml;
         delete historyNode.promptDraftText;
+        delete historyNode.promptDoc;
+        delete historyNode.promptReferences;
         return;
     }
     const snap = cloneGenPromptSnapshot(images[0]?._genPrompt);
@@ -10635,7 +10639,7 @@ function render(){
     const promptTextareaScrollStates = capturePromptNodeTextareaScrollStates();
     // 用户正在提示词框(contenteditable)输入时,本次重渲染不要移动 composer:
     // 移动 DOM 节点会打断输入法合成会话,导致输入中断(即使保留焦点描边也接不上)。
-    const promptHadFocus = document.activeElement === promptInput;
+    const promptHadFocus = Boolean(promptEditor?.hasFocus?.() || promptInput?.contains?.(document.activeElement));
     const reusableNodes = new Map();
     world.querySelectorAll('.image-node').forEach(el => {
         const node = nodes.find(n => n.id === el.dataset.id);
@@ -12631,7 +12635,7 @@ function isLikelyPanoramaImage(node, image, naturalW=0, naturalH=0){
         node?.title,
         node?.runPrompt,
         node?.runModelPrompt,
-        node?.promptDraftText,
+        node?.promptDoc ? window.SmartPromptEditor?.exchangeText?.(node.promptDoc, node.promptReferences || []) : '',
         node?.runSettings?.ratio,
         node?.runSettings?.msRatio,
         node?.runSettings?.size,
@@ -14976,39 +14980,40 @@ function savePromptDraftForCurrent(){
     if(promptInput?.dataset?.promptLocked === '1') return;
     const subject = activeComposerNode();
     if(!subject) return;
-    if(promptInput?.dataset?.preserveDraftOnce === '1' && subject.promptDraftHtml){
+    if(promptInput?.dataset?.preserveDraftOnce === '1' && subject.promptDoc){
         delete promptInput.dataset.preserveDraftOnce;
         return;
     }
-    subject.promptDraftHtml = promptInput.innerHTML;
-    subject.promptDraftText = promptPlainText();
+    if(promptEditor){
+        subject.promptDoc = promptEditor.getJSON();
+        subject.promptReferences = promptEditor.getReferences();
+    }
+    delete subject.promptDraftHtml;
+    delete subject.promptDraftText;
     subject.runSettings = cloneSmartSettings(settings);
 }
 function setPromptDraftForNode(node, text){
     if(!isSmartRunnableNode(node)) return;
     const value = String(text || '');
-    node.promptDraftHtml = escapeHtml(value);
-    node.promptDraftText = value;
+    node.promptDoc = window.SmartPromptEditor?.textDocument?.(value, []) || null;
+    node.promptReferences = [];
+    delete node.promptDraftHtml;
+    delete node.promptDraftText;
     node.promptDraftTouched = true;
     if(activeSettingsSubject()?.id === node.id && promptInput){
-        promptInput.textContent = value;
+        promptEditor?.setValue(node.promptDoc, node.promptReferences, {silent:true});
         delete promptInput.dataset.preserveDraftOnce;
     }
 }
 function loadPromptDraft(subject){
-    if(subject?.promptDraftHtml){
-        const hasToken = String(subject.promptDraftHtml || '').includes('mention-image-token');
-        promptInput.innerHTML = hasToken
-            ? subject.promptDraftHtml
-            : (promptHtmlWithMentionTokens(subject.runPrompt || subject.promptDraftText || '', subject.runPromptRefs || []) || subject.promptDraftHtml);
-    } else if(typeof subject?.runPrompt === 'string'){
-        const rebuilt = promptHtmlWithMentionTokens(subject.runPrompt, subject.runPromptRefs || []);
-        if(rebuilt) promptInput.innerHTML = rebuilt;
-        else setPromptText(subject.runPrompt);
-    } else {
-        setPromptText('');
-    }
-    refreshPromptMentionTokenLabels();
+    if(!promptEditor) return;
+    const references = Array.isArray(subject?.promptReferences)
+        ? subject.promptReferences
+        : (Array.isArray(subject?.runPromptRefs) ? subject.runPromptRefs : []);
+    const doc = subject?.promptDoc
+        || window.SmartPromptEditor.textDocument(subject?.runPrompt || '', references);
+    promptEditor.setValue(doc, references, {silent:true});
+    refreshPromptReferenceContext();
 }
 function positionComposerForNode(node){
     if(!node) return;
@@ -15040,7 +15045,7 @@ function restorePromptSelection(snapshot){
     if(!anchorNode?.isConnected || !focusNode?.isConnected || !promptInput.contains(anchorNode) || !promptInput.contains(focusNode)) return false;
     const selection = window.getSelection?.();
     if(!selection) return false;
-    promptInput.focus({preventScroll:true});
+    promptEditor?.focus?.();
     try {
         if(typeof selection.setBaseAndExtent === 'function'){
             selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
@@ -15121,7 +15126,7 @@ function setComposerExpanded(expanded){
         closePromptTemplatePanel();
     }
     refreshIcons();
-    if(composerExpanded && !promptSelection) promptInput?.focus({preventScroll:true});
+    if(composerExpanded && !promptSelection) promptEditor?.focus?.();
 }
 function setComposerOpen(open){
     if(!composer) return;
@@ -15197,6 +15202,7 @@ function renderInputThumbsRow(node){
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
+    promptEditor?.setReferenceContext(dedup);
     syncVeniceImageQuote();
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const addActive = mentionInsertMode === 'manual-ref';
@@ -15210,7 +15216,7 @@ function renderInputThumbsRow(node){
         mode: node ? smartImageMode(node) : ''
     });
     if(inputThumbsRow.dataset.thumbsSig === thumbsSignature){
-        refreshPromptMentionTokenLabels();
+        refreshPromptReferenceContext();
         return;
     }
     inputThumbsRow.dataset.thumbsSig = thumbsSignature;
@@ -15218,7 +15224,7 @@ function renderInputThumbsRow(node){
     if(!node){
         inputThumbsRow.classList.remove('has-items');
         inputThumbsRow.innerHTML = '';
-        refreshPromptMentionTokenLabels();
+        refreshPromptReferenceContext();
         return;
     }
     const addButton = `<button class="input-thumb-add ${addActive ? 'active' : ''}" type="button" data-input-add-reference title="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}" aria-label="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}"><i data-lucide="image-plus"></i></button>`;
@@ -15228,7 +15234,7 @@ function renderInputThumbsRow(node){
         inputThumbsRow.innerHTML = '';
         bindInputThumbReferenceActions();
         refreshIcons();
-        refreshPromptMentionTokenLabels();
+        refreshPromptReferenceContext();
         return;
     }
     inputThumbsRow.classList.add('has-items');
@@ -15256,7 +15262,7 @@ function renderInputThumbsRow(node){
     bindInputThumbsDrag(node, dedup, manualRefKeys);
     bindInputThumbReferenceActions();
     refreshIcons();
-    refreshPromptMentionTokenLabels();
+    refreshPromptReferenceContext();
 }
 function currentInputAddReferenceButton(){
     return composerHeadQuickActions?.querySelector('[data-input-add-reference]')
@@ -16117,64 +16123,12 @@ function firstPendingTransitionActive(nodeId){
     if(!nodeId) return false;
     return Boolean(world.querySelector(`.image-node.first-pending-transition[data-id="${CSS.escape(nodeId)}"]`));
 }
-function mentionTokenHtml(img){
-    if(!img?.url) return '';
-    const kind = mediaKindForItem(img);
-    const name = img.alias || img.name || (kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
-    const label = img.refLabel || img.label || name;
-    const media = mentionTokenMediaHtml(img, kind);
-    return `<span class="mention-image-token" contenteditable="false" data-url="${escapeHtml(img.url)}" data-kind="${escapeHtml(kind)}" data-name="${escapeHtml(name)}" data-ref-label="${escapeHtml(label)}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${escapeHtml(img.imageIndex ?? '')}">${media}<span class="mention-token-label">${escapeHtml(label)}</span></span>`;
-}
-function mentionTokenMediaHtml(img, kind=mediaKindForItem(img)){
-    if(kind === 'audio'){
-        return `<div class="mention-audio-thumb"><i data-lucide="file-audio"></i></div>`;
-    }
-    if(kind === 'video'){
-        return smartVideoPreviewHtml(img, 256, 'alt=""');
-    }
-    return smartPreviewImgHtml(img, 256, 'alt=""');
-}
 function mentionOptionMediaHtml(img){
     const kind = mediaKindForItem(img);
     if(kind === 'audio'){
         return `<div class="media-thumb audio-thumb mention-option-audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.alias || img.name || 'Audio')}</span></div>`;
     }
     return kind === 'video' ? smartVideoPreviewHtml(img, 256, 'alt=""') : smartPreviewImgHtml(img, 256, 'alt=""');
-}
-function createMentionTokenElement(img){
-    const token = document.createElement('span');
-    const kind = mediaKindForItem(img);
-    token.className = 'mention-image-token';
-    token.contentEditable = 'false';
-    token.dataset.url = img.url || '';
-    token.dataset.kind = kind;
-    token.dataset.name = img.alias || img.name || (kind === 'audio' ? '音频' : kind === 'video' ? '视频' : '图片');
-    token.dataset.refLabel = img.refLabel || img.label || token.dataset.name;
-    token.dataset.nodeId = img.nodeId || '';
-    token.dataset.imageIndex = String(img.imageIndex ?? '');
-    token.dataset.assetUris = JSON.stringify(img.asset_uris || {});
-    token.innerHTML = `${mentionTokenMediaHtml(img, kind)}<span class="mention-token-label">${escapeHtml(token.dataset.refLabel)}</span>`;
-    return token;
-}
-function promptHtmlWithMentionTokens(text, refs=[]){
-    const value = String(text || '');
-    const items = (refs || []).filter(ref => ref?.url && ref?.name).sort((a, b) => String(b.name || '').length - String(a.name || '').length);
-    if(!value || !items.length || !value.includes('@')) return '';
-    let html = '';
-    let index = 0;
-    while(index < value.length){
-        if(value[index] === '@'){
-            const hit = items.find(ref => value.slice(index + 1, index + 1 + String(ref.name || '').length) === String(ref.name || ''));
-            if(hit){
-                html += mentionTokenHtml(hit);
-                index += 1 + String(hit.name || '').length;
-                continue;
-            }
-        }
-        html += escapeHtml(value[index]);
-        index += 1;
-    }
-    return html;
 }
 function promptReferenceKind(itemOrKind){
     const kind = typeof itemOrKind === 'string'
@@ -16194,24 +16148,6 @@ function venicePromptReferenceLabel(kind, index){
     const n = Math.max(1, Number(index) || 1);
     return `@${promptReferenceKind(kind)}${n}`;
 }
-function promptReferenceLabelState(refs=[]){
-    const labels = new Map();
-    const counters = {image:0, video:0, audio:0};
-    (refs || []).forEach(ref => {
-        const key = promptMentionRefKey(ref);
-        if(!key || labels.has(key)) return;
-        const kind = promptReferenceKind(ref);
-        const index = ++counters[kind];
-        labels.set(key, promptMentionTokenLabel(kind, index));
-    });
-    return {labels, counters};
-}
-function promptReferenceLabelMap(node=null){
-    const target = node || selectedNode() || activeComposerNode();
-    if(!target) return new Map();
-    const refs = uniqueReferenceImages(defaultReferenceImagesFor(target, false, smartLoopContext));
-    return promptReferenceLabelState(refs).labels;
-}
 function promptMentionRefKey(part){
     if(!part || typeof part !== 'object') return '';
     const kind = promptReferenceKind(part);
@@ -16221,40 +16157,18 @@ function promptMentionRefKey(part){
     if(url) return `${kind}|${url}`;
     return `${kind}|${nodeId}|${imageIndex}|${String(part.name || '').trim()}`;
 }
-function refreshPromptMentionTokenLabels(){
-    if(!promptInput) return;
-    const tokens = [...promptInput.querySelectorAll('.mention-image-token')];
+function refreshPromptReferenceContext(){
     const target = selectedNode() || activeComposerNode();
-    const orderedRefs = target ? uniqueReferenceImages(defaultReferenceImagesFor(target, false, smartLoopContext)) : [];
-    const orderedState = promptReferenceLabelState(orderedRefs);
-    const orderedMap = orderedState.labels;
-    const extraMap = new Map();
-    const counters = {...orderedState.counters};
-    tokens.forEach(token => {
-        const kind = promptReferenceKind(token.dataset.kind || 'image');
-        const key = promptMentionRefKey({
-            kind,
-            url:token.dataset.url || '',
-            nodeId:token.dataset.nodeId || '',
-            imageIndex:token.dataset.imageIndex ?? '',
-            name:token.dataset.name || ''
-        });
-        let label = orderedMap.get(key) || extraMap.get(key);
-        if(!label){
-            label = promptMentionTokenLabel(kind, ++counters[kind]);
-            extraMap.set(key, label);
-        }
-        token.dataset.refLabel = label;
-        const labelEl = token.querySelector('.mention-token-label') || token.querySelector('span:last-child');
-        if(labelEl) labelEl.textContent = label;
-    });
+    promptEditor?.setReferenceContext(target ? visibleReferenceImagesFor(target) : []);
 }
 function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
+    const promptSnapshot = promptEditor?.snapshot?.() || {doc:null, references:[], text:''};
     return {
         prompt,
         displayPrompt:displayPrompt || promptPlainText() || prompt,
-        promptHtml: promptInput ? promptInput.innerHTML : '',
-        promptText: promptPlainText(),
+        promptDoc:promptSnapshot.doc,
+        promptReferences:promptSnapshot.references,
+        promptText:promptSnapshot.text || promptPlainText(),
         promptRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
         inputRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
         sourceNodeId:sourceId,
@@ -16275,22 +16189,20 @@ function shouldDropRunRefForNode(targetNode, ref, options={}){
 function cleanSavedRunRefsForNode(targetNode, refs=[], options={}){
     return uniqueReferenceImages((refs || []).filter(ref => !shouldDropRunRefForNode(targetNode, ref, options)));
 }
-function cleanPromptDraftHtmlForNode(targetNode, html='', options={}){
-    if(!String(html || '').includes('mention-image-token') || typeof document === 'undefined') return html;
-    const tpl = document.createElement('template');
-    tpl.innerHTML = html;
-    tpl.content.querySelectorAll?.('.mention-image-token').forEach(token => {
-        const ref = {
-            url:token.dataset.url || '',
-            kind:token.dataset.kind || '',
-            name:token.dataset.name || '',
-            nodeId:token.dataset.nodeId || '',
-            imageIndex:token.dataset.imageIndex ?? ''
-        };
-        if(!shouldDropRunRefForNode(targetNode, ref, options)) return;
-        token.replaceWith(document.createTextNode(token.dataset.refLabel || token.dataset.name || ''));
+function cleanPromptDocumentForNode(targetNode, doc, refs=[], options={}){
+    if(!doc || typeof doc !== 'object') return doc;
+    const dropped = new Map((refs || []).filter(ref => shouldDropRunRefForNode(targetNode, ref, options)).map(ref => [String(ref.refId || ''), ref]));
+    const copy = JSON.parse(JSON.stringify(doc));
+    const cleanContent = content => (content || []).flatMap(item => {
+        if(item?.type === 'media_reference' && dropped.has(String(item.attrs?.refId || ''))){
+            const ref = dropped.get(String(item.attrs?.refId || ''));
+            return [{type:'text', text:ref?.name || ref?.refLabel || '图片'}];
+        }
+        if(Array.isArray(item?.content)) item.content = cleanContent(item.content);
+        return [item];
     });
-    return tpl.innerHTML;
+    copy.content = cleanContent(copy.content);
+    return copy;
 }
 function attachRunMeta(targetNode, meta){
     if(!targetNode || !meta) return;
@@ -16312,21 +16224,20 @@ function attachRunMeta(targetNode, meta){
     if(meta.sourceNodeId) targetNode.sourceNodeId = meta.sourceNodeId;
     else delete targetNode.sourceNodeId;
     targetNode.runAt = meta.createdAt;
-    // 保存可编辑的 @-提及表单到草稿字段，方便点输出节点时还原原始可编辑形式
-    if(meta.promptHtml != null){
-        const cleanPromptHtml = cleanPromptDraftHtmlForNode(targetNode, meta.promptHtml, cleanOptions);
-        const htmlHasToken = String(cleanPromptHtml || '').includes('mention-image-token');
-        const rebuiltHtml = htmlHasToken ? '' : promptHtmlWithMentionTokens(meta.displayPrompt || meta.promptText || '', cleanPromptRefs);
-        targetNode.promptDraftHtml = htmlHasToken ? cleanPromptHtml : (rebuiltHtml || cleanPromptHtml);
-        targetNode.promptDraftText = meta.promptText || '';
-        targetNode.runSnapshotPromptDraftHtml = targetNode.promptDraftHtml;
-        targetNode.runSnapshotPromptDraftText = targetNode.promptDraftText;
+    if(meta.promptDoc){
+        const ownedRefs = cleanSavedRunRefsForNode(targetNode, meta.promptReferences || [], cleanOptions);
+        targetNode.promptDoc = cleanPromptDocumentForNode(targetNode, meta.promptDoc, meta.promptReferences || [], cleanOptions);
+        targetNode.promptReferences = ownedRefs;
+        targetNode.runSnapshotPromptDoc = JSON.parse(JSON.stringify(targetNode.promptDoc));
+        targetNode.runSnapshotPromptReferences = ownedRefs.map(ref => ({...ref}));
     } else {
-        delete targetNode.promptDraftHtml;
-        delete targetNode.promptDraftText;
-        delete targetNode.runSnapshotPromptDraftHtml;
-        targetNode.runSnapshotPromptDraftText = meta.promptText || meta.displayPrompt || '';
+        targetNode.promptDoc = window.SmartPromptEditor?.textDocument?.(meta.promptText || meta.displayPrompt || '', []);
+        targetNode.promptReferences = [];
+        delete targetNode.runSnapshotPromptDoc;
+        delete targetNode.runSnapshotPromptReferences;
     }
+    delete targetNode.promptDraftHtml;
+    delete targetNode.promptDraftText;
     targetNode.images = (targetNode.images || []).map(img => stripImageGenerationMeta(img));
 }
 function stripRunInputMeta(meta){
@@ -16334,7 +16245,8 @@ function stripRunInputMeta(meta){
     const cleanPrompt = meta.promptText || meta.displayPrompt || meta.prompt || '';
     return {
         ...meta,
-        promptHtml:escapeHtml(cleanPrompt),
+        promptDoc:window.SmartPromptEditor?.textDocument?.(cleanPrompt, []),
+        promptReferences:[],
         promptText:cleanPrompt,
         promptRefs:[],
         inputRefs:meta.inputRefs || meta.promptRefs || [],
@@ -16350,24 +16262,26 @@ function stripImageGenerationMeta(img){
     delete img.runAt;
     delete img.promptDraftHtml;
     delete img.promptDraftText;
+    delete img.promptDoc;
+    delete img.promptReferences;
     return img;
 }
 // 从节点抓取"上次实际运行"的提示词快照，用于嵌入图片对象随图漂流。
-// 注意 runSettings / promptDraftHtml / promptDraftText 在编辑器里会继续被用户改动，
+// 注意 runSettings / promptDoc / promptReferences 在编辑器里会继续被用户改动，
 // 因此这里优先读取 attachRunMeta 固化的 runSnapshot* 字段，而不是读当前草稿态。
 function genPromptSnapshotFromNode(node){
     if(!node) return null;
     if(!node.runPrompt) return null;
     const snapshotSettings = node.runSnapshotSettings ? cloneSmartSettings(node.runSnapshotSettings) : (node.runSettings ? cloneSmartSettings(node.runSettings) : undefined);
-    const snapshotPromptHtml = node.runSnapshotPromptDraftHtml != null ? String(node.runSnapshotPromptDraftHtml) : undefined;
-    const snapshotPromptText = node.runSnapshotPromptDraftText != null ? String(node.runSnapshotPromptDraftText) : undefined;
+    const snapshotPromptDoc = node.runSnapshotPromptDoc ? JSON.parse(JSON.stringify(node.runSnapshotPromptDoc)) : undefined;
+    const snapshotPromptReferences = Array.isArray(node.runSnapshotPromptReferences) ? node.runSnapshotPromptReferences.map(ref => ({...ref})) : [];
     return {
         runPrompt: node.runPrompt,
         runModelPrompt: node.runModelPrompt || '',
         runSettings: snapshotSettings,
         runPromptRefs: Array.isArray(node.runPromptRefs) ? node.runPromptRefs.map(r => ({...r})) : [],
-        promptDraftHtml: snapshotPromptHtml,
-        promptDraftText: snapshotPromptText,
+        promptDoc:snapshotPromptDoc,
+        promptReferences:snapshotPromptReferences,
     };
 }
 function embedGenPromptIntoImages(images, node){
@@ -16828,9 +16742,13 @@ function lineImagesFor(node){
         return imagesForNode(source);
     }).filter(img => img?.url);
 }
-function collectMentionedImagesFromPrompt(){
+function promptReferenceImagesFor(node){
+    if(node?.id && activeComposerNode()?.id === node.id && promptEditor) return promptEditor.getReferences();
+    return Array.isArray(node?.promptReferences) ? node.promptReferences : [];
+}
+function collectMentionedImagesFromPrompt(node=activeComposerNode() || selectedNode()){
     const images = [];
-    collectPromptParts().forEach(part => {
+    collectPromptParts(node).forEach(part => {
         if(part.type === 'image' && part.url) images.push(part);
     });
     return images;
@@ -16853,7 +16771,7 @@ function uniqueReferenceImages(images){
 }
 function visibleReferenceImagesFor(node){
     const base = defaultReferenceImagesFor(node);
-    return uniqueReferenceImages([...base, ...collectMentionedImagesFromPrompt()]);
+    return uniqueReferenceImages([...base, ...promptReferenceImagesFor(node)]);
 }
 function mentionInputNodeLabel(img, fallback='图片'){
     const sourceNode = img?.nodeId ? nodes.find(candidate => candidate.id === img.nodeId) : null;
@@ -16926,18 +16844,10 @@ function closeMentionPicker(){
     if(selectedNode()) renderInputThumbsRow(selectedNode());
 }
 function saveMentionRange(){
-    const sel = window.getSelection();
-    if(sel && sel.rangeCount && promptInput.contains(sel.anchorNode)){
-        mentionRange = sel.getRangeAt(0).cloneRange();
-    }
+    return Boolean(promptEditor?.hasFocus?.());
 }
 function textBeforeCaret(){
-    const sel = window.getSelection();
-    if(!sel || !sel.rangeCount || !promptInput.contains(sel.anchorNode)) return '';
-    const range = sel.getRangeAt(0).cloneRange();
-    range.selectNodeContents(promptInput);
-    range.setEnd(sel.anchorNode, sel.anchorOffset);
-    return range.toString();
+    return promptEditor?.textBeforeCaret?.() || '';
 }
 function renderMentionPicker(source){
     const node = selectedNode();
@@ -17079,15 +16989,7 @@ function showMentionPicker(){
     renderMentionPicker(mentionSource);
 }
 function setPromptCaretToEnd(){
-    if(!promptInput) return;
-    promptInput.focus();
-    const range = document.createRange();
-    range.selectNodeContents(promptInput);
-    range.collapse(false);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-    mentionRange = range.cloneRange();
+    promptEditor?.focusEnd?.();
 }
 function toggleAssetMentionPickerFromThumbs(){
     if(!selectedNode()) return;
@@ -17167,12 +17069,7 @@ function positionMentionPickerAtCaret(){
         mentionPicker.style.top = `${Math.max(2, rawTop)}px`;
         return;
     }
-    let caretRect = null;
-    const sel = window.getSelection();
-    if(sel && sel.rangeCount){
-        const range = sel.getRangeAt(0).cloneRange();
-        caretRect = range.getClientRects()[0] || range.getBoundingClientRect();
-    }
+    const caretRect = promptEditor?.caretRect?.() || null;
     const inputRect = promptInput.getBoundingClientRect();
     // Use the composer's measured screen scale. It normally stays at 1 because
     // the composer counter-scales the world, while this also remains robust if
@@ -17202,82 +17099,15 @@ function maybeOpenMentionPicker(){
 }
 function insertMentionToken(img){
     if(!img?.url) return;
-    promptInput.focus();
-    const sel = window.getSelection();
-    if(mentionRange){
-        sel.removeAllRanges();
-        sel.addRange(mentionRange);
-    }
-    const range = sel.rangeCount ? sel.getRangeAt(0) : document.createRange();
-    let removedAt = false;
-    if(range.startContainer?.nodeType === Node.TEXT_NODE && range.startOffset > 0){
-        const text = range.startContainer.textContent || '';
-        if(text[range.startOffset - 1] === '@'){
-            range.setStart(range.startContainer, range.startOffset - 1);
-            range.deleteContents();
-            removedAt = true;
-        }
-    }
-    if(!removedAt) {
-        const walker = document.createTreeWalker(promptInput, NodeFilter.SHOW_TEXT);
-        let lastText = null;
-        while(walker.nextNode()) lastText = walker.currentNode;
-        if(lastText && /@$/.test(lastText.textContent || '')) {
-            lastText.textContent = lastText.textContent.slice(0, -1);
-            range.selectNodeContents(promptInput);
-            range.collapse(false);
-        }
-    }
-    const token = createMentionTokenElement(img);
-    range.insertNode(token);
-    bindSmartPreviewImageFallbacks(token);
-    const spacer = document.createTextNode(' ');
-    token.after(spacer);
-    range.setStartAfter(spacer);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    refreshPromptMentionTokenLabels();
+    promptEditor?.insertReference?.({...img, name:img.alias || img.name || ''});
     closeMentionPicker();
-    promptInput.focus();
-    renderInputThumbsRow(selectedNode());
 }
-function collectPromptParts(){
-    const parts = [];
-    const walk = node => {
-        if(node.nodeType === Node.TEXT_NODE){
-            if(node.textContent) parts.push({type:'text', text:node.textContent});
-            return;
-        }
-        if(node.nodeType !== Node.ELEMENT_NODE) return;
-        if(node.classList?.contains('mention-image-token')){
-            let assetUris = {};
-            try { assetUris = JSON.parse(node.dataset.assetUris || '{}') || {}; } catch(e) { assetUris = {}; }
-            const kind = node.dataset.kind || 'image';
-            parts.push({
-                type:'image',
-                kind,
-                url:node.dataset.url || '',
-                name:node.dataset.name || (kind === 'audio' ? '音频' : '图片'),
-                refLabel:node.dataset.refLabel || '',
-                nodeId:node.dataset.nodeId || '',
-                imageIndex:Number(node.dataset.imageIndex || 0),
-                asset_uris:assetUris
-            });
-            return;
-        }
-        if(node.tagName === 'BR'){
-            parts.push({type:'text', text:'\n'});
-            return;
-        }
-        const blockTags = new Set(['DIV','P','LI','SECTION','ARTICLE','HEADER','FOOTER','BLOCKQUOTE']);
-        const isBlock = node !== promptInput && blockTags.has(node.tagName);
-        if(isBlock && parts.length && parts[parts.length - 1]?.text && !/\n$/.test(parts[parts.length - 1].text)) parts.push({type:'text', text:'\n'});
-        node.childNodes.forEach(walk);
-        if(isBlock) parts.push({type:'text', text:'\n'});
-    };
-    promptInput.childNodes.forEach(walk);
-    return parts;
+function collectPromptParts(node=activeComposerNode() || selectedNode()){
+    if(promptEditor && (!node || activeComposerNode()?.id === node.id)) return promptEditor.getParts();
+    if(node?.promptDoc) return window.SmartPromptEditor?.partsFromJSON?.(node.promptDoc, node.promptReferences || []) || [];
+    const refs = Array.isArray(node?.runPromptRefs) ? node.runPromptRefs : [];
+    const doc = window.SmartPromptEditor?.textDocument?.(node?.runPrompt || '', refs);
+    return doc ? window.SmartPromptEditor.partsFromJSON(doc, refs) : [];
 }
 function originalPromptTextFromParts(parts){
     let text = '';
@@ -17302,7 +17132,7 @@ function originalPromptTextFromParts(parts){
     return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext){
-    const parts = collectPromptParts();
+    const parts = collectPromptParts(node);
     const originalPrompt = originalPromptTextFromParts(parts);
     const blockedRefs = blockedInputRefKeys(node);
     const hasOverrideImages = Array.isArray(overrideDefaultImages);
@@ -18137,17 +17967,7 @@ function syncCascadeRunButton(node=selectedNode()){
     refreshIcons();
 }
 function loadNodePromptDraftToInput(node){
-    if(node?.promptDraftHtml) {
-        const hasToken = String(node.promptDraftHtml || '').includes('mention-image-token');
-        promptInput.innerHTML = hasToken
-            ? node.promptDraftHtml
-            : (promptHtmlWithMentionTokens(node.runPrompt || node.promptDraftText || '', node.runPromptRefs || []) || node.promptDraftHtml);
-    } else {
-        const rebuilt = promptHtmlWithMentionTokens(node?.runPrompt || '', node?.runPromptRefs || []);
-        if(rebuilt) promptInput.innerHTML = rebuilt;
-        else setPromptText(node?.runPrompt || '');
-    }
-    refreshPromptMentionTokenLabels();
+    loadPromptDraft(node);
 }
 async function createSmartComfyTask(payload){
     const requestBodyJson = JSON.stringify(payload);
@@ -18204,14 +18024,7 @@ function comfyParamsFromWorkflowValues(config, values={}){
     return params;
 }
 function buildPromptRequestForNode(node, defaultImages, ctx=smartLoopContext){
-    const oldHtml = promptInput.innerHTML;
-    loadNodePromptDraftToInput(node);
-    try {
-        return buildPromptRequest(node, defaultImages, false, ctx);
-    } finally {
-        promptInput.innerHTML = oldHtml;
-        refreshPromptMentionTokenLabels();
-    }
+    return buildPromptRequest(node, defaultImages, false, ctx);
 }
 async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=settings, requestMeta=null){
     const activeSettings = runSettings || settings;
@@ -18325,16 +18138,17 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
         settings:JSON.parse(JSON.stringify(runSettings)),
         createdAt:Date.now()
     };
-    if(requestNode.promptDraftHtml != null){
-        meta.promptHtml = requestNode.promptDraftHtml;
-        meta.promptText = requestNode.promptDraftText || request.displayPrompt || '';
+    if(requestNode.promptDoc){
+        meta.promptDoc = JSON.parse(JSON.stringify(requestNode.promptDoc));
+        meta.promptReferences = (requestNode.promptReferences || []).map(ref => ({...ref}));
+        meta.promptText = window.SmartPromptEditor?.exchangeText?.(requestNode.promptDoc, requestNode.promptReferences || [], visibleReferenceImagesFor(requestNode)) || request.displayPrompt || '';
     }
     const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
     const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind, request, runSettings);
     const runLogStart = nowMs();
     const targetPromptState = {
-        promptDraftHtml:targetNode.promptDraftHtml,
-        promptDraftText:targetNode.promptDraftText,
+        promptDoc:targetNode.promptDoc ? JSON.parse(JSON.stringify(targetNode.promptDoc)) : undefined,
+        promptReferences:Array.isArray(targetNode.promptReferences) ? targetNode.promptReferences.map(ref => ({...ref})) : undefined,
         runPrompt:targetNode.runPrompt,
         runModelPrompt:targetNode.runModelPrompt,
         runPromptRefs:targetNode.runPromptRefs ? targetNode.runPromptRefs.map(ref => ({...ref})) : undefined,
@@ -18375,10 +18189,10 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
         outputNode.runSettings = targetPromptState.runSettings;
         outputNode.sourceNodeId = targetPromptState.sourceNodeId;
         outputNode.runAt = targetPromptState.runAt;
-        if(targetPromptState.promptDraftHtml === undefined) delete outputNode.promptDraftHtml;
-        else outputNode.promptDraftHtml = targetPromptState.promptDraftHtml;
-        if(targetPromptState.promptDraftText === undefined) delete outputNode.promptDraftText;
-        else outputNode.promptDraftText = targetPromptState.promptDraftText;
+        if(targetPromptState.promptDoc === undefined) delete outputNode.promptDoc;
+        else outputNode.promptDoc = targetPromptState.promptDoc;
+        if(targetPromptState.promptReferences === undefined) delete outputNode.promptReferences;
+        else outputNode.promptReferences = targetPromptState.promptReferences;
         ['runPrompt','runModelPrompt','runSettings','sourceNodeId','runAt'].forEach(key => {
             if(targetPromptState[key] === undefined) delete outputNode[key];
         });
@@ -18596,7 +18410,7 @@ async function runSmartCascade(targetNode=null){
     if(!graph.edges.length && !singleNodeLoopRun){ toast(tr('smart.loopNoChain')); return; }
     const originalSelected = selectedId;
     const originalSettings = cloneSmartSettings(settings);
-    const originalPromptHtml = promptInput.innerHTML;
+    const originalPromptSnapshot = promptEditor?.snapshot?.();
     const runKey = loopId || `cascade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const runState = {runKey, loopId, stopRequested:false, runPath:null};
     smartCascadeRuns.set(runKey, runState);
@@ -18770,7 +18584,7 @@ async function runSmartCascade(targetNode=null){
         lastComposerNodeId = '';
         setComposerOpen(false);
         settings = originalSettings;
-        promptInput.innerHTML = originalPromptHtml;
+        if(originalPromptSnapshot) promptEditor.setValue(originalPromptSnapshot.doc, originalPromptSnapshot.references, {silent:true});
         scheduleSave();
         toast(totalRounds > 1
             ? trf(loopMode === 'parallel' ? 'smart.loopParallelRoundsDone' : 'smart.loopRunRoundsDone', {n:totalRounds})
@@ -18779,7 +18593,7 @@ async function runSmartCascade(targetNode=null){
         if(parallelLimit === 1) smartLoopContext = null;
         selectedId = originalSelected;
         settings = originalSettings;
-        promptInput.innerHTML = originalPromptHtml;
+        if(originalPromptSnapshot) promptEditor.setValue(originalPromptSnapshot.doc, originalPromptSnapshot.references, {silent:true});
         toast(e?.smartCascadeStopped ? '已停止一键运行' : (e.message || tr('smart.errRunFailed')).slice(0, 160));
     } finally {
         smartCascadeRuns.delete(runKey);
@@ -21003,6 +20817,7 @@ shell.ondrop = async e => {
     await handleSmartImageDropPayload(payload, '', {point:p, forceNew:true});
 };
 window.addEventListener('paste', e => {
+    if(e.defaultPrevented) return;
     if(!isEditableTarget(e.target) && pasteEventMatchesNodeClipboard(e)){
         e.preventDefault();
         pasteNodes();
@@ -21688,50 +21503,19 @@ composer.addEventListener('click', event => {
     if(!event.target.closest('.smart-control') && !event.target.closest('#runBtn') && !event.target.closest('#cascadeRunBtn')) closeAllSmartPopovers();
     event.stopPropagation();
 });
-promptInput.addEventListener('input', maybeOpenMentionPicker);
-promptInput.addEventListener('input', () => {
-    refreshPromptMentionTokenLabels();
+promptInput.addEventListener('smart-prompt-change', () => {
+    hideMentionPreview();
+    maybeOpenMentionPicker();
     delete promptInput.dataset.preserveDraftOnce;
     savePromptDraftForCurrent();
     renderInputThumbsRow(selectedNode());
     scheduleSave();
 });
-promptInput.addEventListener('copy', event => {
-    const sel = window.getSelection();
-    if(!sel || !sel.rangeCount || !promptInput.contains(sel.anchorNode)) return;
-    const range = sel.getRangeAt(0);
-    const container = document.createElement('div');
-    container.appendChild(range.cloneContents());
-    const htmlData = container.innerHTML;
-    if(!htmlData) return;
-    const text = (sel.toString() || '').replace(/^\n+/, '').replace(/\n+$/, '');
-    event.clipboardData.setData('text/html', `<meta charset='utf-8'>${htmlData}`);
-    event.clipboardData.setData('text/plain', text);
-    event.preventDefault();
-});
-promptInput.addEventListener('cut', event => {
-    const sel = window.getSelection();
-    if(!sel || !sel.rangeCount || !promptInput.contains(sel.anchorNode)) return;
-    const range = sel.getRangeAt(0);
-    const container = document.createElement('div');
-    container.appendChild(range.cloneContents());
-    const htmlData = container.innerHTML;
-    if(!htmlData) return;
-    const text = (sel.toString() || '').replace(/^\n+/, '').replace(/\n+$/, '');
-    event.clipboardData.setData('text/html', `<meta charset='utf-8'>${htmlData}`);
-    event.clipboardData.setData('text/plain', text);
-    event.preventDefault();
-    let deletedWithNativeUndo = false;
-    try {
-        deletedWithNativeUndo = typeof document.execCommand === 'function' && document.execCommand('delete');
-    } catch(_) {}
-    if(!deletedWithNativeUndo){
-        range.deleteContents();
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        promptInput.dispatchEvent(new Event('input', {bubbles:true}));
-    }
+promptInput.addEventListener('smart-prompt-files-paste', event => {
+    const files = [...(event.detail?.files || [])].filter(isSupportedUploadFile);
+    if(!files.length) return;
+    lastImagePasteAt = Date.now();
+    handleFiles(files, selectedId);
 });
 promptInput.addEventListener('keyup', event => {
     // When the picker is open, navigation keys must not re-trigger maybeOpenMentionPicker
@@ -21741,8 +21525,9 @@ promptInput.addEventListener('keyup', event => {
     maybeOpenMentionPicker();
 });
 promptInput.addEventListener('mouseup', saveMentionRange);
-promptInput.addEventListener('focus', saveMentionRange);
+promptInput.addEventListener('focusin', saveMentionRange);
 function handleMentionPickerKeydown(event){
+    if(event.isComposing || event.keyCode === 229) return;
     if(event.key === 'Escape'){ closeMentionPicker(); return; }
     if(!mentionPicker?.classList?.contains('open')) return;
     const btns = [...mentionPicker.querySelectorAll('[data-mention-index]')];
@@ -21778,14 +21563,24 @@ function handleMentionPickerKeydown(event){
         return;
     }
 }
-promptInput.addEventListener('keydown', handleMentionPickerKeydown);
-promptInput.addEventListener('mouseover', event => {
-    const token = event.target.closest?.('.mention-image-token');
-    if(!token) return;
-    // mouseover 会在标签内部的缩略图/文字之间移动时冒泡；只处理真正进入标签的一次。
-    if(event.relatedTarget && token.contains(event.relatedTarget)) return;
-    // 音频没有可预览的图像，不能把音频 URL 塞进 <img>（会显示破损图标），直接不弹悬浮预览。
-    if(token.dataset.kind === 'audio'){ mentionPreview.style.display = 'none'; return; }
+// Capture before ProseMirror so Enter selects the focused mention instead of
+// reaching the editor's paragraph-split command.
+promptInput.addEventListener('keydown', handleMentionPickerKeydown, true);
+function hideMentionPreview(){
+    if(!mentionPreviewToken && mentionPreview.style.display !== 'block') return;
+    mentionPreviewToken = null;
+    mentionPreview.style.display = 'none';
+    const media = mentionPreview.querySelector('img,video');
+    media?.pause?.();
+    media?.removeAttribute('src');
+    media?.load?.();
+}
+function showMentionPreviewForToken(token){
+    if(!token || promptEditor?.referenceDragActive || token.dataset.kind === 'audio'){
+        hideMentionPreview();
+        return;
+    }
+    if(mentionPreviewToken === token && mentionPreview.style.display === 'block') return;
     let media = mentionPreview.querySelector('img,video');
     const isVideo = token.dataset.kind === 'video' || isVideoMediaItem({url:token.dataset.url, kind:token.dataset.kind});
     if(isVideo && media?.tagName?.toLowerCase() !== 'video'){
@@ -21814,17 +21609,27 @@ promptInput.addEventListener('mouseover', event => {
     mentionPreview.style.left = `${Math.min(window.innerWidth - 236, rect.left)}px`;
     mentionPreview.style.top = `${Math.min(window.innerHeight - 236, rect.bottom + 8)}px`;
     mentionPreview.style.display = 'block';
-});
-promptInput.addEventListener('mouseout', event => {
-    const token = event.target.closest?.('.mention-image-token');
-    if(token && (!event.relatedTarget || !token.contains(event.relatedTarget))){
-        mentionPreview.style.display = 'none';
-        const media = mentionPreview.querySelector('img,video');
-        media?.pause?.();
-        media?.removeAttribute('src');
-        media?.load?.();
+    mentionPreviewToken = token;
+}
+// Only a real pointer move can arm a preview. Typing may move a token under a
+// stationary mouse, but that layout change does not run this handler.
+promptInput.addEventListener('pointermove', event => {
+    if((event.pointerType && event.pointerType !== 'mouse') || event.buttons){
+        hideMentionPreview();
+        return;
     }
+    const token = event.target.closest?.('.mention-image-token');
+    if(token && promptInput.contains(token)) showMentionPreviewForToken(token);
+    else hideMentionPreview();
 });
+promptInput.addEventListener('pointerdown', event => {
+    if(event.target.closest?.('.mention-image-token')) hideMentionPreview();
+}, true);
+promptInput.addEventListener('pointerleave', hideMentionPreview);
+promptInput.addEventListener('pointercancel', hideMentionPreview);
+promptInput.addEventListener('dragstart', hideMentionPreview, true);
+promptInput.addEventListener('dragend', hideMentionPreview, true);
+promptInput.addEventListener('scroll', hideMentionPreview, {passive:true});
 mentionPicker.addEventListener('mousedown', event => event.stopPropagation());
 document.addEventListener('click', event => {
     if(!event.target.closest('.smart-control')) closeAllSmartPopovers();

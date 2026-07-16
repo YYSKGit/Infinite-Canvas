@@ -1,0 +1,18 @@
+{
+  "name": "infinite-canvas-local",
+  "private": true,
+  "scripts": {
+    "build:prompt-editor": "esbuild frontend/smart-prompt-editor.js --bundle --format=iife --platform=browser --target=es2020 --outfile=static/js/smart-prompt-editor.js"
+  },
+  "dependencies": {
+    "prosemirror-commands": "^1.7.1",
+    "prosemirror-history": "^1.5.0",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-model": "^1.25.11",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.42.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}
