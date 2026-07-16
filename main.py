@@ -8560,6 +8560,7 @@ VENICE_IMAGE_EDIT_MODEL_ALIASES = {
     "grok-imagine": "grok-imagine-edit",
     "qwen-image-2-pro": "qwen-image-2-pro-edit",
     "qwen-image-2": "qwen-image-2-edit",
+    "seedream-v5-pro": "seedream-v5-pro-edit",
     "seedream-v5-lite": "seedream-v5-lite-edit",
     "seedream-v4": "seedream-v4-edit"
 }
