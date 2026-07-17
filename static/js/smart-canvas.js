@@ -21633,6 +21633,14 @@ promptInput.addEventListener('dragstart', hideMentionPreview, true);
 promptInput.addEventListener('dragend', hideMentionPreview, true);
 promptInput.addEventListener('scroll', hideMentionPreview, {passive:true});
 mentionPicker.addEventListener('mousedown', event => event.stopPropagation());
+// The canvas and composer intentionally stop bubbling pointer events. Close the
+// template library during capture so every click outside it behaves consistently.
+document.addEventListener('pointerdown', event => {
+    if(!promptTemplatePanel?.classList?.contains('open')) return;
+    if(event.target.closest?.('.prompt-template-panel')) return;
+    if(event.target.closest?.('.prompt-preset-edit, #composerTemplateBtn')) return;
+    closePromptTemplatePanel();
+}, true);
 document.addEventListener('click', event => {
     if(!event.target.closest('.smart-control')) closeAllSmartPopovers();
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
