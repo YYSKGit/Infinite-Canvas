@@ -330,9 +330,11 @@ function activePromptLibrary(){
 // 新建的普通库分类为空 → 返回 []，不能借用当前激活库/系统库的分类（否则树里会错显系统分类）。
 function promptCategoriesFor(lib){
     const fromLib = Array.isArray(lib?.categories) ? lib.categories.filter(c => c?.id) : [];
-    if(fromLib.length) return fromLib;
-    if(!isSystemPromptLibrary(lib)) return [];
+    const hasAssistantRecipes = (lib?.items || []).some(item => item?.kind === 'assistant_recipe');
+    if(fromLib.length) return hasAssistantRecipes && !fromLib.some(category => category.id === 'assistant') ? [{id:'assistant', name:'AI 助手'}, ...fromLib] : fromLib;
+    if(!isSystemPromptLibrary(lib)) return hasAssistantRecipes ? [{id:'assistant', name:'AI 助手'}] : [];
     return [
+        ...(hasAssistantRecipes ? [{id:'assistant', name:'AI 助手'}] : []),
         {id:'view', name:'视角'},
         {id:'storyboard', name:'分镜'},
         {id:'character', name:'角色'},
@@ -344,7 +346,7 @@ function promptCategoriesFor(lib){
 function activePromptCategories(){
     return promptCategoriesFor(activePromptLibrary());
 }
-const PROMPT_BUILTIN_CATEGORY_IDS = new Set(['view','storyboard','character','product','lighting','custom']);
+const PROMPT_BUILTIN_CATEGORY_IDS = new Set(['assistant','view','storyboard','character','product','lighting','custom']);
 const ASSET_CLASS_GROUPS = [
     {id:'environment', name:'环境', dims:['environment','scene','space','mood']},
     {id:'composition', name:'构图', dims:['composition']},
@@ -981,7 +983,7 @@ function currentPromptItems(){
     return (lib?.items || []).filter(item => {
         if(activePromptCategory !== 'all' && (item.category || 'custom') !== activePromptCategory) return false;
         if(!query) return true;
-        return [item.name, item.scene, item.positive, item.negative, item.category].join(' ').toLowerCase().includes(query);
+        return [item.name, item.scene, item.positive, item.negative, item.system_template, item.user_template, item.recommended_provider, item.recommended_model, item.category].join(' ').toLowerCase().includes(query);
     });
 }
 // 认证支持的平台键（与后端 AVATAR_SUPPORTED_PLATFORMS 保持一致；新增平台时同步）
@@ -2451,20 +2453,43 @@ function renderPromptTreeInlineEdit(kind){
     </div>`;
 }
 function renderPromptRow(item, readonly){
+    const assistant = item?.kind === 'assistant_recipe';
+    const preview = assistant ? (item.system_template || item.user_template || '') : (item.positive || '');
     return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}">
         <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly ? 'disabled' : ''}>
         <div class="prompt-row-main">
             <div class="prompt-row-title"><strong>${escapeHtml(item.name || '提示词')}</strong><span class="prompt-tag">${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span></div>
             <div class="prompt-row-scene">${escapeHtml(item.scene || '未填写用途说明')}</div>
-            <div class="prompt-row-text">${escapeHtml(item.positive || '')}</div>
+            <div class="prompt-row-text">${escapeHtml(preview)}</div>
         </div>
     </article>`;
 }
+function renderPromptEditFields(item={}, assistant=false){
+    const effort = String(item.recommended_reasoning_effort || '');
+    if(assistant) return `
+        <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="助手指令名称"></label>
+        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="说明这个指令适合处理什么任务">${escapeHtml(item.scene || '')}</textarea></label>
+        <label class="inline-edit-field"><span>系统提示词</span><textarea id="promptEditSystemTemplate" class="prompt-recipe-template" placeholder="定义模型角色、任务和输出约束">${escapeHtml(item.system_template || '')}</textarea></label>
+        <label class="inline-edit-field"><span>用户提示词模板</span><textarea id="promptEditUserTemplate" class="prompt-recipe-template" placeholder="必须包含 {{prompt}}，也可使用 {{selection}} 和 {{target_language}}">${escapeHtml(item.user_template || 'Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>')}</textarea></label>
+        <label class="inline-edit-check"><input id="promptEditPreserveReferences" type="checkbox" ${item.preserve_references !== false ? 'checked' : ''}><span>保护画布中的图片、视频等媒体引用，不允许模型删除或改写</span></label>
+        <div class="inline-edit-grid">
+            <label class="inline-edit-field"><span>推荐平台（可选）</span><input id="promptEditRecommendedProvider" type="text" value="${escapeAttr(item.recommended_provider || '')}" placeholder="例如 venice"></label>
+            <label class="inline-edit-field"><span>推荐模型（可选）</span><input id="promptEditRecommendedModel" type="text" value="${escapeAttr(item.recommended_model || '')}" placeholder="留空则使用当前选择"></label>
+            <label class="inline-edit-field"><span>推荐推理强度</span><select id="promptEditReasoningEffort"><option value="" ${!effort ? 'selected' : ''}>自动</option><option value="low" ${effort === 'low' ? 'selected' : ''}>低</option><option value="medium" ${effort === 'medium' ? 'selected' : ''}>中</option><option value="high" ${effort === 'high' ? 'selected' : ''}>高</option></select></label>
+            <label class="inline-edit-field"><span>默认目标语言（可选）</span><input id="promptEditTargetLanguage" type="text" value="${escapeAttr(item.default_target_language || '')}" placeholder="例如 English"></label>
+        </div>`;
+    return `
+        <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="提示词名称"></label>
+        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="用途说明">${escapeHtml(item.scene || '')}</textarea></label>
+        <label class="inline-edit-field"><span>正向提示词</span><textarea id="promptEditPositive" placeholder="正向提示词">${escapeHtml(item.positive || '')}</textarea></label>
+        <label class="inline-edit-field"><span>负向提示词</span><textarea id="promptEditNegative" placeholder="负向提示词">${escapeHtml(item.negative || '')}</textarea></label>`;
+}
 function renderPromptDetail(item, readonly){
     if(promptCreateMode && !readonly){
+        const assistant = activePromptCategory === 'assistant';
         return `
             <div class="panel-head">
-                <div class="panel-title"><strong>新增提示词</strong><span>保存到当前提示词库</span></div>
+                <div class="panel-title"><strong>${assistant ? '新增助手指令' : '新增提示词'}</strong><span>保存到当前提示词库</span></div>
                 <div class="panel-actions">
                     <button class="asset-btn primary" type="button" data-prompt-create-save><i data-lucide="check"></i><span>保存</span></button>
                     <button class="asset-icon-btn" type="button" data-prompt-edit-cancel title="取消"><i data-lucide="x"></i></button>
@@ -2472,19 +2497,17 @@ function renderPromptDetail(item, readonly){
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
-                    <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="" placeholder="提示词名称"></label>
-                    <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="用途说明"></textarea></label>
-                    <label class="inline-edit-field"><span>正向提示词</span><textarea id="promptEditPositive" placeholder="正向提示词"></textarea></label>
-                    <label class="inline-edit-field"><span>负向提示词</span><textarea id="promptEditNegative" placeholder="负向提示词"></textarea></label>
+                    ${renderPromptEditFields({}, assistant)}
                 </div>
             </div>
         `;
     }
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>提示词预览</strong><span>选择一条提示词查看全文</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="text-cursor-input"></i><span>暂无可预览提示词</span></div></div>`;
     if(promptEditMode && item.id === selectedPromptId && !readonly){
+        const assistant = item.kind === 'assistant_recipe';
         return `
             <div class="panel-head">
-                <div class="panel-title"><strong>编辑提示词</strong><span>在当前库内保存</span></div>
+                <div class="panel-title"><strong>${assistant ? '编辑助手指令' : '编辑提示词'}</strong><span>在当前库内保存</span></div>
                 <div class="panel-actions">
                     <button class="asset-btn primary" type="button" data-prompt-edit-save="${escapeAttr(item.id)}"><i data-lucide="check"></i><span>保存</span></button>
                     <button class="asset-icon-btn" type="button" data-prompt-edit-cancel title="取消"><i data-lucide="x"></i></button>
@@ -2492,15 +2515,32 @@ function renderPromptDetail(item, readonly){
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
-                    <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="提示词名称"></label>
-                    <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="用途说明">${escapeHtml(item.scene || '')}</textarea></label>
-                    <label class="inline-edit-field"><span>正向提示词</span><textarea id="promptEditPositive" placeholder="正向提示词">${escapeHtml(item.positive || '')}</textarea></label>
-                    <label class="inline-edit-field"><span>负向提示词</span><textarea id="promptEditNegative" placeholder="负向提示词">${escapeHtml(item.negative || '')}</textarea></label>
+                    ${renderPromptEditFields(item, assistant)}
                 </div>
             </div>
         `;
     }
     const params = item.params && typeof item.params === 'object' ? Object.entries(item.params) : [];
+    if(item.kind === 'assistant_recipe') return `
+        <div class="panel-head">
+            <div class="panel-title"><strong>助手指令预览</strong><span>发送给 LLM 的完整模板</span></div>
+            <div class="panel-actions">
+                <button class="asset-icon-btn" type="button" data-prompt-edit-start="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="编辑"><i data-lucide="pencil"></i></button>
+                <button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
+            </div>
+        </div>
+        <div class="detail-scroll">
+            <div class="prompt-detail-head"><div class="prompt-detail-title">${escapeHtml(item.name || '助手指令')}</div><div class="prompt-detail-scene">${escapeHtml(item.scene || '提示词助手')}</div></div>
+            <section class="prompt-block"><div class="prompt-block-head"><span>系统提示词</span><span>${String(item.system_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.system_template || '未填写')}</textarea></section>
+            <section class="prompt-block"><div class="prompt-block-head"><span>用户提示词模板</span><span>${String(item.user_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.user_template || '未填写')}</textarea></section>
+            <div class="params-list">
+                <div class="param-row"><strong>媒体引用保护</strong><span>${item.preserve_references !== false ? '开启' : '关闭'}</span></div>
+                <div class="param-row"><strong>推荐平台</strong><span>${escapeHtml(item.recommended_provider || '跟随当前选择')}</span></div>
+                <div class="param-row"><strong>推荐模型</strong><span>${escapeHtml(item.recommended_model || '跟随当前选择')}</span></div>
+                <div class="param-row"><strong>推理强度</strong><span>${escapeHtml(item.recommended_reasoning_effort || '自动')}</span></div>
+                <div class="param-row"><strong>目标语言</strong><span>${escapeHtml(item.default_target_language || '未指定')}</span></div>
+            </div>
+        </div>`;
     return `
         <div class="panel-head">
             <div class="panel-title"><strong>提示词预览</strong><span>${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span></div>
@@ -4470,13 +4510,29 @@ async function savePromptCreate(){
     const scene = document.getElementById('promptEditScene')?.value || '';
     const positive = document.getElementById('promptEditPositive')?.value || '';
     const negative = document.getElementById('promptEditNegative')?.value || '';
+    const assistant = activePromptCategory === 'assistant';
+    const systemTemplate = document.getElementById('promptEditSystemTemplate')?.value || '';
+    const userTemplate = document.getElementById('promptEditUserTemplate')?.value || '';
     if(!lib) return;
-    if(!String(name || '').trim() || !String(positive || '').trim()){
-        setStatus('名称和正向提示词不能为空');
+    if(!String(name || '').trim() || (assistant ? !String(systemTemplate || '').trim() || !String(userTemplate || '').trim() : !String(positive || '').trim())){
+        setStatus(assistant ? '名称、系统提示词和用户提示词模板不能为空' : '名称和正向提示词不能为空');
+        return;
+    }
+    if(assistant && !userTemplate.includes('{{prompt}}') && !userTemplate.includes('{{selection}}')){
+        setStatus('用户提示词模板必须包含 {{prompt}} 或 {{selection}}');
         return;
     }
     const category = activePromptCategory === 'all' ? 'custom' : activePromptCategory;
-    const data = await apiJson('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative, category, scene})});
+    const payload = assistant ? {
+        library_id:lib.id, name, category:'assistant', scene, kind:'assistant_recipe', positive:'', negative:'',
+        system_template:systemTemplate, user_template:userTemplate,
+        preserve_references:Boolean(document.getElementById('promptEditPreserveReferences')?.checked),
+        recommended_provider:document.getElementById('promptEditRecommendedProvider')?.value || '',
+        recommended_model:document.getElementById('promptEditRecommendedModel')?.value || '',
+        recommended_reasoning_effort:document.getElementById('promptEditReasoningEffort')?.value || '',
+        default_target_language:document.getElementById('promptEditTargetLanguage')?.value || ''
+    } : {library_id:lib.id, name, positive, negative, category, scene, kind:'generation_prompt'};
+    const data = await apiJson('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     promptLibrary = data.library || promptLibrary;
     selectedPromptId = data.item?.id || selectedPromptId;
     promptCreateMode = false;
@@ -4487,6 +4543,13 @@ async function editPromptItem(id){
     const item = findPromptItem(id);
     const lib = activePromptLibrary();
     if(!item || !lib) return;
+    if(item.kind === 'assistant_recipe'){
+        selectedPromptId = id;
+        promptEditMode = true;
+        promptCreateMode = false;
+        render();
+        return;
+    }
     const name = window.prompt('提示词名称', item.name || '');
     if(!String(name || '').trim()) return;
     const scene = window.prompt('用途说明', item.scene || '') || '';
@@ -4505,12 +4568,28 @@ async function savePromptEdit(id){
     const scene = document.getElementById('promptEditScene')?.value || '';
     const positive = document.getElementById('promptEditPositive')?.value || '';
     const negative = document.getElementById('promptEditNegative')?.value || '';
+    const assistant = item?.kind === 'assistant_recipe';
+    const systemTemplate = document.getElementById('promptEditSystemTemplate')?.value || '';
+    const userTemplate = document.getElementById('promptEditUserTemplate')?.value || '';
     if(!item || !lib) return;
-    if(!String(name || '').trim() || !String(positive || '').trim()){
-        setStatus('名称和正向提示词不能为空');
+    if(!String(name || '').trim() || (assistant ? !String(systemTemplate || '').trim() || !String(userTemplate || '').trim() : !String(positive || '').trim())){
+        setStatus(assistant ? '名称、系统提示词和用户提示词模板不能为空' : '名称和正向提示词不能为空');
         return;
     }
-    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative, category:item.category || 'custom', scene})});
+    if(assistant && !userTemplate.includes('{{prompt}}') && !userTemplate.includes('{{selection}}')){
+        setStatus('用户提示词模板必须包含 {{prompt}} 或 {{selection}}');
+        return;
+    }
+    const payload = assistant ? {
+        library_id:lib.id, name, category:'assistant', scene, kind:'assistant_recipe', positive:'', negative:'',
+        system_template:systemTemplate, user_template:userTemplate,
+        preserve_references:Boolean(document.getElementById('promptEditPreserveReferences')?.checked),
+        recommended_provider:document.getElementById('promptEditRecommendedProvider')?.value || '',
+        recommended_model:document.getElementById('promptEditRecommendedModel')?.value || '',
+        recommended_reasoning_effort:document.getElementById('promptEditReasoningEffort')?.value || '',
+        default_target_language:document.getElementById('promptEditTargetLanguage')?.value || ''
+    } : {library_id:lib.id, name, positive, negative, category:item.category || 'custom', scene, kind:'generation_prompt'};
+    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     promptLibrary = data.library || promptLibrary;
     selectedPromptId = id;
     promptEditMode = false;

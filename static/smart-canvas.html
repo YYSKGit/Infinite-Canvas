@@ -20,7 +20,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1784115476"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1784194894"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1784259319">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1784271086">
 </head>
 <body>
     <div id="shell" class="shell smart-grid-loading" tabindex="-1">
@@ -56,6 +56,9 @@
                             <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
                                 <i data-lucide="library"></i><span data-i18n="smart.promptTemplateLibrary">模板库</span>
                             </button>
+                            <button id="promptAssistantBtn" class="composer-template-btn prompt-assistant-entry" type="button" title="提示词助手" aria-label="提示词助手" aria-pressed="false">
+                                <i data-lucide="wand-sparkles"></i><span>提示词助手</span>
+                            </button>
                             <button id="composerExpandBtn" class="composer-template-btn composer-expand-btn" type="button" title="放大输入框" aria-label="放大输入框" aria-pressed="false">
                                 <i data-lucide="maximize-2"></i><span>放大输入框</span>
                             </button>
@@ -63,10 +66,45 @@
                     </div>
                     <div id="inputThumbsRow" class="input-thumbs-row"></div>
                     <div id="inputPromptPreview" class="input-prompt-preview"></div>
+                    <div id="composerWorkspace" class="composer-workspace">
                     <div class="prompt-row">
                         <div id="promptInput" class="prompt-input" data-i18n-placeholder="smart.promptPlaceholder" data-placeholder="描述你想生成或编辑的图片..."></div>
                         <div id="mentionPicker" class="mention-picker"></div>
                         <div id="promptResize" class="prompt-resize" data-i18n-title="smart.promptResize" title="拖拽调整文本框高度"></div>
+                    </div>
+                    <div id="promptAssistantResize" class="prompt-assistant-resize" role="separator" aria-orientation="horizontal" aria-label="调整提示词助手高度" tabindex="0"><span></span></div>
+                    <section id="promptAssistantPanel" class="prompt-assistant-panel" aria-label="提示词助手">
+                        <div class="prompt-assistant-toolbar">
+                            <select id="promptAssistantRecipe" aria-label="功能"></select>
+                            <select id="promptAssistantProvider" aria-label="LLM 平台"></select>
+                            <select id="promptAssistantModel" aria-label="LLM 模型"></select>
+                            <select id="promptAssistantEffort" aria-label="推理强度"><option value="">自动推理</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select>
+                            <select id="promptAssistantScope" aria-label="作用范围"><option value="document">整个提示词</option><option value="selection">当前选区</option></select>
+                            <label class="prompt-assistant-media"><input id="promptAssistantUseMedia" type="checkbox"><span>查看素材</span></label>
+                            <button id="promptAssistantRun" class="prompt-assistant-primary" type="button"><i data-lucide="sparkles"></i><span>开始</span></button>
+                        </div>
+                        <div id="promptAssistantCustomWrap" class="prompt-assistant-custom" hidden>
+                            <textarea id="promptAssistantCustomInstruction" placeholder="输入自定义处理指令"></textarea>
+                            <button id="promptAssistantSaveRecipe" type="button"><i data-lucide="bookmark-plus"></i><span>保存为指令</span></button>
+                        </div>
+                        <div class="prompt-assistant-content">
+                            <div id="promptAssistantReasoning" class="prompt-assistant-reasoning" hidden>
+                                <button id="promptAssistantReasoningToggle" type="button" aria-expanded="true"><i data-lucide="brain"></i><span>思考过程</span><small id="promptAssistantReasoningState"></small><i data-lucide="chevron-up" class="reasoning-caret"></i></button>
+                                <pre id="promptAssistantReasoningText"></pre>
+                            </div>
+                            <textarea id="promptAssistantOutput" placeholder="模型输出会显示在这里" spellcheck="true"></textarea>
+                            <pre id="promptAssistantCompare" class="prompt-assistant-compare" hidden></pre>
+                        </div>
+                        <div class="prompt-assistant-footer">
+                            <div class="prompt-assistant-tabs"><button type="button" class="active" data-assistant-view="result">结果</button><button type="button" data-assistant-view="source">原文</button><button type="button" data-assistant-view="diff">差异</button></div>
+                            <span id="promptAssistantStatus" aria-live="polite">选择功能后开始处理</span>
+                            <span id="promptAssistantMeta"></span>
+                            <select id="promptAssistantApplyMode" aria-label="应用方式"><option value="document">替换全部</option><option value="selection">替换选区</option><option value="cursor">插入光标</option><option value="append">追加末尾</option></select>
+                            <button id="promptAssistantUndo" type="button" disabled><i data-lucide="undo-2"></i><span>撤销应用</span></button>
+                            <button id="promptAssistantCopy" type="button" disabled><i data-lucide="copy"></i><span>复制</span></button>
+                            <button id="promptAssistantApply" class="prompt-assistant-primary" type="button" disabled><i data-lucide="corner-down-left"></i><span>应用</span></button>
+                        </div>
+                    </section>
                     </div>
                     <div class="param-row">
                         <div id="dynamicParams" class="dynamic-params"></div>
@@ -494,7 +532,7 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-prompt-editor.js?v=2027.01.1.1.1784217553"></script>
-    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1784260037"></script>
+    <script src="/static/js/smart-prompt-editor.js?v=2027.01.1.1.1784268174"></script>
+    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1784271007"></script>
 </body>
 </html>

@@ -114,7 +114,38 @@ const promptTemplateCats = document.getElementById('promptTemplateCats');
 const promptTemplateBody = document.getElementById('promptTemplateBody');
 const composerTemplateBtn = document.getElementById('composerTemplateBtn');
 const composerExpandBtn = document.getElementById('composerExpandBtn');
+const promptAssistantBtn = document.getElementById('promptAssistantBtn');
+const composerWorkspace = document.getElementById('composerWorkspace');
+const promptAssistantPanel = document.getElementById('promptAssistantPanel');
+const promptAssistantResize = document.getElementById('promptAssistantResize');
+const promptAssistantRecipe = document.getElementById('promptAssistantRecipe');
+const promptAssistantProvider = document.getElementById('promptAssistantProvider');
+const promptAssistantModel = document.getElementById('promptAssistantModel');
+const promptAssistantEffort = document.getElementById('promptAssistantEffort');
+const promptAssistantScope = document.getElementById('promptAssistantScope');
+const promptAssistantUseMedia = document.getElementById('promptAssistantUseMedia');
+const promptAssistantRun = document.getElementById('promptAssistantRun');
+const promptAssistantCustomWrap = document.getElementById('promptAssistantCustomWrap');
+const promptAssistantCustomInstruction = document.getElementById('promptAssistantCustomInstruction');
+const promptAssistantSaveRecipe = document.getElementById('promptAssistantSaveRecipe');
+const promptAssistantReasoning = document.getElementById('promptAssistantReasoning');
+const promptAssistantReasoningToggle = document.getElementById('promptAssistantReasoningToggle');
+const promptAssistantReasoningState = document.getElementById('promptAssistantReasoningState');
+const promptAssistantReasoningText = document.getElementById('promptAssistantReasoningText');
+const promptAssistantMeta = document.getElementById('promptAssistantMeta');
+const promptAssistantOutput = document.getElementById('promptAssistantOutput');
+const promptAssistantCompare = document.getElementById('promptAssistantCompare');
+const promptAssistantStatus = document.getElementById('promptAssistantStatus');
+const promptAssistantApplyMode = document.getElementById('promptAssistantApplyMode');
+const promptAssistantUndo = document.getElementById('promptAssistantUndo');
+const promptAssistantCopy = document.getElementById('promptAssistantCopy');
+const promptAssistantApply = document.getElementById('promptAssistantApply');
 let composerExpanded = false;
+let promptAssistantOpen = false;
+const promptAssistantStreams = new Map();
+const promptAssistantReasoningUi = new Map();
+const promptAssistantCapabilityCache = new Map();
+let promptAssistantResizeState = null;
 let minimapViewport = document.getElementById('minimapViewport');
 let canvas = null;
 let canvasUsesConnections = true;
@@ -179,6 +210,7 @@ const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
 const PROMPT_TEMPLATE_GROUPS_KEY = 'smart_canvas_prompt_template_groups_v1';
 const PROMPT_TEMPLATE_OVERRIDES_KEY = 'smart_canvas_prompt_template_overrides_v1';
 const PROMPT_NODE_LLM_SETTINGS_KEY = 'smart_canvas_prompt_node_llm_settings_v1';
+const PROMPT_ASSISTANT_SETTINGS_KEY = 'smart_canvas_prompt_assistant_settings_v1';
 let promptPresets = [];
 let builtinPromptTemplates = [];
 let promptLibraries = [];
@@ -2384,6 +2416,14 @@ function smartImageUsesWorkflowInput(node, ctx=smartLoopContext){
 }
 function normalizeLegacySmartNode(node){
     if(!node || typeof node !== 'object') return node;
+    if(node.promptAssistantResult && typeof node.promptAssistantResult === 'object'){
+        if(node.promptAssistantResult.status === 'running'){
+            node.promptAssistantResult.status = 'stopped';
+            node.promptAssistantResult.stopped = true;
+            node.promptAssistantResult.statusText = '任务在页面关闭时中断，已保留已有内容';
+        }
+        node.promptAssistantResult.canUndoApply = false;
+    }
     if(node.type === 'smart-container'){
         const fallbackImage = node.inputImage?.url ? stripImageGenerationMeta({
             url:node.inputImage.url,
@@ -2551,6 +2591,7 @@ function smartCanvasHasLiveAsyncWork(){
     return Boolean(
         activeSmartTaskPolls.size
         || activePromptNodeStreams.size
+        || promptAssistantStreams.size
         || smartCascadeAnyRunning()
         || nodes.some(node => smartNodeInFlight(node))
     );
@@ -2559,6 +2600,9 @@ function smartCanvasUrl(nextCanvasId, projectId=canvas?.project || sourceProject
     return `/static/smart-canvas.html?id=${encodeURIComponent(nextCanvasId)}&project=${encodeURIComponent(rememberCanvasListProject(projectId))}`;
 }
 function resetSmartCanvasTransientStateForSwitch(){
+    promptAssistantStreams.forEach(stream => stream.controller?.abort?.());
+    promptAssistantStreams.clear();
+    promptAssistantReasoningUi.clear();
     stopAllSmartCanvasVideos();
     smartVideoUserPausedKeys.clear();
     smartVideoPostPreviewFirstFrameKeys.clear();
@@ -6714,6 +6758,7 @@ async function loadPromptTemplates(){
         }
         if(!promptLibraries.some(lib => lib.id === activePromptLibraryId)) activePromptLibraryId = promptLibraries[0]?.id || 'system';
         renderPromptLibrarySelect();
+        if(promptAssistantOpen) renderPromptAssistantControls();
     } catch(e) {
         builtinPromptTemplates = [];
         promptLibraries = [];
@@ -6729,7 +6774,7 @@ function renderPromptLibrarySelect(){
 function promptTemplateItems(){
     const activeLibrary = activePromptLibrary();
     if(activeLibrary.id !== 'system'){
-        return (activeLibrary.items || []).filter(t => t?.id && t?.positive).map(t => ({
+        return (activeLibrary.items || []).filter(t => t?.id && t?.positive && t.kind !== 'assistant_recipe').map(t => ({
             ...t,
             sourceId:t.id,
             builtin:false,
@@ -6742,7 +6787,7 @@ function promptTemplateItems(){
     // 仍保留 builtin:true 用于“内置”标签与完整提示词（含负向/参数）的展示。
     const source = Array.isArray(activeLibrary.items) && activeLibrary.items.length ? activeLibrary.items : builtinPromptTemplates;
     const builtins = source
-        .filter(t => t?.id && t?.positive)
+        .filter(t => t?.id && t?.positive && t.kind !== 'assistant_recipe')
         .map(t => ({...t, sourceId:t.id, builtin:true, remote:true, libraryId:'system'}));
     const mine = promptPresets.map(p => ({
         id:`mine:${p.id}`,
@@ -6788,7 +6833,7 @@ function promptTemplateSearchText(template){
 function activePromptTemplateGroups(){
     const lib = activePromptLibrary();
     // 系统库的分组也以后端 categories 为准，与素材库管理共用同一份分组数据（可重命名/删除并同步）。
-    const fromLib = Array.isArray(lib?.categories) ? lib.categories.filter(c => c?.id && c?.name) : [];
+    const fromLib = Array.isArray(lib?.categories) ? lib.categories.filter(c => c?.id && c?.name && c.id !== 'assistant') : [];
     if(fromLib.length) return fromLib;
     if(!lib || lib.id === 'system') return promptTemplateGroups;
     return [];
@@ -11884,6 +11929,12 @@ function deleteNode(id){
         if(isHistoryGroupNode(node) && node.historyFor === id) deleteIds.add(node.id);
     });
     deleteIds.forEach(nodeId => {
+        const assistantStream = promptAssistantStreams.get(nodeId);
+        if(assistantStream) assistantStream.controller?.abort?.();
+        promptAssistantStreams.delete(nodeId);
+        promptAssistantReasoningUi.delete(nodeId);
+    });
+    deleteIds.forEach(nodeId => {
         const removedNode = nodes.find(node => node.id === nodeId);
         const removedRefs = (removedNode?.images || []).map((image, imageIndex) => ({...imageForDisplay(image), nodeId, imageIndex}));
         syncDownstreamRunRefsAfterMediaRemoval(nodeId, removedRefs);
@@ -14973,6 +15024,388 @@ function applyImageEdit(){
     if(imageEditMode === 'grid') return applyImageGridSplit();
     return applyImageCrop();
 }
+function promptAssistantSettings(){
+    try {
+        const value = JSON.parse(localStorage.getItem(PROMPT_ASSISTANT_SETTINGS_KEY) || '{}');
+        return value && typeof value === 'object' ? value : {};
+    } catch(_) { return {}; }
+}
+function savePromptAssistantSettings(patch={}){
+    const next = {...promptAssistantSettings(), ...patch};
+    try { localStorage.setItem(PROMPT_ASSISTANT_SETTINGS_KEY, JSON.stringify(next)); } catch(_) {}
+    return next;
+}
+function promptAssistantRecipes(){
+    const recipes = promptLibraries.flatMap(library => (library.items || [])
+        .filter(item => item?.id && item.kind === 'assistant_recipe')
+        .map(item => ({...item, libraryId:library.id, builtin:item.builtin === true})));
+    return [...recipes, {
+        id:'__custom__', name:'自定义指令', kind:'assistant_recipe', libraryId:'', builtin:false,
+        system_template:'', user_template:'{{prompt}}', preserve_references:true,
+        recommended_reasoning_effort:'medium'
+    }];
+}
+function selectedPromptAssistantRecipe(){
+    const recipes = promptAssistantRecipes();
+    return recipes.find(item => item.id === promptAssistantRecipe?.value) || recipes[0] || null;
+}
+async function syncPromptAssistantReasoningCapability(){
+    if(!promptAssistantProvider || !promptAssistantModel || !promptAssistantEffort) return;
+    const providerId = promptAssistantProvider.value;
+    const provider = chatApiProviders().find(item => item.id === providerId);
+    if(String(provider?.protocol || '').toLowerCase() !== 'venice'){
+        promptAssistantEffort.hidden = false;
+        promptAssistantEffort.disabled = false;
+        promptAssistantEffort.title = '推理强度（上游不支持时请使用自动）';
+        return;
+    }
+    if(!promptAssistantCapabilityCache.has(providerId)){
+        promptAssistantCapabilityCache.set(providerId, fetch(`/api/providers/${encodeURIComponent(providerId)}/fetch-models`)
+            .then(response => response.ok ? response.json() : {})
+            .then(data => data.model_capabilities || {})
+            .catch(() => ({})));
+    }
+    const capabilities = await promptAssistantCapabilityCache.get(providerId);
+    if(promptAssistantProvider.value !== providerId) return;
+    const capability = capabilities?.[promptAssistantModel.value];
+    if(!capability){
+        promptAssistantEffort.hidden = false;
+        promptAssistantEffort.disabled = false;
+        promptAssistantEffort.title = '未取得模型能力信息，建议使用自动';
+        return;
+    }
+    promptAssistantEffort.hidden = capability.supportsReasoning === false;
+    promptAssistantEffort.disabled = !capability.supportsReasoningEffort;
+    if(!capability.supportsReasoningEffort) promptAssistantEffort.value = '';
+    promptAssistantEffort.title = capability.supportsReasoning
+        ? capability.supportsReasoningEffort ? '该模型支持调整推理强度' : '该模型使用内置推理强度'
+        : '该模型不支持推理';
+}
+function promptAssistantUiState(nodeId=''){
+    if(!promptAssistantReasoningUi.has(nodeId)) promptAssistantReasoningUi.set(nodeId, {pinnedOpen:false, manuallyCollapsed:false});
+    return promptAssistantReasoningUi.get(nodeId);
+}
+function activePromptAssistantStream(nodeId=''){
+    const id = nodeId || activeComposerNode()?.id || '';
+    return id ? promptAssistantStreams.get(id) || null : null;
+}
+function promptAssistantSourceText(result){
+    return String(result?.scope === 'selection' ? result?.selectionText : result?.sourceText || '');
+}
+function promptAssistantRestoreReferences(text=''){
+    return String(text || '').replace(/__SMART_REF_(IMAGE|VIDEO|AUDIO)_(\d+)__/g, (_all, kind, index) => `{{${kind[0]}${kind.slice(1).toLowerCase()} ${index}}}`);
+}
+function promptAssistantProtectReferences(text=''){
+    return String(text || '').replace(/\{\{\s*(Image|Video|Audio)\s+(\d+)\s*\}\}/gi, (_all, kind, index) => `__SMART_REF_${String(kind).toUpperCase()}_${index}__`);
+}
+function promptAssistantReferenceTokens(text=''){
+    return [...String(text || '').matchAll(/\{\{\s*(Image|Video|Audio)\s+(\d+)\s*\}\}/gi)].map(match => `{{${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()} ${match[2]}}}`);
+}
+function promptAssistantReferenceIssues(result){
+    const expected = promptAssistantReferenceTokens(promptAssistantSourceText(result));
+    const actual = promptAssistantReferenceTokens(result?.output || '');
+    const missing = expected.filter(token => !actual.includes(token));
+    const unknown = actual.filter(token => !expected.includes(token));
+    return {missing, unknown, hasIssues:Boolean(missing.length || unknown.length)};
+}
+function promptAssistantSimpleDiff(source='', output=''){
+    const before = String(source || '').trim();
+    const after = String(output || '').trim();
+    if(before === after) return '内容没有变化';
+    return `原文\n────\n${before || '（空）'}\n\n结果\n────\n${after || '（空）'}`;
+}
+function setPromptAssistantReasoningExpanded(expanded, options={}){
+    const node = activeComposerNode();
+    if(!node || !promptAssistantReasoning) return;
+    const ui = promptAssistantUiState(node.id);
+    promptAssistantReasoning.classList.toggle('collapsed', !expanded);
+    promptAssistantReasoningToggle?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    if(options.user){
+        if(expanded){
+            ui.manuallyCollapsed = false;
+            if(node.promptAssistantResult?.outputStarted) ui.pinnedOpen = true;
+        } else {
+            ui.pinnedOpen = false;
+            ui.manuallyCollapsed = true;
+        }
+    }
+}
+function renderPromptAssistantControls(options={}){
+    if(!promptAssistantRecipe || !promptAssistantProvider || !promptAssistantModel) return;
+    const saved = promptAssistantSettings();
+    const previousRecipe = options.recipeId || promptAssistantRecipe.value || saved.recipeId || '';
+    const recipes = promptAssistantRecipes();
+    promptAssistantRecipe.innerHTML = recipes.map(recipe => `<option value="${escapeAttr(recipe.id)}">${escapeHtml(recipe.name || recipe.id)}</option>`).join('');
+    promptAssistantRecipe.value = recipes.some(recipe => recipe.id === previousRecipe) ? previousRecipe : (recipes[0]?.id || '__custom__');
+    const recipe = selectedPromptAssistantRecipe();
+    const recipeMemory = saved.byRecipe?.[recipe?.id] || {};
+    const providerId = resolveChatProviderId(options.providerId || recipeMemory.provider || recipe?.recommended_provider || saved.provider || '');
+    promptAssistantProvider.innerHTML = chatProviderOptions(providerId);
+    promptAssistantProvider.value = providerId;
+    const model = resolveChatModel(options.model || recipeMemory.model || recipe?.recommended_model || '', providerId);
+    promptAssistantModel.innerHTML = chatModelOptions(model, providerId);
+    promptAssistantModel.value = model;
+    promptAssistantEffort.value = options.effort ?? recipeMemory.effort ?? recipe?.recommended_reasoning_effort ?? saved.effort ?? '';
+    promptAssistantUseMedia.checked = options.useMedia ?? recipeMemory.useMedia ?? saved.useMedia ?? false;
+    const hasSelection = Boolean(promptEditor?.getSelectionExchangeText?.().trim());
+    const selectionOption = promptAssistantScope.querySelector('option[value="selection"]');
+    if(selectionOption) selectionOption.disabled = !hasSelection;
+    if(!hasSelection && promptAssistantScope.value === 'selection') promptAssistantScope.value = 'document';
+    const customVisible = recipe?.id === '__custom__' || !recipe?.builtin;
+    promptAssistantCustomWrap.hidden = !customVisible;
+    if(customVisible && !promptAssistantCustomInstruction.value){
+        promptAssistantCustomInstruction.value = recipe?.id === '__custom__' ? (saved.customInstruction || '') : (recipe?.system_template || '');
+    }
+    refreshIcons();
+    syncPromptAssistantReasoningCapability();
+}
+function rememberPromptAssistantSelection(){
+    const recipe = selectedPromptAssistantRecipe();
+    if(!recipe) return;
+    const saved = promptAssistantSettings();
+    const byRecipe = {...(saved.byRecipe || {})};
+    byRecipe[recipe.id] = {
+        provider:promptAssistantProvider.value,
+        model:promptAssistantModel.value,
+        effort:promptAssistantEffort.value,
+        useMedia:promptAssistantUseMedia.checked
+    };
+    savePromptAssistantSettings({
+        recipeId:recipe.id, provider:promptAssistantProvider.value, effort:promptAssistantEffort.value,
+        useMedia:promptAssistantUseMedia.checked, customInstruction:promptAssistantCustomInstruction.value, byRecipe
+    });
+}
+function renderPromptAssistantResult(node=activeComposerNode()){
+    if(!promptAssistantPanel) return;
+    const result = node?.promptAssistantResult || null;
+    const stream = node ? activePromptAssistantStream(node.id) : null;
+    const activity = stream?.draft || result;
+    const reasoning = String(result?.reasoning || '');
+    const output = String(result?.output || '');
+    promptAssistantReasoning.hidden = !reasoning;
+    promptAssistantReasoningText.textContent = reasoning;
+    promptAssistantOutput.value = output;
+    promptAssistantOutput.readOnly = Boolean(stream);
+    promptAssistantReasoningState.textContent = result?.reasoningStarted && !result?.outputStarted && stream ? '思考中' : reasoning ? '已完成' : '';
+    promptAssistantMeta.textContent = result ? [result.providerName || result.provider, result.model, result.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : ''].filter(Boolean).join(' · ') : '';
+    promptAssistantStatus.textContent = stream ? (activity?.outputStarted ? '正在输出正文…' : activity?.reasoningStarted ? '正在思考…' : '正在等待模型…') : result?.statusText || (output ? '结果可应用' : '选择功能后开始处理');
+    promptAssistantApply.disabled = !output || Boolean(stream);
+    promptAssistantCopy.disabled = !output;
+    promptAssistantUndo.disabled = !result?.canUndoApply;
+    promptAssistantBtn?.classList.toggle('running', Boolean(stream));
+    if(stream){
+        promptAssistantReasoningText.scrollTop = promptAssistantReasoningText.scrollHeight;
+        promptAssistantOutput.scrollTop = promptAssistantOutput.scrollHeight;
+    }
+    if(promptAssistantRun){
+        promptAssistantRun.innerHTML = stream ? '<i data-lucide="square"></i><span>停止</span>' : '<i data-lucide="sparkles"></i><span>开始</span>';
+    }
+    const ui = node ? promptAssistantUiState(node.id) : null;
+    if(reasoning){
+        const expanded = ui?.pinnedOpen || (!result?.outputStarted && !ui?.manuallyCollapsed);
+        setPromptAssistantReasoningExpanded(Boolean(expanded));
+    }
+    const view = promptAssistantPanel.querySelector('[data-assistant-view].active')?.dataset.assistantView || 'result';
+    if(view !== 'result') renderPromptAssistantView(view);
+    refreshIcons();
+}
+function renderPromptAssistantView(view='result'){
+    const node = activeComposerNode();
+    const result = node?.promptAssistantResult || {};
+    promptAssistantPanel?.querySelectorAll('[data-assistant-view]').forEach(button => button.classList.toggle('active', button.dataset.assistantView === view));
+    const isResult = view === 'result';
+    promptAssistantOutput.hidden = !isResult;
+    promptAssistantCompare.hidden = isResult;
+    if(!isResult){
+        promptAssistantCompare.textContent = view === 'source'
+            ? promptAssistantSourceText(result)
+            : promptAssistantSimpleDiff(promptAssistantSourceText(result), result.output || '');
+    }
+}
+function setPromptAssistantOpen(open, options={}){
+    promptAssistantOpen = Boolean(open);
+    if(promptAssistantOpen && !composerExpanded) setComposerExpanded(true);
+    composerWorkspace?.classList.toggle('assistant-open', promptAssistantOpen && composerExpanded);
+    composer?.classList.toggle('assistant-active', promptAssistantOpen && composerExpanded);
+    promptAssistantBtn?.classList.toggle('active', promptAssistantOpen);
+    promptAssistantBtn?.setAttribute('aria-pressed', promptAssistantOpen ? 'true' : 'false');
+    if(promptAssistantOpen){
+        const saved = promptAssistantSettings();
+        composerWorkspace?.style.setProperty('--prompt-assistant-h', `${Math.max(190, Math.min(430, Number(saved.height) || 300))}px`);
+        renderPromptAssistantControls();
+        renderPromptAssistantResult();
+        if(options.focus !== false) promptAssistantRecipe?.focus();
+    }
+}
+function promptAssistantRecipePrompt(recipe, protectedPrompt){
+    const custom = recipe?.id === '__custom__' ? promptAssistantCustomInstruction.value.trim() : '';
+    const preserveReferences = recipe?.preserve_references !== false;
+    const immutable = preserveReferences ? 'Return only the revised prompt. Preserve every __SMART_REF_*__ token exactly once.' : 'Return only the revised prompt.';
+    const system = custom
+        ? `You are a professional prompt editor. ${immutable}\n\nTask: ${custom}`
+        : `${recipe?.system_template || 'You are a professional prompt editor.'}\n\n${immutable}`;
+    const template = recipe?.user_template || 'Process this prompt:\n{{prompt}}';
+    return {
+        system,
+        message:template.replaceAll('{{prompt}}', protectedPrompt).replaceAll('{{selection}}', protectedPrompt).replaceAll('{{target_language}}', recipe?.default_target_language || '')
+    };
+}
+function promptAssistantCommitDraft(node, stream){
+    if(stream.committed) return node.promptAssistantResult;
+    stream.committed = true;
+    node.promptAssistantResult = stream.draft;
+    return stream.draft;
+}
+async function runPromptAssistant(){
+    const node = activeComposerNode();
+    if(!node) return;
+    const active = activePromptAssistantStream(node.id);
+    if(active){ active.stopping = true; active.controller.abort(); return; }
+    const scope = promptAssistantScope.value === 'selection' ? 'selection' : 'document';
+    const selectionText = promptEditor?.getSelectionExchangeText?.().trim() || '';
+    const sourceText = promptEditor?.getExchangeText?.().trim() || '';
+    const inputText = scope === 'selection' ? selectionText : sourceText;
+    if(!inputText){ toast(scope === 'selection' ? '请先选择要处理的文字' : '请先输入提示词'); return; }
+    const recipe = selectedPromptAssistantRecipe();
+    if(recipe?.id === '__custom__' && !promptAssistantCustomInstruction.value.trim()){ toast('请输入自定义处理指令'); return; }
+    rememberPromptAssistantSelection();
+    const provider = resolveChatProviderId(promptAssistantProvider.value);
+    const model = resolveChatModel(promptAssistantModel.value, provider);
+    const providerConfig = chatApiProviders().find(item => item.id === provider);
+    const protectedPrompt = recipe?.preserve_references === false ? inputText : promptAssistantProtectReferences(inputText);
+    const requestPrompt = promptAssistantRecipePrompt(recipe, protectedPrompt);
+    const media = promptAssistantUseMedia.checked ? visibleReferenceImagesFor(node) : [];
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const oldResult = node.promptAssistantResult ? JSON.parse(JSON.stringify(node.promptAssistantResult)) : null;
+    const draft = {
+        version:1, requestId:uid('prompt_ai'), recipeId:recipe?.id || '', recipeName:recipe?.name || '自定义指令',
+        provider, providerName:providerConfig?.name || provider, model, reasoningEffort:promptAssistantEffort.value,
+        scope, sourceText, selectionText, sourceDoc:promptEditor?.getJSON?.() || null,
+        sourceReferences:promptEditor?.getReferences?.() || [], sourceSelection:promptEditor?.getSelectionRange?.() || null,
+        reasoning:'', output:'', reasoningStarted:false, outputStarted:false, status:'running', statusText:'正在等待模型…',
+        startedAt, completedAt:0, elapsedMs:0, usage:null, stopped:false, canUndoApply:false
+    };
+    const stream = {nodeId:node.id, controller, draft, oldResult, committed:false, stopping:false, lastPersistAt:0};
+    promptAssistantStreams.set(node.id, stream);
+    const ui = promptAssistantUiState(node.id);
+    ui.manuallyCollapsed = false;
+    renderPromptAssistantResult(node);
+    try {
+        const response = await fetch('/api/canvas-llm/stream', {
+            method:'POST', headers:{'Content-Type':'application/json'}, signal:controller.signal,
+            body:JSON.stringify({
+                message:requestPrompt.message, system_prompt:requestPrompt.system, messages:[], provider, model,
+                ms_model:provider === 'modelscope' ? model : '',
+                images:imageRefsOnly(media).map(item => item.url).filter(Boolean),
+                videos:videoRefsOnly(media).map(item => item.url).filter(Boolean),
+                include_reasoning:true, reasoning_effort:promptAssistantEffort.value, max_completion_tokens:8192
+            })
+        });
+        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, '提示词处理失败'));
+        await readSmartSseStream(response, async event => {
+            if(event?.type === 'error') throw new Error(event.detail || '提示词处理失败');
+            if(event?.type === 'reasoning_delta'){
+                const result = promptAssistantCommitDraft(node, stream);
+                result.reasoningStarted = true;
+                result.reasoning += String(event.delta || '');
+                if(!ui.manuallyCollapsed) setPromptAssistantReasoningExpanded(true);
+            } else if(event?.type === 'delta' || event?.type === 'output_delta'){
+                const result = promptAssistantCommitDraft(node, stream);
+                if(!result.outputStarted){
+                    result.outputStarted = true;
+                    if(!ui.pinnedOpen) setPromptAssistantReasoningExpanded(false);
+                }
+                result.output += promptAssistantRestoreReferences(String(event.delta || ''));
+            } else if(event?.type === 'done'){
+                const result = stream.committed ? node.promptAssistantResult : promptAssistantCommitDraft(node, stream);
+                const doneText = promptAssistantRestoreReferences(String(event.text || '')).trim();
+                if(doneText) result.output = doneText;
+                result.model = event.model || result.model;
+                result.usage = event.raw_usage || null;
+            }
+            if(stream.committed){
+                const result = node.promptAssistantResult;
+                result.elapsedMs = Date.now() - startedAt;
+                if(activeComposerNode()?.id === node.id) renderPromptAssistantResult(node);
+                if(Date.now() - stream.lastPersistAt > 1000){ stream.lastPersistAt = Date.now(); scheduleSave(); }
+            }
+        });
+        if(stream.committed){
+            const result = node.promptAssistantResult;
+            result.status = 'done'; result.statusText = result.output ? '结果可应用' : '模型没有返回正文';
+            result.completedAt = Date.now(); result.elapsedMs = result.completedAt - startedAt;
+        } else {
+            node.promptAssistantResult = oldResult;
+        }
+    } catch(error){
+        const aborted = controller.signal.aborted || error?.name === 'AbortError' || stream.stopping;
+        if(stream.committed){
+            const result = node.promptAssistantResult;
+            result.status = aborted ? 'stopped' : 'error'; result.stopped = aborted;
+            result.statusText = aborted ? '已停止，结果可能不完整' : `生成失败：${error.message || '未知错误'}`;
+            result.completedAt = Date.now(); result.elapsedMs = result.completedAt - startedAt;
+        } else {
+            node.promptAssistantResult = oldResult;
+            if(!aborted) toast((error.message || '提示词处理失败').slice(0, 160));
+        }
+    } finally {
+        promptAssistantStreams.delete(node.id);
+        scheduleSave();
+        if(activeComposerNode()?.id === node.id) renderPromptAssistantResult(node);
+    }
+}
+function applyPromptAssistantResult(){
+    const node = activeComposerNode();
+    const result = node?.promptAssistantResult;
+    if(!node || !result?.output) return;
+    const currentDoc = promptEditor?.getJSON?.() || null;
+    if(result.sourceDoc && JSON.stringify(currentDoc) !== JSON.stringify(result.sourceDoc)){
+        if(!window.confirm('原提示词在 AI 处理期间已经发生变化。仍要把结果应用到当前提示词吗？')) return;
+    }
+    let output = result.output;
+    const resultRecipe = promptAssistantRecipes().find(item => item.id === result.recipeId);
+    const issues = resultRecipe?.preserve_references === false ? {hasIssues:false, missing:[], unknown:[]} : promptAssistantReferenceIssues(result);
+    if(issues.hasIssues){
+        const detail = [issues.missing.length ? `缺失：${issues.missing.join('、')}` : '', issues.unknown.length ? `未知：${issues.unknown.join('、')}` : ''].filter(Boolean).join('\n');
+        if(window.confirm(`AI 结果中的媒体引用发生变化：\n${detail}\n\n点击“确定”自动修复引用；点击“取消”返回选择。`)){
+            issues.unknown.forEach(token => { output = output.split(token).join(''); });
+            if(issues.missing.length) output = `${output.trim()}\n${issues.missing.join(' ')}`.trim();
+        } else if(!window.confirm('是否忽略引用问题并强制应用？点击“取消”返回编辑结果。')) return;
+    }
+    savePromptDraftForCurrent();
+    const mode = promptAssistantApplyMode.value || 'document';
+    promptEditor?.replaceText?.(output, {mode, range:mode === 'selection' ? result.sourceSelection : null});
+    result.canUndoApply = true;
+    result.appliedAt = Date.now();
+    savePromptDraftForCurrent();
+    renderInputThumbsRow(node);
+    scheduleSave();
+    renderPromptAssistantResult(node);
+}
+async function savePromptAssistantRecipe(){
+    const instruction = promptAssistantCustomInstruction.value.trim();
+    if(!instruction){ toast('请输入自定义处理指令'); return; }
+    const name = await openAssetNameDialog({title:'保存提示词助手指令', value:selectedPromptAssistantRecipe()?.id === '__custom__' ? '' : selectedPromptAssistantRecipe()?.name || '', placeholder:'指令名称'});
+    if(!name) return;
+    const library = promptLibraries.find(item => item.id === activePromptLibraryId) || promptLibraries.find(item => item.id === 'system') || promptLibraries[0];
+    if(!library){ toast('没有可用的提示词库'); return; }
+    const payload = {
+        library_id:library.id, name, category:'assistant', kind:'assistant_recipe', positive:'', negative:'', scene:'提示词助手',
+        system_template:instruction, user_template:'Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>', preserve_references:true,
+        recommended_reasoning_effort:promptAssistantEffort.value || 'medium', recommended_provider:promptAssistantProvider.value, recommended_model:promptAssistantModel.value
+    };
+    const selected = selectedPromptAssistantRecipe();
+    const update = selected && selected.id !== '__custom__' && !selected.builtin;
+    const url = update ? `/api/prompt-libraries/items/${encodeURIComponent(selected.id)}` : '/api/prompt-libraries/items';
+    const response = await fetch(url, {method:update ? 'PATCH' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!response.ok){ toast(await smartResponseErrorMessage(response, '保存指令失败')); return; }
+    const data = await response.json();
+    promptLibraries = data.library?.libraries || promptLibraries;
+    renderPromptAssistantControls({recipeId:data.item?.id || selected?.id || ''});
+    toast('指令已保存');
+}
+
 let lastComposerNodeId = '';
 let activeComposerSubject = null;
 function currentComposerSubject(){
@@ -15127,6 +15560,8 @@ function setComposerExpanded(expanded){
         closeAllSmartPopovers();
         closePromptTemplatePanel();
     }
+    composerWorkspace?.classList.toggle('assistant-open', composerExpanded && promptAssistantOpen);
+    composer?.classList.toggle('assistant-active', composerExpanded && promptAssistantOpen);
     refreshIcons();
     if(composerExpanded && !promptSelection) promptEditor?.focus?.();
 }
@@ -15140,6 +15575,7 @@ function setComposerOpen(open){
 }
 function updateComposer(){
     const node = selectedNode();
+    if(promptAssistantOpen) renderPromptAssistantResult(node);
     syncRunButtonState(node);
     if(smartCascadeSilentSelection && !activeComposerSubject){
         setComposerOpen(false);
@@ -21202,6 +21638,105 @@ if(composerExpandBtn) composerExpandBtn.onclick = event => {
     event.stopPropagation();
     setComposerExpanded(!composerExpanded);
 };
+promptAssistantBtn?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if(!composerExpanded){
+        setComposerExpanded(true);
+        setPromptAssistantOpen(true);
+        return;
+    }
+    setPromptAssistantOpen(!promptAssistantOpen);
+});
+promptAssistantRecipe?.addEventListener('change', () => {
+    promptAssistantCustomInstruction.value = '';
+    renderPromptAssistantControls({recipeId:promptAssistantRecipe.value});
+    rememberPromptAssistantSelection();
+});
+promptAssistantProvider?.addEventListener('change', () => {
+    const provider = resolveChatProviderId(promptAssistantProvider.value);
+    promptAssistantModel.innerHTML = chatModelOptions('', provider);
+    rememberPromptAssistantSelection();
+    syncPromptAssistantReasoningCapability();
+});
+promptAssistantModel?.addEventListener('change', () => { rememberPromptAssistantSelection(); syncPromptAssistantReasoningCapability(); });
+promptAssistantEffort?.addEventListener('change', rememberPromptAssistantSelection);
+promptAssistantUseMedia?.addEventListener('change', rememberPromptAssistantSelection);
+promptAssistantCustomInstruction?.addEventListener('input', () => savePromptAssistantSettings({customInstruction:promptAssistantCustomInstruction.value}));
+promptAssistantRun?.addEventListener('click', runPromptAssistant);
+promptAssistantSaveRecipe?.addEventListener('click', savePromptAssistantRecipe);
+promptAssistantReasoningToggle?.addEventListener('click', () => {
+    setPromptAssistantReasoningExpanded(promptAssistantReasoning?.classList.contains('collapsed'), {user:true});
+});
+promptAssistantPanel?.querySelectorAll('[data-assistant-view]').forEach(button => button.addEventListener('click', () => renderPromptAssistantView(button.dataset.assistantView || 'result')));
+promptAssistantOutput?.addEventListener('input', () => {
+    const node = activeComposerNode();
+    if(!node?.promptAssistantResult || activePromptAssistantStream(node.id)) return;
+    node.promptAssistantResult.output = promptAssistantOutput.value;
+    node.promptAssistantResult.statusText = '结果已编辑，可应用';
+    scheduleSave();
+    promptAssistantStatus.textContent = node.promptAssistantResult.statusText;
+    promptAssistantApply.disabled = !promptAssistantOutput.value.trim();
+    promptAssistantCopy.disabled = !promptAssistantOutput.value.trim();
+});
+promptAssistantApply?.addEventListener('click', applyPromptAssistantResult);
+promptAssistantUndo?.addEventListener('click', () => {
+    const node = activeComposerNode();
+    if(!node?.promptAssistantResult?.canUndoApply) return;
+    promptEditor?.undo?.();
+    node.promptAssistantResult.canUndoApply = false;
+    savePromptDraftForCurrent();
+    scheduleSave();
+    renderPromptAssistantResult(node);
+});
+promptAssistantCopy?.addEventListener('click', async () => {
+    const text = String(activeComposerNode()?.promptAssistantResult?.output || '');
+    if(!text) return;
+    try { await navigator.clipboard.writeText(text); toast('已复制提示词'); } catch(_) { toast('复制失败'); }
+});
+promptAssistantResize?.addEventListener('pointerdown', event => {
+    if(event.button !== 0) return;
+    event.preventDefault();
+    promptAssistantResizeState = {pointerId:event.pointerId, startY:event.clientY, startH:promptAssistantPanel?.offsetHeight || 300, moved:false};
+    promptAssistantResize.setPointerCapture?.(event.pointerId);
+    document.body.classList.add('smart-prompt-assistant-resize');
+});
+promptAssistantResize?.addEventListener('pointermove', event => {
+    if(!promptAssistantResizeState || event.pointerId !== promptAssistantResizeState.pointerId) return;
+    event.preventDefault();
+    if(Math.abs(event.clientY - promptAssistantResizeState.startY) >= 3) promptAssistantResizeState.moved = true;
+    const height = Math.max(190, Math.min(430, promptAssistantResizeState.startH - (event.clientY - promptAssistantResizeState.startY)));
+    composerWorkspace?.style.setProperty('--prompt-assistant-h', `${height}px`);
+});
+const finishPromptAssistantResize = event => {
+    if(!promptAssistantResizeState || (event?.pointerId != null && event.pointerId !== promptAssistantResizeState.pointerId)) return;
+    const wasClick = !promptAssistantResizeState.moved && event?.type !== 'pointercancel';
+    const height = Math.max(190, Math.min(430, promptAssistantPanel?.offsetHeight || promptAssistantResizeState.startH));
+    if(!wasClick) savePromptAssistantSettings({height});
+    promptAssistantResize.releasePointerCapture?.(promptAssistantResizeState.pointerId);
+    promptAssistantResizeState = null;
+    document.body.classList.remove('smart-prompt-assistant-resize');
+    if(wasClick) setPromptAssistantOpen(!promptAssistantOpen);
+};
+promptAssistantResize?.addEventListener('pointerup', finishPromptAssistantResize);
+promptAssistantResize?.addEventListener('pointercancel', finishPromptAssistantResize);
+promptAssistantResize?.addEventListener('dblclick', () => {
+    composerWorkspace?.style.setProperty('--prompt-assistant-h', '300px');
+    savePromptAssistantSettings({height:300});
+});
+promptAssistantResize?.addEventListener('keydown', event => {
+    if(event.key === 'Enter' || event.key === ' '){
+        event.preventDefault();
+        setPromptAssistantOpen(!promptAssistantOpen);
+        return;
+    }
+    if(!['ArrowUp','ArrowDown','Home'].includes(event.key)) return;
+    event.preventDefault();
+    const current = promptAssistantPanel?.offsetHeight || 300;
+    const height = event.key === 'Home' ? 300 : Math.max(190, Math.min(430, current + (event.key === 'ArrowUp' ? 20 : -20)));
+    composerWorkspace?.style.setProperty('--prompt-assistant-h', `${height}px`);
+    savePromptAssistantSettings({height});
+});
 let composerBackdropPointer = null;
 composerExpandBackdrop?.addEventListener('pointerdown', event => {
     event.preventDefault();
@@ -21527,6 +22062,7 @@ promptInput.addEventListener('keyup', event => {
     maybeOpenMentionPicker();
 });
 promptInput.addEventListener('mouseup', saveMentionRange);
+promptInput.addEventListener('mouseup', () => { if(promptAssistantOpen) renderPromptAssistantControls(); });
 promptInput.addEventListener('focusin', saveMentionRange);
 function handleMentionPickerKeydown(event){
     if(event.isComposing || event.keyCode === 229) return;

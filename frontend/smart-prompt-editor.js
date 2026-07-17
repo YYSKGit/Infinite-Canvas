@@ -102,6 +102,7 @@ export class SmartPromptEditor {
     if(!host) throw new Error('SmartPromptEditor requires a host element');
     this.host = host;
     this.references = [];
+    this.referenceArchive = [];
     this.referenceContext = [];
     this.dragTargetPos = null;
     this.dragCaretElement = null;
@@ -121,7 +122,8 @@ export class SmartPromptEditor {
         this.view.updateState(next);
         this.scheduleSelectionCaretSync();
         if(!next.doc.eq(previousDoc)){
-          this.references = prunePromptReferences(next.doc.toJSON(), this.references);
+          this.referenceArchive = mergeReferenceLists(this.referenceArchive, this.references);
+          this.references = prunePromptReferences(next.doc.toJSON(), mergeReferenceLists(this.references, this.referenceArchive));
           this.syncReferenceTokens();
           this.emitChange();
         }
@@ -361,6 +363,16 @@ export class SmartPromptEditor {
   getReferences(){ return cloneJson(this.references); }
   getParts(){ return promptDocumentParts(this.getJSON(), this.references); }
   getExchangeText(){ return promptDocumentExchangeText(this.getJSON(), this.references, this.displayReferences()); }
+  getSelectionRange(){
+    const {from, to, empty} = this.view.state.selection;
+    return {from, to, empty};
+  }
+  getSelectionExchangeText(){
+    const selection = this.view.state.selection;
+    if(selection.empty) return '';
+    const content = selection.content().content.toJSON();
+    return promptDocumentExchangeText({type:'doc', content}, this.references, this.displayReferences());
+  }
   isEmpty(){ return this.view.state.doc.textContent.length === 0 && this.getParts().every(part => part.type === 'text' && !part.text); }
   hasFocus(){ return this.view.hasFocus(); }
 
@@ -376,6 +388,7 @@ export class SmartPromptEditor {
     this.silent += 1;
     try {
       this.references = mergeReferenceLists(references);
+      this.referenceArchive = mergeReferenceLists(references);
       this.view.updateState(this.createState(docJson || emptyPromptDocument()));
       this.references = prunePromptReferences(this.getJSON(), this.references);
       this.syncReferenceTokens();
@@ -399,6 +412,38 @@ export class SmartPromptEditor {
   }
 
   clear(options={}){ this.setValue(emptyPromptDocument(), [], options); }
+
+  replaceText(text, options={}){
+    const mode = options.mode || 'document';
+    const ordered = this.displayReferences();
+    const docJson = textToPromptDocument(String(text || ''), ordered);
+    const replacement = schema.nodeFromJSON(docJson);
+    this.referenceArchive = mergeReferenceLists(this.referenceArchive, this.references, ordered);
+    let transaction = this.view.state.tr;
+    if(mode === 'selection'){
+      const range = options.range;
+      if(range && Number.isFinite(range.from) && Number.isFinite(range.to)){
+        const from = Math.max(0, Math.min(transaction.doc.content.size, Number(range.from)));
+        const to = Math.max(from, Math.min(transaction.doc.content.size, Number(range.to)));
+        transaction = transaction.setSelection(TextSelection.create(transaction.doc, from, to));
+      }
+      transaction = transaction.replaceSelection(new Slice(replacement.content, 0, 0));
+    } else if(mode === 'cursor'){
+      const pos = this.view.state.selection.from;
+      transaction = transaction.replace(pos, pos, new Slice(replacement.content, 0, 0));
+    } else if(mode === 'append'){
+      const end = this.view.state.doc.content.size;
+      transaction = transaction.replace(end, end, new Slice(replacement.content, 0, 0));
+    } else {
+      transaction = transaction.replaceWith(0, this.view.state.doc.content.size, replacement.content);
+    }
+    this.view.dispatch(transaction.scrollIntoView());
+    if(options.focus !== false) this.view.focus();
+    return this.snapshot();
+  }
+
+  undo(){ return undo(this.view.state, this.view.dispatch); }
+  redo(){ return redo(this.view.state, this.view.dispatch); }
 
   setEditable(editable){
     this.locked = !editable;

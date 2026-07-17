@@ -2682,6 +2682,10 @@ class CanvasLLMRequest(BaseModel):
     images: List[str] = []   # 可以是 /output/*.png、/assets/*.png 本地路径 或 http(s) URL 或 data URL
     videos: List[str] = []   # 可以是 /output/*.mp4、/assets/*.mp4 本地路径 或 http(s) URL 或 data URL
 
+    include_reasoning: bool = False
+    reasoning_effort: str = ""
+    max_completion_tokens: int = 0
+
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
 
@@ -2885,6 +2889,14 @@ class PromptLibraryItemRequest(BaseModel):
     positive: str = ""
     negative: str = ""
     scene: str = ""
+    kind: str = "generation_prompt"
+    system_template: str = ""
+    user_template: str = ""
+    preserve_references: bool = True
+    default_target_language: str = ""
+    recommended_reasoning_effort: str = ""
+    recommended_provider: str = ""
+    recommended_model: str = ""
 
 class PromptLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
@@ -3791,6 +3803,54 @@ def text_delta_from_chat_chunk(data):
         return "".join(parts)
     return str(content) if content else ""
 
+def reasoning_delta_from_chat_chunk(data):
+    """Extract streamed reasoning without mixing it into visible output."""
+    data = unwrap_apimart_response(data) if isinstance(data, dict) else {}
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    delta = choices[0].get("delta") or choices[0].get("message") or {}
+    content = delta.get("reasoning_content")
+    if content is None:
+        content = delta.get("reasoning")
+    if content is None:
+        content = delta.get("thinking")
+    if content is None:
+        content = delta.get("reasoning_details")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(item.get("text") or item.get("content") or item.get("reasoning_content") or "")
+            elif isinstance(item, str):
+                parts.append(item)
+        return "".join(parts)
+    return str(content) if content else ""
+
+def reasoning_from_chat_response(data):
+    data = unwrap_apimart_response(data) if isinstance(data, dict) else {}
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    content = message.get("reasoning_content")
+    if content is None:
+        content = message.get("reasoning")
+    if content is None:
+        content = message.get("thinking")
+    if content is None:
+        content = message.get("reasoning_details")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(item.get("text") or item.get("content") or "") if isinstance(item, dict) else str(item or "")
+            for item in content
+        )
+    return str(content) if content else ""
+
 def sse_event(data):
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -4368,6 +4428,27 @@ def apply_venice_chat_completion_parameters(body, provider):
     req_body = dict(body)
     venice_parameters = dict(req_body.get("venice_parameters") or {})
     venice_parameters["include_venice_system_prompt"] = False
+    req_body["venice_parameters"] = venice_parameters
+    return req_body
+
+def apply_canvas_llm_reasoning_parameters(body, payload, provider):
+    """Apply explicit reasoning controls for the canvas LLM assistant."""
+    req_body = dict(body or {})
+    explicit_include = "include_reasoning" in getattr(payload, "model_fields_set", set())
+    include_reasoning = bool(getattr(payload, "include_reasoning", True))
+    effort = str(getattr(payload, "reasoning_effort", "") or "").strip().lower()
+    if include_reasoning and effort in {"minimal", "low", "medium", "high", "xhigh", "max"}:
+        req_body["reasoning_effort"] = effort
+    if not is_venice_provider(provider):
+        return req_body
+    if not explicit_include and not effort:
+        return req_body
+    max_completion_tokens = max(0, int(getattr(payload, "max_completion_tokens", 0) or 0))
+    if max_completion_tokens:
+        req_body["max_completion_tokens"] = max_completion_tokens
+    venice_parameters = dict(req_body.get("venice_parameters") or {})
+    venice_parameters["strip_thinking_response"] = not include_reasoning
+    venice_parameters["disable_thinking"] = not include_reasoning
     req_body["venice_parameters"] = venice_parameters
     return req_body
 
@@ -6796,11 +6877,47 @@ def normalize_prompt_category_id(category="custom"):
     category_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(category or "custom"))[:40] or "custom"
     return "custom" if category_id in {"mine", "my", "personal"} else category_id
 
+def builtin_prompt_assistant_recipes():
+    shared = (
+        "You are a professional prompt editor. Return only the revised prompt, without Markdown fences, headings, "
+        "explanations, or commentary. Tokens matching __SMART_REF_[A-Z]+_[0-9]+__ are immutable media references: "
+        "preserve every token exactly once and never translate, rename, remove, or invent one."
+    )
+    recipes = [
+        ("assistant_complete", "智能补全", "Complete underspecified parts while preserving the user's intent. Add useful subject, composition, lighting, style, camera, motion, and quality details only when appropriate."),
+        ("assistant_polish", "专业润色", "Rewrite the prompt for clarity, precision, consistency, and stronger generation results without changing its core intent."),
+        ("assistant_expand", "扩写细节", "Expand the prompt with concrete visual details, spatial relationships, materials, lighting, atmosphere, camera language, and coherent constraints."),
+        ("assistant_condense", "精简提示词", "Remove repetition and low-value wording while retaining every important subject, constraint, relationship, and media reference."),
+        ("assistant_translate_en", "精确翻译为英文", "Translate accurately into natural English. Do not add, omit, reorganize, or optimize information."),
+        ("assistant_translate_zh", "精确翻译为中文", "Translate accurately into natural Simplified Chinese. Do not add, omit, reorganize, or optimize information."),
+        ("assistant_translate_optimize_en", "翻译并优化为英文", "Translate into natural English and optimize it as a professional media-generation prompt while preserving the original intent."),
+        ("assistant_translate_optimize_zh", "翻译并优化为中文", "Translate into natural Simplified Chinese and optimize it as a professional media-generation prompt while preserving the original intent."),
+        ("assistant_image_prompt", "优化为生图提示词", "Rewrite as a production-ready image-generation prompt with coherent subject, composition, lighting, lens, materials, style, and constraints."),
+        ("assistant_video_prompt", "优化为视频提示词", "Rewrite as a production-ready video-generation prompt with shot design, subject motion, camera movement, timing, continuity, atmosphere, and constraints."),
+    ]
+    return [{
+        "id": recipe_id,
+        "name": name,
+        "kind": "assistant_recipe",
+        "category": "assistant",
+        "scene": "提示词助手",
+        "positive": "",
+        "negative": "",
+        "params": {},
+        "system_template": f"{shared}\n\nTask: {instruction}",
+        "user_template": "Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+        "preserve_references": True,
+        "default_target_language": "",
+        "recommended_reasoning_effort": "",
+        "builtin": True,
+    } for recipe_id, name, instruction in recipes]
+
 def normalize_prompt_library_item(item):
     if not isinstance(item, dict):
         item = {}
     name = sanitize_asset_name(item.get("name") or "提示词", "提示词")
     positive = str(item.get("positive") or item.get("text") or "").strip()
+    kind = "assistant_recipe" if str(item.get("kind") or "").strip() == "assistant_recipe" else "generation_prompt"
     return {
         "id": re.sub(r"[^A-Za-z0-9_-]+", "_", str(item.get("id") or item.get("item_id") or f"tpl_{uuid.uuid4().hex[:12]}"))[:60],
         "name": name,
@@ -6809,6 +6926,15 @@ def normalize_prompt_library_item(item):
         "positive": positive,
         "negative": str(item.get("negative") or "").strip(),
         "params": item.get("params") if isinstance(item.get("params"), dict) else {},
+        "kind": kind,
+        "system_template": str(item.get("system_template") or "").strip() if kind == "assistant_recipe" else "",
+        "user_template": str(item.get("user_template") or "").strip() if kind == "assistant_recipe" else "",
+        "preserve_references": bool(item.get("preserve_references", True)),
+        "default_target_language": str(item.get("default_target_language") or "").strip()[:80],
+        "recommended_reasoning_effort": str(item.get("recommended_reasoning_effort") or "").strip()[:20],
+        "recommended_provider": str(item.get("recommended_provider") or "").strip()[:80],
+        "recommended_model": str(item.get("recommended_model") or "").strip()[:160],
+        "builtin": bool(item.get("builtin", False)),
         "created_at": int(item.get("created_at") or now_ms()),
         "updated_at": int(item.get("updated_at") or item.get("created_at") or now_ms()),
     }
@@ -6818,7 +6944,7 @@ def seed_system_prompt_library():
         "id": "system",
         "name": "系统提示词库",
         "type": "prompt",
-        "items": builtin_prompt_templates(),
+        "items": builtin_prompt_templates() + builtin_prompt_assistant_recipes(),
         "categories": defaultPromptTemplateCategories(),
     }
 
@@ -6831,6 +6957,7 @@ def default_prompt_libraries():
 
 def defaultPromptTemplateCategories():
     return [
+        {"id": "assistant", "name": "AI 助手"},
         {"id": "view", "name": "视角"},
         {"id": "storyboard", "name": "分镜"},
         {"id": "character", "name": "角色"},
@@ -6895,10 +7022,19 @@ def normalize_prompt_libraries(data):
             seen_items.add(item_id)
             items.append(item)
         default_name = "系统提示词库" if is_system else "提示词库"
+        if is_system:
+            existing_item_ids = {str(item.get("id") or "") for item in items}
+            for recipe in builtin_prompt_assistant_recipes():
+                if recipe["id"] not in existing_item_ids:
+                    items.append(normalize_prompt_library_item(recipe))
         raw_categories = raw.get("categories") if isinstance(raw.get("categories"), list) else []
+        if is_system and any(item.get("kind") == "assistant_recipe" for item in items):
+            category_ids = {normalize_prompt_category_id(category.get("id") or category.get("name") or "") for category in raw_categories if isinstance(category, dict)}
+            if "assistant" not in category_ids:
+                raw_categories = [*raw_categories, {"id": "assistant", "name": "AI 助手"}]
         if not is_system:
             # 非系统库不保留任何内置分组（视角/分镜等），仅保留用户自建分组
-            builtin_ids = {"view", "storyboard", "character", "product", "lighting", "custom"}
+            builtin_ids = {"view", "storyboard", "character", "product", "lighting", "custom", "assistant"}
             raw_categories = [c for c in raw_categories if isinstance(c, dict) and normalize_prompt_category_id(c.get("id") or c.get("name") or "") not in builtin_ids]
         libraries.append({
             "id": lib_id,
@@ -13376,12 +13512,32 @@ async def fetch_models_from_upstream(base_url: str, api_key: str, protocol: str 
             "message": payload["message"],
             "raw": payload["raw"],
         }
+    raw_model_items = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), list) else []
+    model_capabilities = {}
+    for item in raw_model_items:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or item.get("model") or "").strip()
+        if not model_id:
+            continue
+        model_spec = item.get("model_spec") if isinstance(item.get("model_spec"), dict) else {}
+        nested_capabilities = model_spec.get("capabilities") if isinstance(model_spec.get("capabilities"), dict) else {}
+        direct_capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), dict) else {}
+        capabilities = {**direct_capabilities, **nested_capabilities, **item}
+        reasoning_value = capabilities.get("supportsReasoning", capabilities.get("supports_reasoning"))
+        effort_value = capabilities.get("supportsReasoningEffort", capabilities.get("supports_reasoning_effort"))
+        if reasoning_value is not None or effort_value is not None:
+            model_capabilities[model_id] = {
+                "supportsReasoning": bool(reasoning_value),
+                "supportsReasoningEffort": bool(effort_value),
+            }
     return {
         "total": len(ids),
         "image_models": grouped["image"],
         "chat_models": grouped["chat"],
         "video_models": grouped["video"],
         "all": ids,
+        "model_capabilities": model_capabilities,
         "image_request_mode": detect_image_request_mode(base_url, ids) or normalize_image_request_mode(image_request_mode),
     }
 
@@ -14831,6 +14987,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
             if _is_apimart:
                 req_body["stream"] = False   # APIMart 默认流式，强制关闭
             req_body = apply_venice_chat_completion_parameters(req_body, _llm_provider)
+            req_body = apply_canvas_llm_reasoning_parameters(req_body, payload, _llm_provider)
             response = await client.post(
                 f"{chat_base}/chat/completions",
                 headers=chat_hdrs,
@@ -14856,7 +15013,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"解析回复内容失败：{exc}") from exc
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else {}
-    return {"text": text, "model": model, "raw_usage": raw_data.get("usage")}
+    return {"text": text, "reasoning": reasoning_from_chat_response(raw), "model": model, "raw_usage": raw_data.get("usage")}
 
 @app.post("/api/canvas-llm/stream")
 async def canvas_llm_stream(payload: CanvasLLMRequest):
@@ -14904,6 +15061,7 @@ async def canvas_llm_stream(payload: CanvasLLMRequest):
         try:
             async with httpx.AsyncClient(timeout=AI_REQUEST_TIMEOUT) as client:
                 req_body = apply_venice_chat_completion_parameters({"model": model, "messages": upstream_messages, "stream": True}, _llm_provider)
+                req_body = apply_canvas_llm_reasoning_parameters(req_body, payload, _llm_provider)
                 async with client.stream(
                     "POST",
                     f"{chat_base}/chat/completions",
@@ -14929,10 +15087,13 @@ async def canvas_llm_stream(payload: CanvasLLMRequest):
                             continue
                         if isinstance(chunk, dict) and chunk.get("usage"):
                             raw_usage = chunk.get("usage")
+                        reasoning_delta = reasoning_delta_from_chat_chunk(chunk)
+                        if reasoning_delta:
+                            yield sse_event({"type": "reasoning_delta", "delta": reasoning_delta})
                         delta = text_delta_from_chat_chunk(chunk)
                         if delta:
                             content_parts.append(delta)
-                            yield sse_event({"type": "delta", "delta": delta})
+                            yield sse_event({"type": "delta", "channel": "output", "delta": delta})
         except httpx.HTTPError as exc:
             log_net_error(f"画布 LLM(流式) 网络/TLS错误 provider={payload.provider} model={model}", exc)
             yield sse_event({"type": "error", "detail": f"请求上游接口失败：{exc}"})
@@ -15850,7 +16011,7 @@ async def add_prompt_library_item(payload: PromptLibraryItemRequest):
     library = find_prompt_library(data, payload.library_id)
     if not library:
         raise HTTPException(status_code=404, detail="提示词库不存在")
-    if not str(payload.positive or "").strip():
+    if payload.kind != "assistant_recipe" and not str(payload.positive or "").strip():
         raise HTTPException(status_code=400, detail="提示词内容不能为空")
     item = normalize_prompt_library_item({
         "id": f"tpl_{uuid.uuid4().hex[:12]}",
@@ -15859,6 +16020,14 @@ async def add_prompt_library_item(payload: PromptLibraryItemRequest):
         "positive": payload.positive,
         "negative": payload.negative,
         "scene": payload.scene,
+        "kind": payload.kind,
+        "system_template": payload.system_template,
+        "user_template": payload.user_template,
+        "preserve_references": payload.preserve_references,
+        "default_target_language": payload.default_target_language,
+        "recommended_reasoning_effort": payload.recommended_reasoning_effort,
+        "recommended_provider": payload.recommended_provider,
+        "recommended_model": payload.recommended_model,
         "created_at": now_ms(),
         "updated_at": now_ms(),
     })
@@ -15882,6 +16051,14 @@ async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemReq
                     "positive": payload.positive or item.get("positive"),
                     "negative": payload.negative,
                     "scene": payload.scene,
+                    "kind": payload.kind or item.get("kind"),
+                    "system_template": payload.system_template,
+                    "user_template": payload.user_template,
+                    "preserve_references": payload.preserve_references,
+                    "default_target_language": payload.default_target_language,
+                    "recommended_reasoning_effort": payload.recommended_reasoning_effort,
+                    "recommended_provider": payload.recommended_provider,
+                    "recommended_model": payload.recommended_model,
                     "updated_at": now_ms(),
                 })
                 library["items"][index] = next_item
@@ -15924,7 +16101,7 @@ async def batch_delete_prompt_library_items(payload: PromptLibraryBatchDeleteReq
     data = save_prompt_libraries(data)
     return {"library": public_prompt_libraries(data), "removed": removed}
 
-PROMPT_BUILTIN_CATEGORY_IDS = {"view", "storyboard", "character", "product", "lighting", "custom"}
+PROMPT_BUILTIN_CATEGORY_IDS = {"view", "storyboard", "character", "product", "lighting", "custom", "assistant"}
 
 @app.post("/api/prompt-libraries/categories")
 async def add_prompt_library_category(payload: PromptLibraryCategoryRequest):
