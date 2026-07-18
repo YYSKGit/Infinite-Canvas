@@ -308,7 +308,7 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .inline-edit-field span { color:var(--faint); font-size:10px; font-weight:900; }
 .inline-edit-field input,.inline-edit-field textarea,.inline-edit-field select { width:100%; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); outline:none; padding:9px 10px; font-size:12px; font-weight:650; line-height:1.45; }
 .inline-edit-field textarea { min-height:110px; resize:vertical; }
-.inline-edit-field select { min-height:38px; }
+.inline-edit-field select { min-height:38px; padding-right:36px; appearance:none; -webkit-appearance:none; background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%); background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%; background-size:5px 5px,5px 5px; background-repeat:no-repeat; }
 .inline-edit-field input:focus,.inline-edit-field textarea:focus,.inline-edit-field select:focus { border-color:var(--line-2); box-shadow:0 0 0 3px rgba(148,163,184,.14); }
 .inline-edit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .inline-edit-check { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--muted); font-size:11px; font-weight:700; line-height:1.45; }

@@ -1347,18 +1347,16 @@ function render(){
     else if(activeTab === 'local') renderLocalManager();
     else if(activeTab === 'canvas-assets') renderCanvasAssetsManager();
     else renderAssetManager();
-    refreshIcons();
-    initializeDetailPreviewMedia(root || document);
     if(scrollState.length){
-        requestAnimationFrame(() => {
-            document.querySelectorAll('.nav-scroll,.content-scroll,.detail-scroll').forEach((el, index) => {
-                const saved = scrollState.find(item => item.index === index);
-                if(!saved) return;
-                el.scrollTop = saved.top;
-                el.scrollLeft = saved.left;
-            });
+        document.querySelectorAll('.nav-scroll,.content-scroll,.detail-scroll').forEach((el, index) => {
+            const saved = scrollState.find(item => item.index === index);
+            if(!saved) return;
+            el.scrollTop = saved.top;
+            el.scrollLeft = saved.left;
         });
     }
+    refreshIcons();
+    initializeDetailPreviewMedia(root || document);
 }
 function updateSearchQueryFromInput(id, value){
     if(id === 'assetSearch') assetQuery = value || '';
@@ -2384,6 +2382,12 @@ function renderPromptManager(){
             ${renderPromptDetail(detail, readonly)}
         </aside>
     `;
+}
+function renderPromptSelectionOnly(){
+    root.querySelectorAll('[data-prompt-row]').forEach(row => row.classList.toggle('active', row.dataset.promptRow === selectedPromptId));
+    const detailPanel = root.querySelector('.asset-detail');
+    if(detailPanel) detailPanel.innerHTML = renderPromptDetail(selectedPrompt(), Boolean(activePromptLibrary()?.readonly));
+    refreshIcons();
 }
 function renderPromptTreeBranch(lib){
     const isActiveLib = lib.id === activePromptLibraryId;
@@ -3778,14 +3782,20 @@ async function handleClick(event){
         if(promptManageMode){
             const selected = toggleSelectionSet(selectedPromptIds, id);
             selectedPromptId = selected ? id : (selectedPromptId === id ? '' : selectedPromptId);
+            promptEditMode = false;
+            promptCreateMode = false;
+            pendingDeletePromptId = '';
+            pendingBatchDelete = '';
+            render();
         } else {
+            if(selectedPromptId === id && !promptEditMode && !promptCreateMode) return;
             selectedPromptId = id;
+            promptEditMode = false;
+            promptCreateMode = false;
+            pendingDeletePromptId = '';
+            pendingBatchDelete = '';
+            renderPromptSelectionOnly();
         }
-        promptEditMode = false;
-        promptCreateMode = false;
-        pendingDeletePromptId = '';
-        pendingBatchDelete = '';
-        render();
         return;
     }
 }

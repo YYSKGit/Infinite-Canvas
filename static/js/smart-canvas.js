@@ -131,8 +131,9 @@ const promptAssistantSaveRecipe = document.getElementById('promptAssistantSaveRe
 const promptAssistantReasoning = document.getElementById('promptAssistantReasoning');
 const promptAssistantReasoningToggle = document.getElementById('promptAssistantReasoningToggle');
 const promptAssistantReasoningState = document.getElementById('promptAssistantReasoningState');
+const promptAssistantReasoningTimer = document.getElementById('promptAssistantReasoningTimer');
+const promptAssistantReasoningTimerValue = document.getElementById('promptAssistantReasoningTimerValue');
 const promptAssistantReasoningText = document.getElementById('promptAssistantReasoningText');
-const promptAssistantMeta = document.getElementById('promptAssistantMeta');
 const promptAssistantOutput = document.getElementById('promptAssistantOutput');
 const promptAssistantCompare = document.getElementById('promptAssistantCompare');
 const promptAssistantStatus = document.getElementById('promptAssistantStatus');
@@ -146,6 +147,7 @@ const promptAssistantStreams = new Map();
 const promptAssistantReasoningUi = new Map();
 const promptAssistantCapabilityCache = new Map();
 let promptAssistantResizeState = null;
+let promptAssistantReasoningTicker = null;
 let minimapViewport = document.getElementById('minimapViewport');
 let canvas = null;
 let canvasUsesConnections = true;
@@ -15051,11 +15053,17 @@ function selectedPromptAssistantRecipe(){
 }
 async function syncPromptAssistantReasoningCapability(){
     if(!promptAssistantProvider || !promptAssistantModel || !promptAssistantEffort) return;
+    const autoOption = promptAssistantEffort.querySelector('option[value=""]');
+    const setAutoLabel = label => { if(autoOption) autoOption.textContent = label; };
+    // 能力信息是异步返回的，不能让它改变已显示控件的尺寸、可见性或禁用状态，
+    // 否则首次打开助手时工具栏会在请求完成后重新排版。
+    promptAssistantEffort.hidden = false;
+    promptAssistantEffort.disabled = false;
+    setAutoLabel('自动推理');
     const providerId = promptAssistantProvider.value;
     const provider = chatApiProviders().find(item => item.id === providerId);
     if(String(provider?.protocol || '').toLowerCase() !== 'venice'){
-        promptAssistantEffort.hidden = false;
-        promptAssistantEffort.disabled = false;
+        promptAssistantEffort.dataset.reasoningCapability = 'unknown';
         promptAssistantEffort.title = '推理强度（上游不支持时请使用自动）';
         return;
     }
@@ -15069,14 +15077,13 @@ async function syncPromptAssistantReasoningCapability(){
     if(promptAssistantProvider.value !== providerId) return;
     const capability = capabilities?.[promptAssistantModel.value];
     if(!capability){
-        promptAssistantEffort.hidden = false;
-        promptAssistantEffort.disabled = false;
+        promptAssistantEffort.dataset.reasoningCapability = 'unknown';
         promptAssistantEffort.title = '未取得模型能力信息，建议使用自动';
         return;
     }
-    promptAssistantEffort.hidden = capability.supportsReasoning === false;
-    promptAssistantEffort.disabled = !capability.supportsReasoningEffort;
-    if(!capability.supportsReasoningEffort) promptAssistantEffort.value = '';
+    promptAssistantEffort.dataset.reasoningCapability = capability.supportsReasoning === false
+        ? 'unsupported'
+        : capability.supportsReasoningEffort ? 'adjustable' : 'fixed';
     promptAssistantEffort.title = capability.supportsReasoning
         ? capability.supportsReasoningEffort ? '该模型支持调整推理强度' : '该模型使用内置推理强度'
         : '该模型不支持推理';
@@ -15175,6 +15182,40 @@ function rememberPromptAssistantSelection(){
         useMedia:promptAssistantUseMedia.checked, customInstruction:promptAssistantCustomInstruction.value, byRecipe
     });
 }
+function promptAssistantReasoningElapsedText(ms=0){
+    return `${(Math.max(0, Number(ms) || 0) / 1000).toFixed(1)}s`;
+}
+function finalizePromptAssistantReasoning(result, endedAt=Date.now()){
+    const startedAt = Number(result?.reasoningStartedAt || 0);
+    if(!startedAt || result.reasoningCompletedAt) return;
+    result.reasoningCompletedAt = Math.max(startedAt, Number(endedAt) || Date.now());
+    result.reasoningElapsedMs = result.reasoningCompletedAt - startedAt;
+}
+function updatePromptAssistantReasoningTimer(){
+    const node = activeComposerNode();
+    const stream = node ? activePromptAssistantStream(node.id) : null;
+    const result = node?.promptAssistantResult || null;
+    const startedAt = Number(result?.reasoningStartedAt || 0);
+    const completedAt = Number(result?.reasoningCompletedAt || 0);
+    const visible = Boolean(startedAt);
+    const running = Boolean(stream && startedAt && !completedAt);
+    const elapsed = visible ? (completedAt ? Number(result?.reasoningElapsedMs ?? completedAt - startedAt) : Date.now() - startedAt) : 0;
+    if(promptAssistantReasoningTimer){
+        promptAssistantReasoningTimer.hidden = !visible;
+        promptAssistantReasoningTimer.classList.toggle('running', running);
+    }
+    if(promptAssistantReasoningTimerValue) promptAssistantReasoningTimerValue.textContent = promptAssistantReasoningElapsedText(elapsed);
+}
+function syncPromptAssistantReasoningTimer(){
+    const shouldTick = [...promptAssistantStreams.values()].some(stream => stream.draft?.reasoningStartedAt && !stream.draft?.reasoningCompletedAt);
+    if(shouldTick){
+        if(!promptAssistantReasoningTicker) promptAssistantReasoningTicker = window.setInterval(updatePromptAssistantReasoningTimer, 100);
+    } else if(promptAssistantReasoningTicker){
+        clearInterval(promptAssistantReasoningTicker);
+        promptAssistantReasoningTicker = null;
+    }
+    updatePromptAssistantReasoningTimer();
+}
 function renderPromptAssistantResult(node=activeComposerNode()){
     if(!promptAssistantPanel) return;
     const result = node?.promptAssistantResult || null;
@@ -15187,8 +15228,9 @@ function renderPromptAssistantResult(node=activeComposerNode()){
     promptAssistantOutput.value = output;
     promptAssistantOutput.readOnly = Boolean(stream);
     promptAssistantReasoningState.textContent = result?.reasoningStarted && !result?.outputStarted && stream ? '思考中' : reasoning ? '已完成' : '';
-    promptAssistantMeta.textContent = result ? [result.providerName || result.provider, result.model, result.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : ''].filter(Boolean).join(' · ') : '';
-    promptAssistantStatus.textContent = stream ? (activity?.outputStarted ? '正在输出正文…' : activity?.reasoningStarted ? '正在思考…' : '正在等待模型…') : result?.statusText || (output ? '结果可应用' : '选择功能后开始处理');
+    promptAssistantStatus.textContent = stream ? (activity?.outputStarted ? '正在输出正文' : activity?.reasoningStarted ? '正在思考' : '正在等待模型') : result?.statusText || (output ? '结果可应用' : '选择功能后开始处理');
+    promptAssistantStatus.dataset.running = stream ? 'true' : 'false';
+    syncPromptAssistantReasoningTimer();
     promptAssistantApply.disabled = !output || Boolean(stream);
     promptAssistantCopy.disabled = !output;
     promptAssistantUndo.disabled = !result?.canUndoApply;
@@ -15212,7 +15254,12 @@ function renderPromptAssistantResult(node=activeComposerNode()){
 function renderPromptAssistantView(view='result'){
     const node = activeComposerNode();
     const result = node?.promptAssistantResult || {};
-    promptAssistantPanel?.querySelectorAll('[data-assistant-view]').forEach(button => button.classList.toggle('active', button.dataset.assistantView === view));
+    promptAssistantPanel?.querySelectorAll('[data-assistant-view]').forEach(button => {
+        const active = button.dataset.assistantView === view;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.tabIndex = active ? 0 : -1;
+    });
     const isResult = view === 'result';
     promptAssistantOutput.hidden = !isResult;
     promptAssistantCompare.hidden = isResult;
@@ -15277,13 +15324,16 @@ async function runPromptAssistant(){
     const media = promptAssistantUseMedia.checked ? visibleReferenceImagesFor(node) : [];
     const controller = new AbortController();
     const startedAt = Date.now();
+    const selectedReasoningEffort = promptAssistantEffort.value;
+    const effectiveReasoningEffort = ['fixed','unsupported'].includes(promptAssistantEffort.dataset.reasoningCapability || '') ? '' : selectedReasoningEffort;
     const oldResult = node.promptAssistantResult ? JSON.parse(JSON.stringify(node.promptAssistantResult)) : null;
     const draft = {
         version:1, requestId:uid('prompt_ai'), recipeId:recipe?.id || '', recipeName:recipe?.name || '自定义指令',
-        provider, providerName:providerConfig?.name || provider, model, reasoningEffort:promptAssistantEffort.value,
+        provider, providerName:providerConfig?.name || provider, model, reasoningEffort:selectedReasoningEffort,
         scope, sourceText, selectionText, sourceDoc:promptEditor?.getJSON?.() || null,
         sourceReferences:promptEditor?.getReferences?.() || [], sourceSelection:promptEditor?.getSelectionRange?.() || null,
-        reasoning:'', output:'', reasoningStarted:false, outputStarted:false, status:'running', statusText:'正在等待模型…',
+        reasoning:'', output:'', reasoningStarted:false, reasoningStartedAt:0, reasoningCompletedAt:0, reasoningElapsedMs:0,
+        outputStarted:false, outputStartedAt:0, status:'running', statusText:'正在等待模型…',
         startedAt, completedAt:0, elapsedMs:0, usage:null, stopped:false, canUndoApply:false
     };
     const stream = {nodeId:node.id, controller, draft, oldResult, committed:false, stopping:false, lastPersistAt:0};
@@ -15299,7 +15349,7 @@ async function runPromptAssistant(){
                 ms_model:provider === 'modelscope' ? model : '',
                 images:imageRefsOnly(media).map(item => item.url).filter(Boolean),
                 videos:videoRefsOnly(media).map(item => item.url).filter(Boolean),
-                include_reasoning:true, reasoning_effort:promptAssistantEffort.value, max_completion_tokens:8192
+                include_reasoning:true, reasoning_effort:effectiveReasoningEffort, max_completion_tokens:8192
             })
         });
         if(!response.ok) throw new Error(await smartResponseErrorMessage(response, '提示词处理失败'));
@@ -15307,13 +15357,18 @@ async function runPromptAssistant(){
             if(event?.type === 'error') throw new Error(event.detail || '提示词处理失败');
             if(event?.type === 'reasoning_delta'){
                 const result = promptAssistantCommitDraft(node, stream);
-                result.reasoningStarted = true;
+                if(!result.reasoningStarted){
+                    result.reasoningStarted = true;
+                    result.reasoningStartedAt = Date.now();
+                }
                 result.reasoning += String(event.delta || '');
                 if(!ui.manuallyCollapsed) setPromptAssistantReasoningExpanded(true);
             } else if(event?.type === 'delta' || event?.type === 'output_delta'){
                 const result = promptAssistantCommitDraft(node, stream);
                 if(!result.outputStarted){
                     result.outputStarted = true;
+                    result.outputStartedAt = Date.now();
+                    finalizePromptAssistantReasoning(result, result.outputStartedAt);
                     if(!ui.pinnedOpen) setPromptAssistantReasoningExpanded(false);
                 }
                 result.output += promptAssistantRestoreReferences(String(event.delta || ''));
@@ -15335,6 +15390,7 @@ async function runPromptAssistant(){
             const result = node.promptAssistantResult;
             result.status = 'done'; result.statusText = result.output ? '结果可应用' : '模型没有返回正文';
             result.completedAt = Date.now(); result.elapsedMs = result.completedAt - startedAt;
+            finalizePromptAssistantReasoning(result, result.completedAt);
         } else {
             node.promptAssistantResult = oldResult;
         }
@@ -15345,6 +15401,7 @@ async function runPromptAssistant(){
             result.status = aborted ? 'stopped' : 'error'; result.stopped = aborted;
             result.statusText = aborted ? '已停止，结果可能不完整' : `生成失败：${error.message || '未知错误'}`;
             result.completedAt = Date.now(); result.elapsedMs = result.completedAt - startedAt;
+            finalizePromptAssistantReasoning(result, result.completedAt);
         } else {
             node.promptAssistantResult = oldResult;
             if(!aborted) toast((error.message || '提示词处理失败').slice(0, 160));
