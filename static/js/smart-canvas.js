@@ -12016,11 +12016,10 @@ function clearNodeMediaBeforeDelete(id){
     delete node.originalMediaSource;
     delete node.w;
     delete node.h;
-    const history = historyGroupForNode(node);
-    if(history){
-        nodes = nodes.filter(n => n.id !== history.id);
-        if(canvas) canvas.connections = (canvas.connections || []).filter(c => c.from !== history.id && c.to !== history.id);
-    }
+    // The corner button clears only the current output slot.  History groups
+    // are independent archived results and must survive this operation.  A
+    // true node deletion (keyboard Delete / structural deletion) still goes
+    // through deleteNode(), which intentionally removes attached histories.
     if(selectedImage.nodeId === id) selectedImage = {nodeId:'', index:-1};
     selectedId = id;
     selectedIds = [];
@@ -19768,14 +19767,90 @@ async function urlToBase64(url){
     });
 }
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+const smartBackgroundNotifications = new Set();
+let smartNotificationServiceWorkerPromise = null;
+function prepareSmartNotificationServiceWorker(){
+    if(smartNotificationServiceWorkerPromise) return smartNotificationServiceWorkerPromise;
+    if(!('serviceWorker' in navigator) || !window.isSecureContext) return Promise.resolve(null);
+    smartNotificationServiceWorkerPromise = navigator.serviceWorker
+        .register('/static/smart-canvas-notifications-sw.js', {scope:'/static/', updateViaCache:'none'})
+        .then(() => navigator.serviceWorker.ready)
+        .catch(() => null);
+    return smartNotificationServiceWorkerPromise;
+}
+function closeSmartBackgroundNotifications(){
+    smartBackgroundNotifications.forEach(notification => {
+        try { notification.close(); } catch(_err) {}
+    });
+    smartBackgroundNotifications.clear();
+    if(smartNotificationServiceWorkerPromise){
+        smartNotificationServiceWorkerPromise.then(async registration => {
+            if(!registration?.getNotifications) return;
+            try {
+                const notifications = await registration.getNotifications();
+                notifications.forEach(notification => notification.close());
+            } catch(_err) {}
+        }).catch(() => {});
+    }
+}
+function focusSmartCanvasFromNotification(){
+    try { window.focus(); } catch(_err) {}
+    requestAnimationFrame(() => {
+        try { window.focus(); } catch(_err) {}
+        focusSmartCanvasKeyboardTarget();
+    });
+}
 function smartBackgroundNotify(title, body=''){
     if(typeof window === 'undefined' || typeof document === 'undefined') return;
     if(document.visibilityState === 'visible') return;
     if(!('Notification' in window)) return;
-    const show = () => {
+    const notificationTitle = String(title || '任务通知');
+    const notificationBody = String(body || '').slice(0, 200);
+    const showPageNotification = () => {
+        if(document.visibilityState === 'visible'){
+            closeSmartBackgroundNotifications();
+            return;
+        }
         try {
-            new Notification(String(title || '任务通知'), {body:String(body || '').slice(0, 200)});
+            const notification = new Notification(notificationTitle, {body:notificationBody});
+            smartBackgroundNotifications.add(notification);
+            const forget = () => smartBackgroundNotifications.delete(notification);
+            notification.onclick = event => {
+                event?.preventDefault?.();
+                focusSmartCanvasFromNotification();
+                try { notification.close(); } catch(_err) {}
+                forget();
+            };
+            notification.onclose = forget;
+            notification.onerror = forget;
         } catch(_err){}
+    };
+    const show = () => {
+        if(document.visibilityState === 'visible'){
+            closeSmartBackgroundNotifications();
+            return;
+        }
+        prepareSmartNotificationServiceWorker().then(async registration => {
+            if(document.visibilityState === 'visible'){
+                closeSmartBackgroundNotifications();
+                return;
+            }
+            if(!registration?.showNotification){
+                showPageNotification();
+                return;
+            }
+            try {
+                await registration.showNotification(notificationTitle, {
+                    body:notificationBody,
+                    icon:'/static/images/logo.png',
+                    data:{url:location.href},
+                    tag:`smart-canvas-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+                });
+                if(document.visibilityState === 'visible') closeSmartBackgroundNotifications();
+            } catch(_err) {
+                showPageNotification();
+            }
+        }).catch(showPageNotification);
     };
     if(Notification.permission === 'granted'){
         show();
@@ -19787,6 +19862,13 @@ function smartBackgroundNotify(title, body=''){
         }).catch(() => {});
     }
 }
+document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible') closeSmartBackgroundNotifications();
+});
+window.addEventListener('focus', closeSmartBackgroundNotifications);
+window.addEventListener('pageshow', () => {
+    if(document.visibilityState === 'visible') closeSmartBackgroundNotifications();
+});
 function smartTaskKindText(kind='image'){
     if(kind === 'video') return '视频';
     if(kind === 'audio') return '音频';
@@ -22660,6 +22742,7 @@ window.onload = async () => {
     if(window.StudioI18n) window.StudioI18n.apply();
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();
+    prepareSmartNotificationServiceWorker();
     startVeniceCreditsAutoRefresh();
     await loadConfig();
     smartCanvasLoadBaseSettings = cloneSmartSettings(settings);
@@ -22672,5 +22755,6 @@ window.onload = async () => {
 };
 
 window.addEventListener('pagehide', () => {
+    closeSmartBackgroundNotifications();
     persistSmartUndoHistoryNow();
 });
