@@ -70,7 +70,7 @@ const veniceCreditsValue = document.getElementById('veniceCreditsValue');
 const veniceCreditsFill = document.getElementById('veniceCreditsFill');
 const veniceCreditsPanel = document.getElementById('veniceCreditsPanel');
 const veniceCreditsRefreshBtn = document.getElementById('veniceCreditsRefreshBtn');
-const veniceCreditsPanelUsed = document.getElementById('veniceCreditsPanelUsed');
+const veniceCreditsPanelRemaining = document.getElementById('veniceCreditsPanelRemaining');
 const veniceCreditsPanelTotal = document.getElementById('veniceCreditsPanelTotal');
 const veniceCreditsPanelPercent = document.getElementById('veniceCreditsPanelPercent');
 const veniceCreditsPanelRefill = document.getElementById('veniceCreditsPanelRefill');
@@ -261,13 +261,13 @@ let veniceImageQuoteController = null;
 let veniceImageQuoteSignature = '';
 let veniceImageQuoteRequestToken = 0;
 let veniceImageQuoteCache = null;
-const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v1';
+const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v2';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
 const VENICE_CREDITS_AUTO_MAX_BACKOFF_MS = 30 * 60 * 1000;
 let veniceCreditsState = {
     providerId:'',
-    used:null,
+    remaining:null,
     total:null,
     available:null,
     nextRefillAt:null,
@@ -1360,6 +1360,11 @@ function smartVideoContainerIsGroup(node){
 }
 function playSmartCanvasVideo(video){
     if(!video) return;
+    const ownerNodeId = video.closest('.image-node')?.dataset?.id || '';
+    if(nodeHasLiveRunState(nodes.find(node => node.id === ownerNodeId))){
+        resetSmartCanvasVideo(video);
+        return;
+    }
     if(smartVideoAltCopyDragActive){ resetSmartCanvasVideo(video); return; }
     if(video.dataset.smartDragSuspended === '1'){
         video.pause?.();
@@ -1495,6 +1500,7 @@ function bindSmartCanvasVideo(host, nodeId){
     let controlsTimer = 0;
     const clearTimer = () => { if(hoverTimer) clearTimeout(hoverTimer); hoverTimer = 0; };
     const hoverOnly = smartVideoContainerIsGroup(nodes.find(node => node.id === nodeId));
+    const interactionLocked = () => nodeHasLiveRunState(nodes.find(node => node.id === nodeId));
     const nodeSelected = () => !hoverOnly && isNodeSelected(nodeId);
     const inControlStrip = event => Boolean(event.target?.closest?.('.smart-video-controls'));
     const on = (target, name, listener, options={}) => target?.addEventListener(name, listener, {...options, signal});
@@ -1534,6 +1540,7 @@ function bindSmartCanvasVideo(host, nodeId){
         if(poster.complete && !poster.naturalWidth) hideBrokenPoster();
     }
     const openVideoPreview = event => {
+        if(interactionLocked()) return;
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -1560,6 +1567,10 @@ function bindSmartCanvasVideo(host, nodeId){
         host.classList.remove('is-controls-visible');
     };
     const showControlsTemporarily = () => {
+        if(interactionLocked()){
+            hideControls();
+            return;
+        }
         if(!controlsPlaybackStarted()){
             hideControls();
             return;
@@ -1589,7 +1600,7 @@ function bindSmartCanvasVideo(host, nodeId){
     video.controls = false;
     on(host, 'mouseenter', () => {
         clearTimer();
-        if(smartVideoAltCopyDragActive) return;
+        if(smartVideoAltCopyDragActive || interactionLocked()) return;
         if(nodeSelected()) { playSmartCanvasVideo(video); return; }
         hoverTimer = setTimeout(() => {
             hoverTimer = 0;
@@ -1608,6 +1619,7 @@ function bindSmartCanvasVideo(host, nodeId){
         if(!nodeSelected() && !draggingThisNode) resetSmartCanvasVideo(video);
     });
     on(video, 'mousedown', e => {
+        if(interactionLocked()) return;
         // Node dragging takes over on mousedown and temporarily disables pointer
         // events for the whole node body. Resolve the second press here, before
         // that drag gesture can make the video lose the ensuing dblclick.
@@ -1620,6 +1632,7 @@ function bindSmartCanvasVideo(host, nodeId){
         if(inControlStrip(e)) e.stopPropagation();
     }, {capture:true});
     on(video, 'click', e => {
+        if(interactionLocked()) return;
         if(inControlStrip(e)) return;
         e.preventDefault();
         if(e.detail >= 2){
@@ -1658,6 +1671,7 @@ function bindSmartCanvasVideo(host, nodeId){
         userPlaySmartCanvasVideo(video);
     }, {capture:true});
     on(video, 'dblclick', e => {
+        if(interactionLocked()) return;
         // The preview is normally opened on the second mousedown, but the
         // browser still dispatches dblclick afterwards. Consume it here so a
         // smart-group ancestor cannot interpret it as "open create menu".
@@ -1866,7 +1880,9 @@ function bindSmartCanvasVideo(host, nodeId){
     if(!video.paused && video.readyState >= 2) schedulePresentedVideoFrameReveal();
     syncSmartVideoControls(host, video);
     syncControlsPinned();
-    if(nodeSelected()){
+    if(interactionLocked()){
+        resetSmartCanvasVideo(video);
+    } else if(nodeSelected()){
         if(video.dataset.smartSelectionActive !== '1') delete video.dataset.smartUserPaused;
         video.dataset.smartSelectionActive = '1';
         playSmartCanvasVideo(video);
@@ -1877,6 +1893,11 @@ function syncSmartCanvasVideoSelection(){
         const video = host.querySelector('.smart-canvas-video');
         const nodeId = host.closest('.image-node')?.dataset?.id || '';
         if(!video || !nodeId) return;
+        if(nodeHasLiveRunState(nodes.find(node => node.id === nodeId))){
+            host._smartCloseCaptureMenu?.();
+            resetSmartCanvasVideo(video);
+            return;
+        }
         if(video.dataset.smartDragResumePending === '1') return;
         if(smartVideoContainerIsGroup(nodes.find(node => node.id === nodeId))){
             delete host.dataset.selectionPlayback;
@@ -2418,6 +2439,18 @@ function smartImageUsesWorkflowInput(node, ctx=smartLoopContext){
 }
 function normalizeLegacySmartNode(node){
     if(!node || typeof node !== 'object') return node;
+    // Older sync merges could stamp an untouched media node as a completed
+    // zero-duration run.  That exact timestamp shape was synthetic, so remove
+    // it while loading instead of keeping a permanent green "0s" badge.
+    const legacyRunStartedAt = Number(node.runStartedAt || 0);
+    const legacyRunFinishedAt = Number(node.runFinishedAt || 0);
+    if(!node.runFailed && legacyRunStartedAt > 0 && legacyRunFinishedAt === legacyRunStartedAt
+        && Number(node.runElapsedMs || 0) === 0){
+        delete node.runStartedAt;
+        delete node.runFinishedAt;
+        delete node.runElapsedMs;
+        delete node.runTimerHidden;
+    }
     if(node.promptAssistantResult && typeof node.promptAssistantResult === 'object'){
         if(node.promptAssistantResult.status === 'running'){
             node.promptAssistantResult.status = 'stopped';
@@ -4413,11 +4446,11 @@ function resolveVeniceCreditsProviderId(preferredId=''){
     const primary = providers.find(item => item.primary);
     return String((primary || providers[0])?.id || '').trim();
 }
-function veniceCreditPercent(used, total){
+function veniceCreditPercent(amount, total){
     const safeTotal = Number(total);
-    const safeUsed = Number(used);
-    if(!(Number.isFinite(safeUsed) && Number.isFinite(safeTotal) && safeTotal > 0)) return 0;
-    return Math.max(0, Math.min(100, (safeUsed / safeTotal) * 100));
+    const safeAmount = Number(amount);
+    if(!(Number.isFinite(safeAmount) && Number.isFinite(safeTotal) && safeTotal > 0)) return 0;
+    return Math.max(0, Math.min(100, (safeAmount / safeTotal) * 100));
 }
 function veniceProgressColor(percent){
     if(percent <= 20) return '#ef4444';
@@ -4503,11 +4536,11 @@ function veniceAgoText(timestamp) {
 function persistVeniceCreditsCache(){
     try {
         const total = Number(veniceCreditsState.total);
-        const used = Number(veniceCreditsState.used);
-        if(!(Number.isFinite(total) && total > 0 && Number.isFinite(used))) return;
+        const remaining = Number(veniceCreditsState.remaining);
+        if(!(Number.isFinite(total) && total > 0 && Number.isFinite(remaining))) return;
         localStorage.setItem(VENICE_CREDITS_CACHE_KEY, JSON.stringify({
             providerId:veniceCreditsState.providerId || '',
-            used:Number(used),
+            remaining:Number(remaining),
             total:Number(total),
             available:Number(veniceCreditsState.available),
             nextRefillAt:Number(veniceCreditsState.nextRefillAt || 0) || null,
@@ -4525,12 +4558,12 @@ function restoreVeniceCreditsCache(){
         if(!raw) return;
         const data = JSON.parse(raw);
         const total = Number(data?.total);
-        const used = Number(data?.used);
-        if(!(Number.isFinite(total) && total > 0 && Number.isFinite(used))) return;
+        const remaining = Number(data?.remaining);
+        if(!(Number.isFinite(total) && total > 0 && Number.isFinite(remaining))) return;
         veniceCreditsState = {
             ...veniceCreditsState,
             providerId:String(data?.providerId || ''),
-            used,
+            remaining,
             total,
             available:Number.isFinite(Number(data?.available)) ? Number(data.available) : null,
             nextRefillAt:Number.isFinite(Number(data?.nextRefillAt)) ? Number(data.nextRefillAt) : null,
@@ -4573,19 +4606,19 @@ function syncVeniceCreditsRefreshButtonState(){
 function renderVeniceCreditsPanel(){
     syncVeniceCreditsRefreshButtonState();
     if(!veniceCreditsPanel) return;
-    const used = Number(veniceCreditsState.used);
+    const remaining = Number(veniceCreditsState.remaining);
     const total = Number(veniceCreditsState.total);
-    const percent = veniceCreditPercent(used, total);
-    const valid = Number.isFinite(used) && Number.isFinite(total) && total > 0;
-    if(veniceCreditsPanelUsed) veniceCreditsPanelUsed.textContent = valid ? formatVeniceFull(used) : '--';
+    const percent = veniceCreditPercent(remaining, total);
+    const valid = Number.isFinite(remaining) && Number.isFinite(total) && total > 0;
+    if(veniceCreditsPanelRemaining) veniceCreditsPanelRemaining.textContent = valid ? formatVeniceFull(remaining) : '--';
     if(veniceCreditsPanelTotal) veniceCreditsPanelTotal.textContent = valid ? formatVeniceFull(total) : '--';
     if(veniceCreditsPanelPercent) veniceCreditsPanelPercent.textContent = valid ? `${percent.toFixed(1)}%` : '--';
     if(veniceCreditsPanelRefill) veniceCreditsPanelRefill.textContent = veniceRemainingText(veniceCreditsState.nextRefillAt);
     if(veniceCreditsPanelUpdatedAt) veniceCreditsPanelUpdatedAt.textContent = veniceAgoText(veniceCreditsState.updatedAt);
-    setVeniceRowTooltip(veniceCreditsPanelUsed, valid ? `约 ${veniceCreditsCnyText(used)}` : '--');
+    setVeniceRowTooltip(veniceCreditsPanelRemaining, valid ? `约 ${veniceCreditsCnyText(remaining)}` : '--');
     setVeniceRowTooltip(veniceCreditsPanelTotal, valid ? `约 ${veniceCreditsCnyText(total)}` : '--');
     const available = Number(veniceCreditsState.available);
-    const fallbackAvailable = valid ? Math.max(0, total - used) : NaN;
+    const fallbackAvailable = valid ? Math.max(0, remaining) : NaN;
     const remainingCredits = Number.isFinite(available) ? Math.max(0, available) : fallbackAvailable;
     const refillAt = Number(veniceCreditsState.nextRefillAt);
     const remainingDays = Number.isFinite(refillAt) && refillAt > Date.now()
@@ -4608,9 +4641,9 @@ function toggleVeniceCreditsPanel(forceOpen=null){
     veniceCreditsPanel.classList.toggle('open', nextOpen);
     if(nextOpen) refreshIcons();
 }
-function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt=null, tierCap=null, usedThisCycle=null, userType='', providerId='', state='idle', title=''}={}){
+function setVeniceCreditsUi({remaining=null, total=null, available=null, nextRefillAt=null, tierCap=null, usedThisCycle=null, userType='', providerId='', state='idle', title=''}={}){
     if(!veniceCreditsBadge) return;
-    if(isFiniteInputNumber(used)) veniceCreditsState.used = Number(used);
+    if(isFiniteInputNumber(remaining)) veniceCreditsState.remaining = Number(remaining);
     if(isFiniteInputNumber(total) && Number(total) > 0) veniceCreditsState.total = Number(total);
     if(isFiniteInputNumber(available)) veniceCreditsState.available = Number(available);
     if(isFiniteInputNumber(nextRefillAt)) veniceCreditsState.nextRefillAt = Number(nextRefillAt);
@@ -4625,9 +4658,9 @@ function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt
         persistVeniceCreditsCache();
     }
     const safeTotal = Number(veniceCreditsState.total);
-    const safeUsed = Number(veniceCreditsState.used);
-    const hasNumbers = Number.isFinite(safeUsed) && Number.isFinite(safeTotal) && safeTotal > 0;
-    const percent = veniceCreditPercent(safeUsed, safeTotal);
+    const safeRemaining = Number(veniceCreditsState.remaining);
+    const hasNumbers = Number.isFinite(safeRemaining) && Number.isFinite(safeTotal) && safeTotal > 0;
+    const percent = veniceCreditPercent(safeRemaining, safeTotal);
     veniceCreditsBadge.classList.toggle('is-loading', state === 'loading');
     veniceCreditsBadge.classList.toggle('is-error', state === 'error');
     syncVeniceCreditsRefreshButtonState();
@@ -4635,7 +4668,7 @@ function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt
     veniceCreditsBadge.style.setProperty('--venice-credits-color', veniceProgressColor(percent));
     if(veniceCreditsValue){
         if(hasNumbers){
-            veniceCreditsValue.textContent = `${formatVeniceCompact(safeUsed)} / ${formatVeniceCompact(safeTotal)}`;
+            veniceCreditsValue.textContent = `${formatVeniceCompact(safeRemaining)} / ${formatVeniceCompact(safeTotal)}`;
         } else if(state === 'loading'){
             veniceCreditsValue.textContent = '-- / --';
         } else if(state === 'error'){
@@ -4648,7 +4681,7 @@ function setVeniceCreditsUi({used=null, total=null, available=null, nextRefillAt
     const track = veniceCreditsBadge.querySelector('.venice-credits-track');
     if(track){
         track.setAttribute('aria-valuenow', `${Math.round(percent)}`);
-        track.setAttribute('aria-valuetext', hasNumbers ? `${formatVeniceFull(safeUsed)} / ${formatVeniceFull(safeTotal)}` : '-- / --');
+        track.setAttribute('aria-valuetext', hasNumbers ? `剩余 ${formatVeniceFull(safeRemaining)} / ${formatVeniceFull(safeTotal)}` : '-- / --');
     }
     renderVeniceCreditsPanel();
     if(state === 'ready'){
@@ -4680,16 +4713,16 @@ async function refreshVeniceCredits(options={}){
         if(!response.ok) throw new Error(await smartResponseErrorMessage(response, 'Venice 额度查询失败'));
         const data = await response.json();
         if(token !== veniceCreditsRefreshToken) return data;
-        const used = Number(data?.used_credits);
+        const remaining = Number(data?.remaining_credits);
         const total = Number(data?.total_credits);
-        if(!Number.isFinite(used) || !Number.isFinite(total) || total <= 0){
+        if(!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0){
             throw new Error('Venice 额度接口返回数据不完整');
         }
-        const usedLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(used)));
+        const remainingLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(remaining)));
         const totalLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(total)));
-        const percent = veniceCreditPercent(used, total);
+        const percent = veniceCreditPercent(remaining, total);
         setVeniceCreditsUi({
-            used,
+            remaining,
             total,
             available:Number(data?.available_credits),
             nextRefillAt:Number(data?.next_refill_at),
@@ -4698,7 +4731,7 @@ async function refreshVeniceCredits(options={}){
             userType:String(data?.user_type || ''),
             providerId:String(data?.provider_id || providerId),
             state:'ready',
-            title:`Venice 已使用额度 ${usedLabel} / ${totalLabel} (${percent.toFixed(1)}%)`,
+            title:`Venice 剩余额度 ${remainingLabel} / ${totalLabel} (${percent.toFixed(1)}%)`,
         });
         veniceCreditsAutoFailureCount = 0;
         veniceCreditsNextAutoRetryAt = 0;
@@ -4736,11 +4769,10 @@ function startVeniceCreditsAutoRefresh(){
     }, VENICE_CREDITS_AUTO_REFRESH_MS);
 }
 function veniceQuoteRemainingShareText(quote){
-    const used = Number(veniceCreditsState.used);
+    const remaining = Number(veniceCreditsState.remaining);
     const total = Number(veniceCreditsState.total);
     const cost = Math.max(0, Number(quote) || 0);
-    if(!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return '';
-    const remaining = Math.max(0, total - used);
+    if(!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0) return '';
     if(remaining <= 0) return ` (${cost === 0 ? '0%' : '∞%'})`;
     const percent = cost / remaining * 100;
     const percentText = percent > 0 && percent < 0.01 ? '<0.01%' : `${percent.toFixed(percent >= 10 ? 1 : 2)}%`;
@@ -7569,9 +7601,18 @@ function markSmartNodeComplete(node, meta=null){
     clearSmartNodePreRunBox(node);
     const keepHidden = node.runTimerHidden === true;
     clearSmartNodeBusyState(node);
-    node.runFinishedAt = Number(node.runFinishedAt || 0) || nowMs();
-    if(!node.runStartedAt) node.runStartedAt = meta?.createdAt || node.runFinishedAt;
-    node.runElapsedMs = Math.max(0, Number(node.runFinishedAt || nowMs()) - Number(node.runStartedAt || node.runFinishedAt || nowMs()));
+    const startedAt = Number(node.runStartedAt || meta?.createdAt || 0);
+    if(startedAt > 0){
+        node.runStartedAt = startedAt;
+        node.runFinishedAt = Number(node.runFinishedAt || 0) || nowMs();
+        node.runElapsedMs = Math.max(0, Number(node.runFinishedAt) - startedAt);
+    } else {
+        // Clearing stale busy flags during canvas reconciliation is not a real
+        // run completion and must never manufacture a green 0s timer.
+        delete node.runStartedAt;
+        delete node.runFinishedAt;
+        delete node.runElapsedMs;
+    }
     delete node.runFailed;
     node.runTimerHidden = meta?.hideTimer === true || keepHidden;
     return node;
@@ -9563,7 +9604,7 @@ function singleMediaHtml(img, w, h){
     return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
 }
 function smartNodeHasLiveMedia(node){
-    return Boolean(!node?.pending && (node?.images || []).some(img => img?.url));
+    return Boolean(!nodeHasLiveRunState(node) && (node?.images || []).some(img => img?.url));
 }
 function mediaSignaturePartFromElement(itemEl){
     if(itemEl?.dataset?.mediaSignature) return itemEl.dataset.mediaSignature;
@@ -9594,6 +9635,9 @@ function captureMediaPlaybackState(media){
 }
 function restoreMediaPlaybackState(media, state){
     if(!media || !state) return;
+    const smartVideoInteractionLocked = () => media.matches?.('.smart-canvas-video')
+        && nodeHasLiveRunState(nodes.find(node => node.id === (media.closest('.image-node')?.dataset?.id || '')));
+    if(smartVideoInteractionLocked()) return;
     const smartStateIsCurrent = () => !media.matches?.('.smart-canvas-video')
         || !state.smartPlaybackEpoch
         || String(media.dataset.smartPlaybackEpoch || '0') === state.smartPlaybackEpoch;
@@ -9607,7 +9651,7 @@ function restoreMediaPlaybackState(media, state){
         if(state.smartSelectionActive) media.dataset.smartSelectionActive = '1'; else delete media.dataset.smartSelectionActive;
     }
     const applyTime = () => {
-        if(!smartStateIsCurrent()) return;
+        if(!smartStateIsCurrent() || smartVideoInteractionLocked()) return;
         if(Number.isFinite(state.currentTime) && state.currentTime > 0 && Math.abs((media.currentTime || 0) - state.currentTime) > 0.2){
             try { media.currentTime = state.currentTime; } catch(e) {}
         }
@@ -10716,12 +10760,13 @@ function render(){
         const isHistory = isHistoryGroupNode(node);
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
+        const isGenerating = nodeHasLiveRunState(node);
         const shimmerDelay = continuousAnimationDelay(1500, node.runStartedAt);
         const pendingSpinDelay = continuousAnimationDelay(1000, node.runStartedAt);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${!isEmpty && !isGroup && !isPending ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
@@ -22597,7 +22642,7 @@ window.onload = async () => {
     applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark');
     restoreVeniceCreditsCache();
     setVeniceCreditsUi({
-        used:veniceCreditsState.used,
+        remaining:veniceCreditsState.remaining,
         total:veniceCreditsState.total,
         available:veniceCreditsState.available,
         nextRefillAt:veniceCreditsState.nextRefillAt,

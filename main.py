@@ -9263,11 +9263,16 @@ async def venice_fetch_credit_usage(client, provider):
     usage = token_payload.get("bundledCreditsUsage")
     if not isinstance(usage, dict):
         raise HTTPException(status_code=502, detail="Venice session payload 缺少 bundledCreditsUsage。")
-    used_credits = venice_required_int(token_payload, "veniceCredits", "veniceCredits")
+    # Venice exposes `veniceCredits` as the remaining bundled-credit balance,
+    # not the amount already consumed.  Keep both meanings explicit here so a
+    # caller cannot accidentally present the balance as usage.
+    remaining_credits = venice_required_int(token_payload, "veniceCredits", "veniceCredits")
     total_credits = venice_required_int(usage, "monthlyRefillCredits", "bundledCreditsUsage.monthlyRefillCredits")
     available_credits = venice_required_int(usage, "availableCredits", "bundledCreditsUsage.availableCredits")
+    remaining_credits = max(0, min(total_credits, remaining_credits))
     return {
-        "used_credits": used_credits,
+        "remaining_credits": remaining_credits,
+        "used_credits": max(0, total_credits - remaining_credits),
         "total_credits": total_credits,
         "available_credits": available_credits,
         "next_refill_at": venice_optional_int(usage, "nextRefillAt"),
