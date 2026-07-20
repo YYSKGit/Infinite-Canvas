@@ -6877,6 +6877,12 @@ def normalize_prompt_category_id(category="custom"):
     category_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(category or "custom"))[:40] or "custom"
     return "custom" if category_id in {"mine", "my", "personal"} else category_id
 
+RETIRED_BUILTIN_PROMPT_ASSISTANT_RECIPE_IDS = frozenset({
+    "assistant_condense",
+    "assistant_translate_zh",
+    "assistant_translate_optimize_zh",
+})
+
 def builtin_prompt_assistant_recipes():
     shared = (
         "You are a professional prompt editor. Return only the revised prompt, without Markdown fences, headings, "
@@ -6887,11 +6893,8 @@ def builtin_prompt_assistant_recipes():
         ("assistant_complete", "智能补全", "Complete underspecified parts while preserving the user's intent. Add useful subject, composition, lighting, style, camera, motion, and quality details only when appropriate."),
         ("assistant_polish", "专业润色", "Rewrite the prompt for clarity, precision, consistency, and stronger generation results without changing its core intent."),
         ("assistant_expand", "扩写细节", "Expand the prompt with concrete visual details, spatial relationships, materials, lighting, atmosphere, camera language, and coherent constraints."),
-        ("assistant_condense", "精简提示词", "Remove repetition and low-value wording while retaining every important subject, constraint, relationship, and media reference."),
         ("assistant_translate_en", "精确翻译为英文", "Translate accurately into natural English. Do not add, omit, reorganize, or optimize information."),
-        ("assistant_translate_zh", "精确翻译为中文", "Translate accurately into natural Simplified Chinese. Do not add, omit, reorganize, or optimize information."),
         ("assistant_translate_optimize_en", "翻译并优化为英文", "Translate into natural English and optimize it as a professional media-generation prompt while preserving the original intent."),
-        ("assistant_translate_optimize_zh", "翻译并优化为中文", "Translate into natural Simplified Chinese and optimize it as a professional media-generation prompt while preserving the original intent."),
         ("assistant_image_prompt", "优化为生图提示词", "Rewrite as a production-ready image-generation prompt with coherent subject, composition, lighting, lens, materials, style, and constraints."),
         ("assistant_video_prompt", "优化为视频提示词", "Rewrite as a production-ready video-generation prompt with shot design, subject motion, camera movement, timing, continuity, atmosphere, and constraints."),
     ]
@@ -7063,6 +7066,13 @@ def normalize_prompt_libraries(data):
             items.append(item)
         default_name = "系统提示词库" if is_system else "提示词库"
         if is_system:
+            items = [
+                item for item in items
+                if not (
+                    item.get("builtin") is True
+                    and str(item.get("id") or "") in RETIRED_BUILTIN_PROMPT_ASSISTANT_RECIPE_IDS
+                )
+            ]
             existing_item_ids = {str(item.get("id") or "") for item in items}
             for recipe in builtin_prompt_assistant_recipes():
                 if recipe["id"] not in existing_item_ids:
