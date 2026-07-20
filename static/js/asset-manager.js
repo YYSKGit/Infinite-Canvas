@@ -102,6 +102,7 @@ let managedSelectionPointerGuard = null;
 let assetEditMode = false;
 let promptEditMode = false;
 let promptCreateMode = false;
+let promptCreateKind = 'generation_prompt';
 let pendingDeleteAssetId = '';
 let pendingDeletePromptId = '';
 let pendingBatchDelete = '';
@@ -1208,7 +1209,7 @@ function managedSelectionTarget(target){
         const check = target.closest?.('[data-prompt-check]');
         const row = target.closest?.('[data-prompt-row]');
         const id = check?.dataset.promptCheck || row?.dataset.promptRow || '';
-        if(id) return {kind:'prompt', id};
+        if(id && !findPromptItem(id)?.builtin) return {kind:'prompt', id};
     }
     if(activeTab === 'canvas-assets' && canvasAssetManageMode){
         const check = target.closest?.('[data-canvas-asset-check]');
@@ -1232,6 +1233,7 @@ function applyManagedSelection(kind, id){
         const selected = toggleSelectionSet(selectedWorkflowIds, id);
         selectedWorkflowId = selected ? id : (selectedWorkflowId === id ? '' : selectedWorkflowId);
     } else if(kind === 'prompt'){
+        if(findPromptItem(id)?.builtin) return;
         const selected = toggleSelectionSet(selectedPromptIds, id);
         selectedPromptId = selected ? id : (selectedPromptId === id ? '' : selectedPromptId);
         promptEditMode = false;
@@ -1287,7 +1289,10 @@ function normalizePromptState(){
     const items = currentPromptItems();
     if(selectedPromptId && !items.some(item => item.id === selectedPromptId)) selectedPromptId = '';
     if(!selectedPromptId && items.length) selectedPromptId = items[0].id;
-    selectedPromptIds = new Set([...selectedPromptIds].filter(id => findPromptItem(id)));
+    selectedPromptIds = new Set([...selectedPromptIds].filter(id => {
+        const item = findPromptItem(id);
+        return item && !item.builtin;
+    }));
 }
 function normalizeCanvasAssetState(){
     const cats = canvasAssetCategories();
@@ -2423,6 +2428,9 @@ function renderPromptTreeBranch(lib){
     </div>`;
 }
 function renderPromptTreeActionBar(kind){
+    if(kind === 'category' && activePromptCategory === 'assistant'){
+        return `<div class="tree-action-bar child-actions muted-actions"><span><i data-lucide="lock"></i>助手指令专用分组不可重命名或删除</span></div>`;
+    }
     const editHtml = renderPromptTreeInlineEdit(kind);
     if(editHtml) return editHtml;
     if(kind === 'library'){
@@ -2460,25 +2468,50 @@ function renderPromptRow(item, readonly){
     const assistant = item?.kind === 'assistant_recipe';
     const preview = assistant ? (item.system_template || item.user_template || '') : (item.positive || '');
     return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}">
-        <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly ? 'disabled' : ''}>
+        <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly || item.builtin ? 'disabled' : ''}>
         <div class="prompt-row-main">
-            <div class="prompt-row-title"><strong>${escapeHtml(item.name || '提示词')}</strong><span class="prompt-tag">${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span></div>
+            <div class="prompt-row-title"><strong>${escapeHtml(item.name || '提示词')}</strong><span class="prompt-tag">${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span>${item.builtin ? '<span class="prompt-tag prompt-tag-builtin">内置</span>' : ''}</div>
             <div class="prompt-row-scene">${escapeHtml(item.scene || '未填写用途说明')}</div>
             <div class="prompt-row-text">${escapeHtml(preview)}</div>
         </div>
     </article>`;
 }
+function promptRecipeProviders(current=''){
+    const providers = (apiProviders || []).filter(provider => provider && provider.enabled !== false && Array.isArray(provider.chat_models) && provider.chat_models.length);
+    if(current && !providers.some(provider => provider.id === current)) providers.unshift({id:current, name:`${current}（当前配置不可用）`, chat_models:[]});
+    return providers;
+}
+function promptRecipeModels(providerId='', current=''){
+    const provider = promptRecipeProviders(providerId).find(item => item.id === providerId);
+    const models = [...new Set((provider?.chat_models || []).map(model => String(model || '').trim()).filter(Boolean))];
+    if(current && !models.includes(current)) models.unshift(current);
+    return models;
+}
+function promptRecipeModelLabel(providerId='', model=''){
+    const provider = (apiProviders || []).find(item => item?.id === providerId);
+    const aliases = provider?.model_aliases && typeof provider.model_aliases === 'object' ? provider.model_aliases : {};
+    return String(aliases[model] || model || '');
+}
+function renderPromptRecipeProviderOptions(current=''){
+    return `<option value="" ${!current ? 'selected' : ''}>跟随画布当前选择</option>${promptRecipeProviders(current).map(provider => `<option value="${escapeAttr(provider.id)}" ${provider.id === current ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('')}`;
+}
+function renderPromptRecipeModelOptions(providerId='', current=''){
+    const models = promptRecipeModels(providerId, current);
+    return `<option value="" ${!current ? 'selected' : ''}>跟随画布当前选择</option>${models.map(model => `<option value="${escapeAttr(model)}" ${model === current ? 'selected' : ''}>${escapeHtml(promptRecipeModelLabel(providerId, model))}</option>`).join('')}`;
+}
 function renderPromptEditFields(item={}, assistant=false){
     const effort = String(item.recommended_reasoning_effort || '');
+    const provider = String(item.recommended_provider || '');
+    const model = String(item.recommended_model || '');
     if(assistant) return `
         <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="助手指令名称"></label>
         <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="说明这个指令适合处理什么任务">${escapeHtml(item.scene || '')}</textarea></label>
         <label class="inline-edit-field"><span>系统提示词</span><textarea id="promptEditSystemTemplate" class="prompt-recipe-template" placeholder="定义模型角色、任务和输出约束">${escapeHtml(item.system_template || '')}</textarea></label>
         <label class="inline-edit-field"><span>用户提示词模板</span><textarea id="promptEditUserTemplate" class="prompt-recipe-template" placeholder="必须包含 {{prompt}}，也可使用 {{selection}} 和 {{target_language}}">${escapeHtml(item.user_template || 'Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>')}</textarea></label>
-        <label class="inline-edit-check"><input id="promptEditPreserveReferences" type="checkbox" ${item.preserve_references !== false ? 'checked' : ''}><span>保护画布中的图片、视频等媒体引用，不允许模型删除或改写</span></label>
+        <label class="inline-edit-check"><input id="promptEditPreserveReferences" type="checkbox" ${item.preserve_references !== false ? 'checked' : ''}><span>保护画布中的媒体引用，不允许模型删除或改写</span></label>
         <div class="inline-edit-grid">
-            <label class="inline-edit-field"><span>推荐平台（可选）</span><input id="promptEditRecommendedProvider" type="text" value="${escapeAttr(item.recommended_provider || '')}" placeholder="例如 venice"></label>
-            <label class="inline-edit-field"><span>推荐模型（可选）</span><input id="promptEditRecommendedModel" type="text" value="${escapeAttr(item.recommended_model || '')}" placeholder="留空则使用当前选择"></label>
+            <label class="inline-edit-field"><span>推荐平台（可选）</span><select id="promptEditRecommendedProvider">${renderPromptRecipeProviderOptions(provider)}</select></label>
+            <label class="inline-edit-field"><span>推荐模型（可选）</span><select id="promptEditRecommendedModel" ${(provider && promptRecipeModels(provider, model).length) || model ? '' : 'disabled'}>${renderPromptRecipeModelOptions(provider, model)}</select></label>
             <label class="inline-edit-field"><span>推荐推理强度</span><select id="promptEditReasoningEffort"><option value="" ${!effort ? 'selected' : ''}>自动</option><option value="low" ${effort === 'low' ? 'selected' : ''}>低</option><option value="medium" ${effort === 'medium' ? 'selected' : ''}>中</option><option value="high" ${effort === 'high' ? 'selected' : ''}>高</option></select></label>
             <label class="inline-edit-field"><span>默认目标语言（可选）</span><input id="promptEditTargetLanguage" type="text" value="${escapeAttr(item.default_target_language || '')}" placeholder="例如 English"></label>
         </div>`;
@@ -2490,7 +2523,7 @@ function renderPromptEditFields(item={}, assistant=false){
 }
 function renderPromptDetail(item, readonly){
     if(promptCreateMode && !readonly){
-        const assistant = activePromptCategory === 'assistant';
+        const assistant = promptCreateKind === 'assistant_recipe';
         return `
             <div class="panel-head">
                 <div class="panel-title"><strong>${assistant ? '新增助手指令' : '新增提示词'}</strong><span>保存到当前提示词库</span></div>
@@ -2501,6 +2534,7 @@ function renderPromptDetail(item, readonly){
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
+                    <label class="inline-edit-field prompt-create-kind"><span>新增类型</span><select id="promptCreateKind"><option value="generation_prompt" ${assistant ? '' : 'selected'}>生成提示词</option><option value="assistant_recipe" ${assistant ? 'selected' : ''}>助手指令</option></select></label>
                     ${renderPromptEditFields({}, assistant)}
                 </div>
             </div>
@@ -2511,14 +2545,16 @@ function renderPromptDetail(item, readonly){
         const assistant = item.kind === 'assistant_recipe';
         return `
             <div class="panel-head">
-                <div class="panel-title"><strong>${assistant ? '编辑助手指令' : '编辑提示词'}</strong><span>在当前库内保存</span></div>
+                <div class="panel-title"><strong>${assistant ? '编辑助手指令' : '编辑提示词'}</strong><span>${item.builtin ? '内置指令 · 保存后覆盖本地配置' : '在当前库内保存'}</span></div>
                 <div class="panel-actions">
+                    ${item.builtin ? `<button class="asset-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复项目内置的默认内容"><i data-lucide="rotate-ccw"></i><span>恢复默认</span></button>` : ''}
                     <button class="asset-btn primary" type="button" data-prompt-edit-save="${escapeAttr(item.id)}"><i data-lucide="check"></i><span>保存</span></button>
                     <button class="asset-icon-btn" type="button" data-prompt-edit-cancel title="取消"><i data-lucide="x"></i></button>
                 </div>
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
+                    ${item.builtin ? '<div class="prompt-builtin-notice"><i data-lucide="info"></i><span>这是内置助手指令。允许直接编辑；保存后智能画布将使用你的本地版本，也可以随时恢复默认。</span></div>' : ''}
                     ${renderPromptEditFields(item, assistant)}
                 </div>
             </div>
@@ -2527,10 +2563,11 @@ function renderPromptDetail(item, readonly){
     const params = item.params && typeof item.params === 'object' ? Object.entries(item.params) : [];
     if(item.kind === 'assistant_recipe') return `
         <div class="panel-head">
-            <div class="panel-title"><strong>助手指令预览</strong><span>发送给 LLM 的完整模板</span></div>
+            <div class="panel-title"><strong>助手指令预览</strong><span>${item.builtin ? '内置指令 · 可自定义并恢复' : '发送给 LLM 的完整模板'}</span></div>
             <div class="panel-actions">
+                ${item.builtin ? `<button class="asset-icon-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复默认"><i data-lucide="rotate-ccw"></i></button>` : ''}
                 <button class="asset-icon-btn" type="button" data-prompt-edit-start="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="编辑"><i data-lucide="pencil"></i></button>
-                <button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
+                ${item.builtin ? '' : `<button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>`}
             </div>
         </div>
         <div class="detail-scroll">
@@ -3269,6 +3306,10 @@ async function handleClick(event){
             event.preventDefault();
             event.stopPropagation();
             const id = promptCheck?.dataset.promptCheck || promptRow?.dataset.promptRow || '';
+            if(findPromptItem(id)?.builtin){
+                setStatus('内置助手指令不能删除，可以编辑或恢复默认');
+                return;
+            }
             const selected = toggleSelectionSet(selectedPromptIds, id);
             selectedPromptId = selected ? id : (selectedPromptId === id ? '' : selectedPromptId);
             promptEditMode = false;
@@ -3726,12 +3767,14 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; render(); return; }
+    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().filter(item => !item.builtin).forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; render(); return; }
     if(target.closest?.('[data-prompt-clear-selection]')){ selectedPromptIds.clear(); pendingBatchDelete = ''; render(); return; }
     const promptEdit = target.closest?.('[data-prompt-edit]');
     if(promptEdit){ await editPromptItem(promptEdit.dataset.promptEdit || ''); return; }
     const promptDelete = target.closest?.('[data-prompt-delete]');
     if(promptDelete){ await deletePromptItem(promptDelete.dataset.promptDelete || ''); return; }
+    const promptReset = target.closest?.('[data-prompt-reset]');
+    if(promptReset){ await resetPromptItem(promptReset.dataset.promptReset || ''); return; }
     if(target.closest?.('[data-prompt-delete-selected]')){ await deleteSelectedPrompts(); return; }
     const promptNewBtn = target.closest?.('[data-prompt-new]');
     if(promptNewBtn){
@@ -3739,6 +3782,7 @@ async function handleClick(event){
         const catRow = target.closest('[data-prompt-cat]');
         if(libId){ activePromptLibraryId = libId; activePromptCategory = 'all'; }
         if(catRow){ activePromptLibraryId = catRow.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = catRow.dataset.promptCat || activePromptCategory; }
+        promptCreateKind = activePromptCategory === 'assistant' ? 'assistant_recipe' : 'generation_prompt';
         promptCreateMode = true; promptEditMode = false; pendingDeletePromptId = ''; render(); return;
     }
     if(target.closest?.('[data-prompt-lib-new]')){ promptTreeFocus = 'library'; promptTreeEdit = {kind:'library-new', placement:'head', value:'新提示词库', label:'提示词库名称'}; render(); focusTreeEditInput('promptTreeEditInput'); return; }
@@ -3773,9 +3817,9 @@ async function handleClick(event){
         await deletePromptLibrary(); return;
     }
     const promptLib = target.closest?.('[data-prompt-lib]');
-    if(promptLib){ activePromptLibraryId = promptLib.dataset.promptLib || ''; activePromptCategory = 'all'; promptTreeFocus = 'library'; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); render(); return; }
+    if(promptLib){ activePromptLibraryId = promptLib.dataset.promptLib || ''; activePromptCategory = 'all'; promptTreeFocus = 'library'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); render(); return; }
     const promptCat = target.closest?.('[data-prompt-cat]');
-    if(promptCat){ activePromptLibraryId = promptCat.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = promptCat.dataset.promptCat || 'all'; promptTreeFocus = 'category'; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); render(); return; }
+    if(promptCat){ activePromptLibraryId = promptCat.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = promptCat.dataset.promptCat || 'all'; promptTreeFocus = 'category'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); render(); return; }
     const promptRow = target.closest?.('[data-prompt-row]');
     if(promptRow){
         const id = promptRow.dataset.promptRow || '';
@@ -4520,7 +4564,7 @@ async function savePromptCreate(){
     const scene = document.getElementById('promptEditScene')?.value || '';
     const positive = document.getElementById('promptEditPositive')?.value || '';
     const negative = document.getElementById('promptEditNegative')?.value || '';
-    const assistant = activePromptCategory === 'assistant';
+    const assistant = promptCreateKind === 'assistant_recipe';
     const systemTemplate = document.getElementById('promptEditSystemTemplate')?.value || '';
     const userTemplate = document.getElementById('promptEditUserTemplate')?.value || '';
     if(!lib) return;
@@ -4532,7 +4576,7 @@ async function savePromptCreate(){
         setStatus('用户提示词模板必须包含 {{prompt}} 或 {{selection}}');
         return;
     }
-    const category = activePromptCategory === 'all' ? 'custom' : activePromptCategory;
+    const category = ['all','assistant'].includes(activePromptCategory) ? 'custom' : activePromptCategory;
     const payload = assistant ? {
         library_id:lib.id, name, category:'assistant', scene, kind:'assistant_recipe', positive:'', negative:'',
         system_template:systemTemplate, user_template:userTemplate,
@@ -4545,6 +4589,8 @@ async function savePromptCreate(){
     const data = await apiJson('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     promptLibrary = data.library || promptLibrary;
     selectedPromptId = data.item?.id || selectedPromptId;
+    if(assistant) activePromptCategory = 'assistant';
+    else if(activePromptCategory === 'assistant') activePromptCategory = 'all';
     promptCreateMode = false;
     render();
     setStatus('提示词已新增');
@@ -4604,11 +4650,30 @@ async function savePromptEdit(id){
     selectedPromptId = id;
     promptEditMode = false;
     render();
-    setStatus('提示词已保存');
+    setStatus(item.builtin ? '内置助手指令已保存，智能画布将使用此版本' : '提示词已保存');
+}
+async function resetPromptItem(id){
+    const item = findPromptItem(id);
+    if(!item?.builtin) return;
+    if(!window.confirm(`将内置指令「${item.name || '助手指令'}」恢复为项目默认内容？`)) return;
+    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}/reset`, {method:'POST'});
+    promptLibrary = data.library || promptLibrary;
+    selectedPromptId = id;
+    promptEditMode = false;
+    promptCreateMode = false;
+    render();
+    setStatus('内置助手指令已恢复默认');
 }
 async function deletePromptItem(id){
     const item = findPromptItem(id);
     if(!item) return;
+    if(item.builtin){ setStatus('内置助手指令不能删除，可以编辑或恢复默认'); return; }
+    if(pendingDeletePromptId !== id){
+        pendingDeletePromptId = id;
+        render();
+        setStatus('再次点击确认删除提示词');
+        return;
+    }
     const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'DELETE'});
     promptLibrary = data.library || promptLibrary;
     selectedPromptIds.delete(id);
@@ -4727,6 +4792,21 @@ root.addEventListener('input', event => {
     }
 });
 root.addEventListener('change', event => {
+    if(event.target?.id === 'promptCreateKind'){
+        promptCreateKind = event.target.value === 'assistant_recipe' ? 'assistant_recipe' : 'generation_prompt';
+        renderPromptSelectionOnly();
+        return;
+    }
+    if(event.target?.id === 'promptEditRecommendedProvider'){
+        const providerId = event.target.value || '';
+        const modelSelect = document.getElementById('promptEditRecommendedModel');
+        if(modelSelect){
+            modelSelect.innerHTML = renderPromptRecipeModelOptions(providerId, '');
+            modelSelect.value = '';
+            modelSelect.disabled = !providerId || !promptRecipeModels(providerId).length;
+        }
+        return;
+    }
     const inlineLocalUploadName = event.target.closest?.('[data-localup-inline-name]');
     if(inlineLocalUploadName){
         saveLocalUploadInlineName(inlineLocalUploadName.dataset.localupInlineName || '', inlineLocalUploadName.value || '').catch(err => setStatus(err.message || '保存失败'));

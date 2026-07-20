@@ -2889,7 +2889,7 @@ class PromptLibraryItemRequest(BaseModel):
     positive: str = ""
     negative: str = ""
     scene: str = ""
-    kind: str = "generation_prompt"
+    kind: str = ""
     system_template: str = ""
     user_template: str = ""
     preserve_references: bool = True
@@ -6912,16 +6912,56 @@ def builtin_prompt_assistant_recipes():
         "builtin": True,
     } for recipe_id, name, instruction in recipes]
 
+def builtin_prompt_assistant_recipe(recipe_id=""):
+    recipe_id = str(recipe_id or "").strip()
+    return next((item for item in builtin_prompt_assistant_recipes() if item.get("id") == recipe_id), None)
+
+def prompt_library_payload_fields(payload):
+    fields = getattr(payload, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(payload, "__fields_set__", set())
+    return set(fields or [])
+
+def prompt_library_patch_value(payload, field, existing, preserve_empty=False):
+    if field not in prompt_library_payload_fields(payload):
+        return existing.get(field)
+    value = getattr(payload, field)
+    if not preserve_empty and isinstance(value, str) and not value.strip():
+        return existing.get(field)
+    return value
+
+def validate_prompt_library_item_payload(payload, existing=None):
+    existing = existing if isinstance(existing, dict) else {}
+    kind = str(payload.kind or existing.get("kind") or "generation_prompt").strip()
+    if kind != "assistant_recipe":
+        if not str(payload.positive or existing.get("positive") or "").strip():
+            raise HTTPException(status_code=400, detail="提示词内容不能为空")
+        return
+    system_template = str(prompt_library_patch_value(payload, "system_template", existing, preserve_empty=True) or "").strip()
+    user_template = str(prompt_library_patch_value(payload, "user_template", existing, preserve_empty=True) or "").strip()
+    if not system_template or not user_template:
+        raise HTTPException(status_code=400, detail="系统提示词和用户提示词模板不能为空")
+    if "{{prompt}}" not in user_template and "{{selection}}" not in user_template:
+        raise HTTPException(status_code=400, detail="用户提示词模板必须包含 {{prompt}} 或 {{selection}}")
+    effort = str(prompt_library_patch_value(payload, "recommended_reasoning_effort", existing, preserve_empty=True) or "").strip()
+    if effort not in {"", "low", "medium", "high"}:
+        raise HTTPException(status_code=400, detail="推荐推理强度无效")
+
 def normalize_prompt_library_item(item):
     if not isinstance(item, dict):
         item = {}
     name = sanitize_asset_name(item.get("name") or "提示词", "提示词")
     positive = str(item.get("positive") or item.get("text") or "").strip()
     kind = "assistant_recipe" if str(item.get("kind") or "").strip() == "assistant_recipe" else "generation_prompt"
+    category = normalize_prompt_category_id(item.get("category") or "custom")
+    if kind == "assistant_recipe":
+        category = "assistant"
+    elif category == "assistant":
+        category = "custom"
     return {
         "id": re.sub(r"[^A-Za-z0-9_-]+", "_", str(item.get("id") or item.get("item_id") or f"tpl_{uuid.uuid4().hex[:12]}"))[:60],
         "name": name,
-        "category": normalize_prompt_category_id(item.get("category") or "custom"),
+        "category": category,
         "scene": str(item.get("scene") or "").strip()[:500],
         "positive": positive,
         "negative": str(item.get("negative") or "").strip(),
@@ -16011,8 +16051,7 @@ async def add_prompt_library_item(payload: PromptLibraryItemRequest):
     library = find_prompt_library(data, payload.library_id)
     if not library:
         raise HTTPException(status_code=404, detail="提示词库不存在")
-    if payload.kind != "assistant_recipe" and not str(payload.positive or "").strip():
-        raise HTTPException(status_code=400, detail="提示词内容不能为空")
+    validate_prompt_library_item_payload(payload)
     item = normalize_prompt_library_item({
         "id": f"tpl_{uuid.uuid4().hex[:12]}",
         "name": payload.name,
@@ -16044,27 +16083,53 @@ async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemReq
             continue
         for index, item in enumerate(library.get("items", []) or []):
             if item.get("id") == item_id:
+                validate_prompt_library_item_payload(payload, item)
                 next_item = normalize_prompt_library_item({
                     **item,
-                    "name": payload.name or item.get("name"),
-                    "category": payload.category or item.get("category"),
-                    "positive": payload.positive or item.get("positive"),
-                    "negative": payload.negative,
-                    "scene": payload.scene,
-                    "kind": payload.kind or item.get("kind"),
-                    "system_template": payload.system_template,
-                    "user_template": payload.user_template,
-                    "preserve_references": payload.preserve_references,
-                    "default_target_language": payload.default_target_language,
-                    "recommended_reasoning_effort": payload.recommended_reasoning_effort,
-                    "recommended_provider": payload.recommended_provider,
-                    "recommended_model": payload.recommended_model,
+                    "name": prompt_library_patch_value(payload, "name", item),
+                    "category": prompt_library_patch_value(payload, "category", item),
+                    "positive": prompt_library_patch_value(payload, "positive", item, preserve_empty=True),
+                    "negative": prompt_library_patch_value(payload, "negative", item, preserve_empty=True),
+                    "scene": prompt_library_patch_value(payload, "scene", item, preserve_empty=True),
+                    "kind": prompt_library_patch_value(payload, "kind", item),
+                    "system_template": prompt_library_patch_value(payload, "system_template", item, preserve_empty=True),
+                    "user_template": prompt_library_patch_value(payload, "user_template", item, preserve_empty=True),
+                    "preserve_references": prompt_library_patch_value(payload, "preserve_references", item, preserve_empty=True),
+                    "default_target_language": prompt_library_patch_value(payload, "default_target_language", item, preserve_empty=True),
+                    "recommended_reasoning_effort": prompt_library_patch_value(payload, "recommended_reasoning_effort", item, preserve_empty=True),
+                    "recommended_provider": prompt_library_patch_value(payload, "recommended_provider", item, preserve_empty=True),
+                    "recommended_model": prompt_library_patch_value(payload, "recommended_model", item, preserve_empty=True),
                     "updated_at": now_ms(),
                 })
                 library["items"][index] = next_item
                 data = save_prompt_libraries(data)
                 return {"library": public_prompt_libraries(data), "item": next_item}
     raise HTTPException(status_code=404, detail="提示词不存在")
+
+@app.post("/api/prompt-libraries/items/{item_id}/reset")
+async def reset_prompt_library_item(item_id: str):
+    default_item = builtin_prompt_assistant_recipe(item_id)
+    if not default_item:
+        raise HTTPException(status_code=400, detail="只有内置助手指令支持恢复默认")
+    data = load_prompt_libraries()
+    library = find_prompt_library(data, "system")
+    if not library:
+        raise HTTPException(status_code=404, detail="系统提示词库不存在")
+    items = library.get("items", []) or []
+    index = next((index for index, item in enumerate(items) if item.get("id") == item_id), -1)
+    restored = normalize_prompt_library_item({
+        **default_item,
+        "created_at": items[index].get("created_at") if index >= 0 else now_ms(),
+        "updated_at": now_ms(),
+    })
+    if index >= 0:
+        items[index] = restored
+    else:
+        items.append(restored)
+    library["items"] = items
+    data = save_prompt_libraries(data)
+    restored = next((item for lib in data.get("libraries", []) if lib.get("id") == "system" for item in lib.get("items", []) if item.get("id") == item_id), restored)
+    return {"library": public_prompt_libraries(data), "item": restored}
 
 @app.delete("/api/prompt-libraries/items/{item_id}")
 async def delete_prompt_library_item(item_id: str):
@@ -16074,6 +16139,8 @@ async def delete_prompt_library_item(item_id: str):
         keep = []
         for item in library.get("items", []) or []:
             if item.get("id") == item_id:
+                if item.get("builtin"):
+                    raise HTTPException(status_code=400, detail="内置助手指令不能删除，可以编辑或恢复默认")
                 removed = item
             else:
                 keep.append(item)
@@ -16089,6 +16156,9 @@ async def batch_delete_prompt_library_items(payload: PromptLibraryBatchDeleteReq
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择提示词")
     data = load_prompt_libraries()
+    protected = [item for library in data.get("libraries", []) or [] for item in library.get("items", []) or [] if item.get("id") in ids and item.get("builtin")]
+    if protected:
+        raise HTTPException(status_code=400, detail="所选内容包含不能删除的内置助手指令")
     removed = 0
     for library in data.get("libraries", []) or []:
         keep = []
@@ -16121,8 +16191,9 @@ async def add_prompt_library_category(payload: PromptLibraryCategoryRequest):
 
 @app.patch("/api/prompt-libraries/categories/{category_id}")
 async def rename_prompt_library_category(category_id: str, payload: PromptLibraryCategoryRequest):
-    # 系统库（内置）分组也允许重命名：分组的 id 不变，只改显示名，
-    # 这样画布与素材库管理共用同一份分组数据，重命名两端实时同步。
+    # 普通系统分组也允许重命名；assistant 是跨库动态使用的功能分组，必须保持稳定。
+    if category_id == "assistant":
+        raise HTTPException(status_code=400, detail="助手指令专用分组不能重命名")
     name = sanitize_asset_name(payload.name, "")
     if not name:
         raise HTTPException(status_code=400, detail="分组名称不能为空")
@@ -16140,7 +16211,9 @@ async def rename_prompt_library_category(category_id: str, payload: PromptLibrar
 
 @app.delete("/api/prompt-libraries/categories/{category_id}")
 async def delete_prompt_library_category(category_id: str):
-    # 系统库（内置）分组也允许删除，与素材库管理/画布保持一致。
+    # 普通系统分组也允许删除；assistant 是跨库动态使用的功能分组，不能删除。
+    if category_id == "assistant":
+        raise HTTPException(status_code=400, detail="助手指令专用分组不能删除")
     data = load_prompt_libraries()
     found = False
     for library in data.get("libraries", []) or []:

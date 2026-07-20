@@ -23,6 +23,16 @@
         const {select, shell, trigger, label, baseStyle} = controller;
         if(!select.isConnected) return;
         const style = getComputedStyle(select);
+        const parent = shell.parentElement;
+        let resolvedWidth = baseStyle?.width || style.width;
+        if(parent && resolvedWidth?.endsWith('px')){
+            const parentStyle = getComputedStyle(parent);
+            const availableWidth = parent.clientWidth
+                - (Number.parseFloat(parentStyle.paddingLeft) || 0)
+                - (Number.parseFloat(parentStyle.paddingRight) || 0);
+            const requestedWidth = Number.parseFloat(resolvedWidth);
+            if(availableWidth > 0 && requestedWidth > availableWidth) resolvedWidth = `${availableWidth}px`;
+        }
         shell.hidden = select.hidden || style.display === 'none';
         shell.style.flex = style.flex !== '0 1 auto' || !baseStyle ? style.flex : baseStyle.flex;
         shell.style.order = style.order !== '0' || !baseStyle ? style.order : baseStyle.order;
@@ -30,7 +40,7 @@
         shell.style.justifySelf = style.justifySelf !== 'auto' || !baseStyle ? style.justifySelf : baseStyle.justifySelf;
         shell.style.gridArea = style.gridArea !== 'auto' || !baseStyle ? style.gridArea : baseStyle.gridArea;
         shell.style.margin = baseStyle?.margin || style.margin;
-        shell.style.width = baseStyle?.width || style.width;
+        shell.style.width = resolvedWidth;
         shell.style.minWidth = baseStyle?.minWidth || style.minWidth;
         shell.style.maxWidth = baseStyle?.maxWidth || style.maxWidth;
         shell.style.height = baseStyle?.height || style.height;
@@ -55,16 +65,34 @@
     }
     function positionMenu(controller){
         const rect = controller.trigger.getBoundingClientRect();
+        const bodyRect = document.body.getBoundingClientRect();
+        const bodyTransform = getComputedStyle(document.body).transform;
+        const matrix = bodyTransform && bodyTransform !== 'none'
+            ? bodyTransform.match(/^matrix\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),/)
+            : null;
+        const scaleX = matrix ? Math.max(.01, Math.hypot(Number(matrix[1]) || 1, Number(matrix[2]) || 0)) : 1;
+        const scaleY = matrix ? Math.max(.01, Math.hypot(Number(matrix[3]) || 0, Number(matrix[4]) || 1)) : 1;
+        const viewportWidth = (innerWidth - bodyRect.left) / scaleX;
+        const viewportHeight = (innerHeight - bodyRect.top) / scaleY;
+        const localRect = {
+            left:(rect.left - bodyRect.left) / scaleX,
+            right:(rect.right - bodyRect.left) / scaleX,
+            top:(rect.top - bodyRect.top) / scaleY,
+            bottom:(rect.bottom - bodyRect.top) / scaleY,
+            width:rect.width / scaleX
+        };
         const gap = 5;
-        const below = innerHeight - rect.bottom - gap - 8;
-        const above = rect.top - gap - 8;
+        const below = viewportHeight - localRect.bottom - gap - 8;
+        const above = localRect.top - gap - 8;
         const openAbove = below < 180 && above > below;
         const maxHeight = Math.max(96, Math.min(360, openAbove ? above : below));
-        menu.style.minWidth = `${Math.max(120, rect.width)}px`;
+        const menuWidth = Math.min(520, Math.max(120, viewportWidth - 16), Math.max(120, localRect.width));
+        menu.style.width = `${menuWidth}px`;
+        menu.style.minWidth = `${menuWidth}px`;
         menu.style.maxHeight = `${maxHeight}px`;
-        menu.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - Math.max(120, rect.width) - 8))}px`;
-        menu.style.top = openAbove ? 'auto' : `${rect.bottom + gap}px`;
-        menu.style.bottom = openAbove ? `${innerHeight - rect.top + gap}px` : 'auto';
+        menu.style.left = `${Math.max(8, Math.min(localRect.left, viewportWidth - menuWidth - 8))}px`;
+        menu.style.top = openAbove ? 'auto' : `${localRect.bottom + gap}px`;
+        menu.style.bottom = openAbove ? `${viewportHeight - localRect.top + gap}px` : 'auto';
         menu.classList.toggle('above', openAbove);
     }
     function focusOption(index){
@@ -112,6 +140,9 @@
         if(controller.select.disabled) return;
         if(active === controller){ close(); return; }
         close({focus:false});
+        // Selects can be enhanced while a responsive panel is still at its old
+        // width. Re-resolve the wrapper width immediately before measuring it.
+        sync(controller);
         active = controller;
         controller.shell.classList.add('is-open');
         controller.trigger.setAttribute('aria-expanded','true');

@@ -7132,17 +7132,19 @@ function renderPromptAssetManager(){
     const libs = canvasPromptLibraries.filter(lib => lib.id !== 'system');
     if(!canvasPromptLibraries.some(lib => lib.id === activePromptLibraryId)) activePromptLibraryId = libs[0]?.id || canvasPromptLibraries[0]?.id || 'system';
     const lib = canvasPromptLibraries.find(item => item.id === activePromptLibraryId) || libs[0] || null;
-    const items = lib?.items || [];
+    const items = (lib?.items || []).filter(item => item?.kind !== 'assistant_recipe');
+    managerSelectedPromptIds = new Set([...managerSelectedPromptIds].filter(id => items.some(item => item.id === id)));
     const canEditLibrary = !!lib && !lib.readonly;
+    const canDeleteLibrary = canEditLibrary && lib.id !== 'system' && canvasPromptLibraries.length > 1;
     assetManagerBody.innerHTML = `
         <div class="asset-manager-side">
             <div class="asset-manager-tools">
                 <button type="button" class="primary" data-manager-prompt-lib-new><i data-lucide="plus" class="w-4 h-4"></i><span>新提示词库</span></button>
                 <button type="button" ${!canEditLibrary ? 'disabled' : ''} data-manager-prompt-lib-rename><i data-lucide="pencil" class="w-4 h-4"></i><span>重命名</span></button>
-                <button type="button" class="danger" ${!canEditLibrary || canvasPromptLibraries.length <= 1 ? 'disabled' : ''} data-manager-prompt-lib-delete><i data-lucide="trash-2" class="w-4 h-4"></i><span>删除库</span></button>
+                <button type="button" class="danger" ${canDeleteLibrary ? '' : 'disabled'} data-manager-prompt-lib-delete><i data-lucide="trash-2" class="w-4 h-4"></i><span>删除库</span></button>
             </div>
             <div class="asset-manager-list">
-                ${canvasPromptLibraries.map(library => `<button type="button" class="${library.id === activePromptLibraryId ? 'active' : ''}" data-manager-prompt-lib="${escapeAttr(library.id)}"><span>${escapeHtml(library.name || '提示词库')}</span><small>${(library.items || []).length}</small></button>`).join('')}
+                ${canvasPromptLibraries.map(library => `<button type="button" class="${library.id === activePromptLibraryId ? 'active' : ''}" data-manager-prompt-lib="${escapeAttr(library.id)}"><span>${escapeHtml(library.name || '提示词库')}</span><small>${(library.items || []).filter(item => item?.kind !== 'assistant_recipe').length}</small></button>`).join('')}
             </div>
         </div>
         <div class="asset-manager-main">
@@ -12931,7 +12933,7 @@ assetManagerModal?.addEventListener('click', async event => {
     }
     if(event.target.closest?.('[data-manager-prompt-lib-delete]')){
         const lib = activeCanvasPromptLibrary();
-        if(!lib || lib.readonly || !window.confirm(`删除提示词库「${lib.name || '提示词库'}」？`)) return;
+        if(!lib || lib.readonly || lib.id === 'system' || !window.confirm(`删除提示词库「${lib.name || '提示词库'}」？`)) return;
         const data = await fetch(`/api/prompt-libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'}).then(r => r.json());
         canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
         activePromptLibraryId = data.library?.active_library_id || canvasPromptLibraries.find(item => item.id !== 'system')?.id || 'system';

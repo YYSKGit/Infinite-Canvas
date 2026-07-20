@@ -253,6 +253,7 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .prompt-row-title { display:flex; align-items:center; gap:7px; min-width:0; }
 .prompt-row-title strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:1.2; font-weight:900; }
 .prompt-tag { flex:0 0 auto; height:20px; border-radius:999px; padding:0 8px; display:inline-flex; align-items:center; background:var(--soft-2); color:var(--muted); font-size:9.5px; font-weight:900; }
+.prompt-tag-builtin { border:1px solid var(--line); background:transparent; color:var(--faint); }
 .prompt-row-scene { color:var(--muted); font-size:11px; line-height:1.35; font-weight:700; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .prompt-row-text { color:var(--text); font-size:11px; line-height:1.45; font-weight:550; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; opacity:.86; }
 .prompt-row-actions { display:flex; gap:5px; }
@@ -304,6 +305,9 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .canvas-asset-tree .tree-child { grid-template-columns:14px 16px minmax(0,1fr) auto; }
 .selection-marquee { position:absolute; z-index:20; border:1px solid rgba(59,130,246,.65); background:rgba(59,130,246,.12); border-radius:6px; pointer-events:none; }
 .inline-edit-form { display:flex; flex-direction:column; gap:10px; }
+.prompt-builtin-notice { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; background:var(--soft); color:var(--muted); font-size:10.5px; font-weight:700; line-height:1.45; }
+.prompt-builtin-notice svg { flex:0 0 auto; width:14px; height:14px; margin-top:1px; }
+.prompt-create-kind { padding-bottom:10px; border-bottom:1px solid var(--line); }
 .inline-edit-field { display:flex; flex-direction:column; gap:6px; }
 .inline-edit-field span { color:var(--faint); font-size:10px; font-weight:900; }
 .inline-edit-field input,.inline-edit-field textarea,.inline-edit-field select { width:100%; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); outline:none; padding:9px 10px; font-size:12px; font-weight:650; line-height:1.45; }
@@ -313,7 +317,7 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .inline-edit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .inline-edit-check { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--muted); font-size:11px; font-weight:700; line-height:1.45; }
 .inline-edit-check input { margin-top:2px; accent-color:var(--strong); }
-.prompt-recipe-template { min-height:180px !important; font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:11px !important; font-weight:550 !important; }
+.prompt-recipe-template { min-height:110px !important; font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:11px !important; font-weight:550 !important; }
 .detail-confirm { color:var(--danger) !important; border-color:rgba(220,38,38,.3) !important; background:rgba(220,38,38,.06) !important; }
 .detail-empty { flex:1; min-height:220px; border:1px dashed var(--line-2); border-radius:14px; background:var(--card); color:var(--muted); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:9px; padding:18px; font-size:12px; font-weight:800; }
 .detail-empty svg { width:28px; height:28px; color:var(--faint); }
@@ -371,7 +375,7 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .prompt-block-body::-webkit-scrollbar-button,.inline-edit-field textarea::-webkit-scrollbar-button { width:0; height:0; display:none; }
 .prompt-block-body::-webkit-scrollbar-track,.inline-edit-field textarea::-webkit-scrollbar-track { background:transparent; }
 .prompt-block-body::-webkit-scrollbar-thumb,.inline-edit-field textarea::-webkit-scrollbar-thumb { background:rgba(148,163,184,.42); border:2px solid transparent; border-radius:999px; background-clip:padding-box; }
-.prompt-recipe-body { min-height:180px; height:220px; font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:11px; }
+.prompt-recipe-body { font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:11px; }
 .prompt-block-body.negative { color:var(--muted); }
 .params-list { display:flex; flex-direction:column; gap:7px; }
 .param-row { border:1px solid var(--line); border-radius:11px; background:var(--card); padding:9px; }
