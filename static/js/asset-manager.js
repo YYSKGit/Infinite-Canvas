@@ -2333,7 +2333,7 @@ function renderAssetDetail(item){
         </div>
     `;
 }
-function renderPromptManager(){
+function promptManagerMarkup(){
     normalizePromptState();
     const libs = promptLibraries();
     const lib = activePromptLibrary();
@@ -2344,7 +2344,7 @@ function renderPromptManager(){
     const promptEmptyText = (lib?.items || []).length
         ? '当前条件下没有提示词。可以切换分类或清空搜索条件。'
         : `${lib?.name || '当前提示词库'} 暂无提示词，点击「新增」添加。`;
-    root.innerHTML = `
+    return `
         <aside class="asset-panel asset-nav">
             <div class="panel-head">
                 <div class="panel-title"><strong>提示词库</strong><span>可创建多个词库</span></div>
@@ -2372,7 +2372,7 @@ function renderPromptManager(){
                 </div>
             </div>
             <div class="manage-tools">
-                <span>已选择 ${selectedPromptIds.size} 条提示词，支持拖拽框选或逐个勾选。</span>
+                <span data-prompt-selection-summary>已选择 ${selectedPromptIds.size} 条提示词，支持拖拽框选或逐个勾选。</span>
                 <div class="asset-tools">
                     <button class="asset-btn" type="button" data-prompt-select-all ${items.length && !readonly ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
                     <button class="asset-btn" type="button" data-prompt-clear-selection ${selectedPromptIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
@@ -2383,16 +2383,95 @@ function renderPromptManager(){
                 ${items.length ? `<div class="prompt-list">${items.map(item => renderPromptRow(item, readonly)).join('')}</div>` : `<div class="empty-state">${escapeHtml(promptEmptyText)}</div>`}
             </div>
         </section>
-        <aside class="asset-panel asset-detail">
+        <aside class="asset-panel asset-detail prompt-detail-panel">
             ${renderPromptDetail(detail, readonly)}
         </aside>
     `;
 }
-function renderPromptSelectionOnly(){
-    root.querySelectorAll('[data-prompt-row]').forEach(row => row.classList.toggle('active', row.dataset.promptRow === selectedPromptId));
-    const detailPanel = root.querySelector('.asset-detail');
-    if(detailPanel) detailPanel.innerHTML = renderPromptDetail(selectedPrompt(), Boolean(activePromptLibrary()?.readonly));
+function renderPromptManager(){
+    root.innerHTML = promptManagerMarkup();
+}
+function replacePromptSections(selectors, options={}){
+    if(activeTab !== 'prompts' || !root) return;
+    window.AppSelect?.close?.({focus:false});
+    const template = document.createElement('template');
+    template.innerHTML = promptManagerMarkup().trim();
+    selectors.forEach(selector => {
+        const current = root.querySelector(selector);
+        const next = template.content.querySelector(selector);
+        if(!current || !next) return;
+        const currentScroll = current.querySelector('.nav-scroll,.content-scroll,.detail-scroll');
+        const scrollTop = currentScroll?.scrollTop || 0;
+        const scrollLeft = currentScroll?.scrollLeft || 0;
+        current.replaceWith(next);
+        if(options.preserveScroll !== false){
+            const nextScroll = next.querySelector('.nav-scroll,.content-scroll,.detail-scroll');
+            if(nextScroll){
+                nextScroll.scrollTop = scrollTop;
+                nextScroll.scrollLeft = scrollLeft;
+            }
+        }
+    });
     refreshIcons();
+    initializeDetailPreviewMedia(root);
+}
+function renderPromptNavigationOnly(){
+    replacePromptSections(['.asset-nav']);
+}
+function renderPromptDataSections(){
+    replacePromptSections(['.asset-nav','.asset-content','.asset-detail']);
+}
+function renderPromptDetailOnly(options={}){
+    const panel = root.querySelector('.asset-detail');
+    if(!panel) return;
+    window.AppSelect?.close?.({focus:false});
+    const scroll = panel.querySelector('.detail-scroll');
+    const scrollTop = scroll?.scrollTop || 0;
+    const scrollLeft = scroll?.scrollLeft || 0;
+    const detail = promptCreateMode ? null : selectedPrompt();
+    panel.innerHTML = renderPromptDetail(detail, Boolean(activePromptLibrary()?.readonly));
+    if(options.preserveScroll !== false){
+        const nextScroll = panel.querySelector('.detail-scroll');
+        if(nextScroll){
+            nextScroll.scrollTop = scrollTop;
+            nextScroll.scrollLeft = scrollLeft;
+        }
+    }
+    refreshIcons();
+}
+function renderPromptRowAndDetail(id){
+    const item = findPromptItem(id);
+    const readonly = Boolean(activePromptLibrary()?.readonly);
+    const row = [...root.querySelectorAll('[data-prompt-row]')].find(element => element.dataset.promptRow === id);
+    if(item && row) row.outerHTML = renderPromptRow(item, readonly);
+    renderPromptDetailOnly();
+}
+function updatePromptManageState(options={}){
+    const content = root.querySelector('.asset-content');
+    if(!content) return;
+    content.classList.toggle('manage-on', promptManageMode);
+    const manageButton = content.querySelector('[data-prompt-manage]');
+    manageButton?.classList.toggle('primary', promptManageMode);
+    const manageLabel = manageButton?.querySelector('span');
+    if(manageLabel) manageLabel.textContent = promptManageMode ? '完成管理' : '批量管理';
+    const summary = content.querySelector('[data-prompt-selection-summary]');
+    if(summary) summary.textContent = `已选择 ${selectedPromptIds.size} 条提示词，支持拖拽框选或逐个勾选。`;
+    content.querySelectorAll('[data-prompt-row]').forEach(row => row.classList.toggle('active', row.dataset.promptRow === selectedPromptId));
+    content.querySelectorAll('[data-prompt-check]').forEach(input => { input.checked = selectedPromptIds.has(input.dataset.promptCheck); });
+    const clearButton = content.querySelector('[data-prompt-clear-selection]');
+    if(clearButton) clearButton.disabled = !selectedPromptIds.size;
+    const deleteButton = content.querySelector('[data-prompt-delete-selected]');
+    if(deleteButton){
+        deleteButton.disabled = Boolean(activePromptLibrary()?.readonly) || !selectedPromptIds.size;
+        deleteButton.classList.toggle('detail-confirm', pendingBatchDelete === 'prompt');
+        const label = deleteButton.querySelector('span');
+        if(label) label.textContent = pendingBatchDelete === 'prompt' ? '确认删除' : '删除所选';
+    }
+    if(options.detail) renderPromptDetailOnly();
+}
+function renderPromptSelectionOnly(options={}){
+    root.querySelectorAll('[data-prompt-row]').forEach(row => row.classList.toggle('active', row.dataset.promptRow === selectedPromptId));
+    renderPromptDetailOnly(options);
 }
 function renderPromptTreeBranch(lib){
     const isActiveLib = lib.id === activePromptLibraryId;
@@ -3608,7 +3687,7 @@ async function handleClick(event){
     if(target.closest?.('[data-workflow-tree-edit-save]')){ await saveWorkflowTreeEdit(); return; }
     if(target.closest?.('[data-workflow-tree-edit-cancel]')){ workflowTreeEdit = null; render(); return; }
     if(target.closest?.('[data-prompt-tree-edit-save]')){ await savePromptTreeEdit(); return; }
-    if(target.closest?.('[data-prompt-tree-edit-cancel]')){ promptTreeEdit = null; render(); return; }
+    if(target.closest?.('[data-prompt-tree-edit-cancel]')){ promptTreeEdit = null; renderPromptNavigationOnly(); return; }
     const assetEditSave = target.closest?.('[data-asset-edit-save]');
     if(assetEditSave){ await saveAssetEdit(assetEditSave.dataset.assetEditSave || ''); return; }
     if(target.closest?.('[data-asset-edit-cancel]')){ assetEditMode = false; render(); return; }
@@ -3757,18 +3836,18 @@ async function handleClick(event){
     const promptEditSave = target.closest?.('[data-prompt-edit-save]');
     if(promptEditSave){ await savePromptEdit(promptEditSave.dataset.promptEditSave || ''); return; }
     if(target.closest?.('[data-prompt-create-save]')){ await savePromptCreate(); return; }
-    if(target.closest?.('[data-prompt-edit-cancel]')){ promptEditMode = false; promptCreateMode = false; render(); return; }
+    if(target.closest?.('[data-prompt-edit-cancel]')){ promptEditMode = false; promptCreateMode = false; renderPromptSelectionOnly(); return; }
     const promptEditStart = target.closest?.('[data-prompt-edit-start]');
-    if(promptEditStart){ selectedPromptId = promptEditStart.dataset.promptEditStart || selectedPromptId; promptEditMode = true; promptCreateMode = false; pendingDeletePromptId = ''; render(); return; }
+    if(promptEditStart){ selectedPromptId = promptEditStart.dataset.promptEditStart || selectedPromptId; promptEditMode = true; promptCreateMode = false; pendingDeletePromptId = ''; renderPromptSelectionOnly(); return; }
     if(target.closest?.('[data-prompt-manage]')){
         promptManageMode = !promptManageMode;
         pendingBatchDelete = '';
         if(!promptManageMode) selectedPromptIds.clear();
-        render();
+        updatePromptManageState();
         return;
     }
-    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().filter(item => !item.builtin).forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; render(); return; }
-    if(target.closest?.('[data-prompt-clear-selection]')){ selectedPromptIds.clear(); pendingBatchDelete = ''; render(); return; }
+    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().filter(item => !item.builtin).forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; updatePromptManageState(); return; }
+    if(target.closest?.('[data-prompt-clear-selection]')){ selectedPromptIds.clear(); pendingBatchDelete = ''; updatePromptManageState(); return; }
     const promptEdit = target.closest?.('[data-prompt-edit]');
     if(promptEdit){ await editPromptItem(promptEdit.dataset.promptEdit || ''); return; }
     const promptDelete = target.closest?.('[data-prompt-delete]');
@@ -3783,23 +3862,23 @@ async function handleClick(event){
         if(libId){ activePromptLibraryId = libId; activePromptCategory = 'all'; }
         if(catRow){ activePromptLibraryId = catRow.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = catRow.dataset.promptCat || activePromptCategory; }
         promptCreateKind = activePromptCategory === 'assistant' ? 'assistant_recipe' : 'generation_prompt';
-        promptCreateMode = true; promptEditMode = false; pendingDeletePromptId = ''; render(); return;
+        promptCreateMode = true; promptEditMode = false; pendingDeletePromptId = ''; renderPromptSelectionOnly({preserveScroll:false}); return;
     }
-    if(target.closest?.('[data-prompt-lib-new]')){ promptTreeFocus = 'library'; promptTreeEdit = {kind:'library-new', placement:'head', value:'新提示词库', label:'提示词库名称'}; render(); focusTreeEditInput('promptTreeEditInput'); return; }
+    if(target.closest?.('[data-prompt-lib-new]')){ promptTreeFocus = 'library'; promptTreeEdit = {kind:'library-new', placement:'head', value:'新提示词库', label:'提示词库名称'}; renderPromptNavigationOnly(); focusTreeEditInput('promptTreeEditInput'); return; }
     if(target.closest?.('[data-prompt-cat-new]')){
         const libRow = target.closest('[data-prompt-lib]');
         if(libRow) activePromptLibraryId = libRow.dataset.promptLib || activePromptLibraryId;
         promptTreeFocus = 'library';
         promptTreeEdit = {kind:'category-new', value:'新分组', label:'分组名称'};
         pendingTreeDelete = '';
-        render(); return;
+        renderPromptNavigationOnly(); return;
     }
     if(target.closest?.('[data-prompt-cat-rename]')){
         promptTreeFocus = 'category';
         const cat = activePromptCategories().find(c => c.id === activePromptCategory);
         promptTreeEdit = {kind:'category-rename', value:cat?.name || '', label:'分组名称'};
         pendingTreeDelete = '';
-        render(); return;
+        renderPromptNavigationOnly(); return;
     }
     if(target.closest?.('[data-prompt-cat-delete]')){ await deletePromptCategory(); return; }
     const promptLibRenameBtn = target.closest?.('[data-prompt-lib-rename]');
@@ -3809,7 +3888,7 @@ async function handleClick(event){
         if(libRow) activePromptLibraryId = libRow.dataset.promptLib || activePromptLibraryId;
         promptTreeFocus = 'library';
         promptTreeEdit = {kind:'library-rename', value:activePromptLibrary()?.name || '', label:'提示词库名称'};
-        render(); return;
+        renderPromptNavigationOnly(); return;
     }
     const promptLibDeleteBtn = target.closest?.('[data-prompt-lib-delete]');
     if(promptLibDeleteBtn){
@@ -3830,7 +3909,7 @@ async function handleClick(event){
             promptCreateMode = false;
             pendingDeletePromptId = '';
             pendingBatchDelete = '';
-            render();
+            updatePromptManageState({detail:true});
         } else {
             if(selectedPromptId === id && !promptEditMode && !promptCreateMode) return;
             selectedPromptId = id;
@@ -4459,6 +4538,7 @@ async function createPromptLibrary(){
 }
 async function savePromptTreeEdit(){
     if(!promptTreeEdit) return;
+    const editKind = promptTreeEdit.kind;
     const name = document.getElementById('promptTreeEditInput')?.value || '';
     if(!String(name || '').trim()){
         setStatus('名称不能为空');
@@ -4490,7 +4570,13 @@ async function savePromptTreeEdit(){
     }
     promptTreeEdit = null;
     pendingTreeDelete = '';
-    render();
+    if(['library-rename','category-rename'].includes(editKind)){
+        renderPromptNavigationOnly();
+        const heading = root.querySelector('.asset-content .content-heading strong');
+        if(heading) heading.textContent = activePromptLibrary()?.name || '提示词库';
+    } else {
+        render();
+    }
     setStatus('已保存');
 }
 async function deletePromptCategory(){
@@ -4502,7 +4588,7 @@ async function deletePromptCategory(){
     if(pendingTreeDelete !== key){
         pendingTreeDelete = key;
         promptTreeEdit = null;
-        render();
+        renderPromptNavigationOnly();
         setStatus('再次点击确认删除分组');
         return;
     }
@@ -4529,7 +4615,7 @@ async function deletePromptLibrary(){
     if(pendingTreeDelete !== key){
         pendingTreeDelete = key;
         promptTreeEdit = null;
-        render();
+        renderPromptNavigationOnly();
         setStatus('再次点击确认删除提示词库');
         return;
     }
@@ -4556,7 +4642,7 @@ async function createPromptItem(){
     const data = await apiJson('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative, category, scene})});
     promptLibrary = data.library || promptLibrary;
     selectedPromptId = data.item?.id || selectedPromptId;
-    render();
+    renderPromptDataSections();
 }
 async function savePromptCreate(){
     const lib = activePromptLibrary();
@@ -4592,7 +4678,7 @@ async function savePromptCreate(){
     if(assistant) activePromptCategory = 'assistant';
     else if(activePromptCategory === 'assistant') activePromptCategory = 'all';
     promptCreateMode = false;
-    render();
+    renderPromptDataSections();
     setStatus('提示词已新增');
 }
 async function editPromptItem(id){
@@ -4603,7 +4689,7 @@ async function editPromptItem(id){
         selectedPromptId = id;
         promptEditMode = true;
         promptCreateMode = false;
-        render();
+        renderPromptSelectionOnly();
         return;
     }
     const name = window.prompt('提示词名称', item.name || '');
@@ -4615,7 +4701,7 @@ async function editPromptItem(id){
     const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative, category:item.category || 'custom', scene})});
     promptLibrary = data.library || promptLibrary;
     selectedPromptId = id;
-    render();
+    renderPromptRowAndDetail(id);
 }
 async function savePromptEdit(id){
     const item = findPromptItem(id);
@@ -4649,7 +4735,7 @@ async function savePromptEdit(id){
     promptLibrary = data.library || promptLibrary;
     selectedPromptId = id;
     promptEditMode = false;
-    render();
+    renderPromptRowAndDetail(id);
     setStatus(item.builtin ? '内置助手指令已保存，智能画布将使用此版本' : '提示词已保存');
 }
 async function resetPromptItem(id){
@@ -4661,7 +4747,7 @@ async function resetPromptItem(id){
     selectedPromptId = id;
     promptEditMode = false;
     promptCreateMode = false;
-    render();
+    renderPromptRowAndDetail(id);
     setStatus('内置助手指令已恢复默认');
 }
 async function deletePromptItem(id){
@@ -4670,7 +4756,7 @@ async function deletePromptItem(id){
     if(item.builtin){ setStatus('内置助手指令不能删除，可以编辑或恢复默认'); return; }
     if(pendingDeletePromptId !== id){
         pendingDeletePromptId = id;
-        render();
+        renderPromptSelectionOnly();
         setStatus('再次点击确认删除提示词');
         return;
     }
@@ -4679,14 +4765,14 @@ async function deletePromptItem(id){
     selectedPromptIds.delete(id);
     if(selectedPromptId === id) selectedPromptId = '';
     pendingDeletePromptId = '';
-    render();
+    renderPromptDataSections();
     setStatus('提示词已删除');
 }
 async function deleteSelectedPrompts(){
     if(!selectedPromptIds.size) return;
     if(pendingBatchDelete !== 'prompt'){
         pendingBatchDelete = 'prompt';
-        render();
+        updatePromptManageState();
         setStatus('再次点击确认删除所选提示词');
         return;
     }
@@ -4696,7 +4782,7 @@ async function deleteSelectedPrompts(){
     if(ids.includes(selectedPromptId)) selectedPromptId = '';
     selectedPromptIds.clear();
     pendingBatchDelete = '';
-    render();
+    renderPromptDataSections();
 }
 root.addEventListener('pointerdown', event => {
     if(event.button !== 0) return;
@@ -4706,7 +4792,8 @@ root.addEventListener('pointerdown', event => {
     event.stopPropagation();
     applyManagedSelection(target.kind, target.id);
     managedSelectionPointerGuard = {...target, at:Date.now()};
-    render();
+    if(target.kind === 'prompt') updatePromptManageState({detail:true});
+    else render();
 }, true);
 root.addEventListener('click', event => {
     handleClick(event).catch(err => setStatus(err.message || '操作失败'));
@@ -4748,7 +4835,7 @@ document.addEventListener('keydown', event => {
     }
     if(event.target?.id === 'promptTreeEditInput'){
         if(event.key === 'Enter'){ event.preventDefault(); savePromptTreeEdit().catch(err => setStatus(err.message || '保存失败')); }
-        if(event.key === 'Escape'){ event.preventDefault(); promptTreeEdit = null; render(); }
+        if(event.key === 'Escape'){ event.preventDefault(); promptTreeEdit = null; renderPromptNavigationOnly(); }
     }
 });
 document.addEventListener('wheel', zoomDetailPreview, {passive:false});

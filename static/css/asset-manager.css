@@ -311,13 +311,13 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .inline-edit-field { display:flex; flex-direction:column; gap:6px; }
 .inline-edit-field span { color:var(--faint); font-size:10px; font-weight:900; }
 .inline-edit-field input,.inline-edit-field textarea,.inline-edit-field select { width:100%; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); outline:none; padding:9px 10px; font-size:12px; font-weight:650; line-height:1.45; }
-.inline-edit-field textarea { min-height:110px; resize:vertical; }
+.inline-edit-field textarea { min-height:120px; resize:vertical; }
 .inline-edit-field select { min-height:38px; padding-right:36px; appearance:none; -webkit-appearance:none; background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%); background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%; background-size:5px 5px,5px 5px; background-repeat:no-repeat; }
 .inline-edit-field input:focus,.inline-edit-field textarea:focus,.inline-edit-field select:focus { border-color:var(--line-2); box-shadow:0 0 0 3px rgba(148,163,184,.14); }
 .inline-edit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .inline-edit-check { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--muted); font-size:11px; font-weight:700; line-height:1.45; }
 .inline-edit-check input { margin-top:2px; accent-color:var(--strong); }
-.prompt-recipe-template { min-height:110px !important; font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:11px !important; font-weight:550 !important; }
+.prompt-recipe-template { min-height:120px !important; }
 .detail-confirm { color:var(--danger) !important; border-color:rgba(220,38,38,.3) !important; background:rgba(220,38,38,.06) !important; }
 .detail-empty { flex:1; min-height:220px; border:1px dashed var(--line-2); border-radius:14px; background:var(--card); color:var(--muted); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:9px; padding:18px; font-size:12px; font-weight:800; }
 .detail-empty svg { width:28px; height:28px; color:var(--faint); }
@@ -370,17 +370,41 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .prompt-detail-scene { color:var(--muted); font-size:12px; line-height:1.5; font-weight:650; }
 .prompt-block { border:1px solid var(--line); border-radius:13px; background:var(--card); overflow:visible; display:flex; flex-direction:column; }
 .prompt-block-head { flex:0 0 auto; min-height:34px; padding:8px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--muted); font-size:10.5px; font-weight:900; }
-.prompt-block-body { flex:0 0 auto; display:block; width:100%; box-sizing:border-box; min-height:118px; height:136px; max-height:520px; border:0; outline:0; border-radius:0 0 13px 13px; background:var(--card); padding:10px; color:var(--text); -webkit-text-fill-color:var(--text); font:inherit; font-size:12px; line-height:1.62; font-weight:520; white-space:pre-wrap; overflow-wrap:anywhere; overflow:auto; resize:vertical; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.42) transparent; }
+.prompt-block-body { flex:0 0 auto; display:block; width:100%; box-sizing:border-box; min-height:128px; height:146px; max-height:520px; border:0; outline:0; border-radius:0 0 13px 13px; background:var(--card); padding:10px; color:var(--text); -webkit-text-fill-color:var(--text); font:inherit; font-size:12px; line-height:1.62; font-weight:520; white-space:pre-wrap; overflow-wrap:anywhere; overflow:auto; resize:vertical; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.42) transparent; }
 .prompt-block-body::-webkit-scrollbar,.inline-edit-field textarea::-webkit-scrollbar { width:7px; height:7px; }
 .prompt-block-body::-webkit-scrollbar-button,.inline-edit-field textarea::-webkit-scrollbar-button { width:0; height:0; display:none; }
 .prompt-block-body::-webkit-scrollbar-track,.inline-edit-field textarea::-webkit-scrollbar-track { background:transparent; }
 .prompt-block-body::-webkit-scrollbar-thumb,.inline-edit-field textarea::-webkit-scrollbar-thumb { background:rgba(148,163,184,.42); border:2px solid transparent; border-radius:999px; background-clip:padding-box; }
-.prompt-recipe-body { font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; font-size:11px; }
+.prompt-recipe-body { font-family:inherit; font-size:12px; font-weight:600; }
 .prompt-block-body.negative { color:var(--muted); }
 .params-list { display:flex; flex-direction:column; gap:7px; }
 .param-row { border:1px solid var(--line); border-radius:11px; background:var(--card); padding:9px; }
 .param-row strong { display:block; color:var(--text); font-size:11px; line-height:1.2; font-weight:900; margin-bottom:5px; }
 .param-row span { display:block; color:var(--muted); font-size:11px; line-height:1.45; font-weight:650; overflow-wrap:anywhere; }
+.prompt-detail-panel { font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+.prompt-detail-panel .panel-title strong { font-size:13px; line-height:1.25; font-weight:900; letter-spacing:0; }
+.prompt-detail-panel .panel-title span { font-size:10.5px; line-height:1.35; font-weight:700; letter-spacing:0; }
+.prompt-detail-panel .inline-edit-form { gap:12px; }
+.prompt-detail-panel .inline-edit-field { gap:7px; }
+.prompt-detail-panel .inline-edit-field > span { color:var(--muted); font-size:11px; line-height:1.3; font-weight:800; letter-spacing:0; }
+.prompt-detail-panel .inline-edit-field input,
+.prompt-detail-panel .inline-edit-field textarea,
+.prompt-detail-panel .inline-edit-field select,
+.prompt-detail-panel .app-select-trigger { font-family:inherit; font-size:12px; line-height:1.55; font-weight:600; letter-spacing:0; }
+.prompt-detail-panel .inline-edit-field textarea { min-height:120px; }
+.prompt-detail-panel .inline-edit-field select,
+.prompt-detail-panel .app-select-trigger { font-size:12px; font-weight:600; }
+.prompt-detail-panel .inline-edit-field input::placeholder,
+.prompt-detail-panel .inline-edit-field textarea::placeholder { color:var(--faint); font-family:inherit; font-size:12px; font-weight:600; opacity:1; }
+.prompt-detail-panel .inline-edit-check { font-family:inherit; font-size:11.5px; line-height:1.5; font-weight:650; }
+.prompt-detail-panel .prompt-detail-title { font-family:inherit; font-size:16px; line-height:1.3; font-weight:900; letter-spacing:0; }
+.prompt-detail-panel .prompt-detail-scene { font-family:inherit; font-size:12px; line-height:1.5; font-weight:600; }
+.prompt-detail-panel .prompt-block-head { font-family:inherit; font-size:11px; line-height:1.35; font-weight:800; letter-spacing:0; }
+.prompt-detail-panel .prompt-block-body { font-family:inherit; font-size:12px; line-height:1.62; font-weight:600; letter-spacing:0; }
+.prompt-detail-panel .param-row strong,
+.prompt-detail-panel .param-row span { font-family:inherit; font-size:11.5px; line-height:1.45; letter-spacing:0; }
+.prompt-detail-panel .param-row strong { font-weight:800; }
+.prompt-detail-panel .param-row span { font-weight:600; }
 .avatar-section { margin-top:12px; border:1px solid var(--line); border-radius:13px; background:var(--card); padding:12px; display:flex; flex-direction:column; gap:9px; }
 .avatar-card { border:1px solid var(--line); border-radius:11px; background:var(--bg); padding:10px; display:flex; flex-direction:column; gap:8px; }
 .avatar-card.registered { border-color:rgba(34,197,94,.45); background:rgba(34,197,94,.08); }

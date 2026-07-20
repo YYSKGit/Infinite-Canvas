@@ -65,6 +65,9 @@
     }
     function positionMenu(controller){
         const rect = controller.trigger.getBoundingClientRect();
+        const triggerStyle = getComputedStyle(controller.trigger);
+        menu.style.fontFamily = triggerStyle.fontFamily;
+        menu.style.fontSize = triggerStyle.fontSize;
         const bodyRect = document.body.getBoundingClientRect();
         const bodyTransform = getComputedStyle(document.body).transform;
         const matrix = bodyTransform && bodyTransform !== 'none'
