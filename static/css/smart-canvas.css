@@ -782,6 +782,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .prompt-assistant-panel *::-webkit-scrollbar-corner { background:transparent; }
 .prompt-assistant-toolbar { flex:0 0 auto; display:flex; align-items:center; gap:6px; min-width:0; overflow-x:auto; scrollbar-width:thin; }
 .prompt-assistant-toolbar select,.prompt-assistant-footer select { height:30px; min-width:104px; max-width:190px; padding:0 34px 0 9px; appearance:none; -webkit-appearance:none; border:1px solid var(--line); border-radius:9px; background-color:var(--soft); background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%); background-position:calc(100% - 17px) 50%,calc(100% - 12px) 50%; background-size:5px 5px,5px 5px; background-repeat:no-repeat; color:var(--text); outline:none; font-size:10.5px; font-weight:700; }
+.prompt-assistant-toolbar select,.prompt-assistant-footer select { --app-select-menu-font-size:12px; --app-select-menu-max-height:312px; }
 #promptAssistantRecipe { min-width:138px; }
 #promptAssistantModel { min-width:150px; }
 #promptAssistantScope { min-width:116px; }

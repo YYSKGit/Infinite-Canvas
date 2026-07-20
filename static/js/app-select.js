@@ -66,8 +66,12 @@
     function positionMenu(controller){
         const rect = controller.trigger.getBoundingClientRect();
         const triggerStyle = getComputedStyle(controller.trigger);
+        const selectStyle = getComputedStyle(controller.select);
+        const menuFontSize = selectStyle.getPropertyValue('--app-select-menu-font-size').trim();
+        const configuredMaxHeight = Number.parseFloat(selectStyle.getPropertyValue('--app-select-menu-max-height'));
+        const menuHeightLimit = Number.isFinite(configuredMaxHeight) ? Math.max(96, configuredMaxHeight) : 360;
         menu.style.fontFamily = triggerStyle.fontFamily;
-        menu.style.fontSize = triggerStyle.fontSize;
+        menu.style.fontSize = menuFontSize || triggerStyle.fontSize;
         const bodyRect = document.body.getBoundingClientRect();
         const bodyTransform = getComputedStyle(document.body).transform;
         const matrix = bodyTransform && bodyTransform !== 'none'
@@ -88,7 +92,7 @@
         const below = viewportHeight - localRect.bottom - gap - 8;
         const above = localRect.top - gap - 8;
         const openAbove = below < 180 && above > below;
-        const maxHeight = Math.max(96, Math.min(360, openAbove ? above : below));
+        const maxHeight = Math.max(96, Math.min(menuHeightLimit, openAbove ? above : below));
         const menuWidth = Math.min(520, Math.max(120, viewportWidth - 16), Math.max(120, localRect.width));
         menu.style.width = `${menuWidth}px`;
         menu.style.minWidth = `${menuWidth}px`;

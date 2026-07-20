@@ -2572,11 +2572,11 @@ function promptRecipeModelLabel(providerId='', model=''){
     return String(aliases[model] || model || '');
 }
 function renderPromptRecipeProviderOptions(current=''){
-    return `<option value="" ${!current ? 'selected' : ''}>跟随画布当前选择</option>${promptRecipeProviders(current).map(provider => `<option value="${escapeAttr(provider.id)}" ${provider.id === current ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('')}`;
+    return `<option value="" ${!current ? 'selected' : ''}>跟随画布选择</option>${promptRecipeProviders(current).map(provider => `<option value="${escapeAttr(provider.id)}" ${provider.id === current ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('')}`;
 }
 function renderPromptRecipeModelOptions(providerId='', current=''){
     const models = promptRecipeModels(providerId, current);
-    return `<option value="" ${!current ? 'selected' : ''}>跟随画布当前选择</option>${models.map(model => `<option value="${escapeAttr(model)}" ${model === current ? 'selected' : ''}>${escapeHtml(promptRecipeModelLabel(providerId, model))}</option>`).join('')}`;
+    return `<option value="" ${!current ? 'selected' : ''}>跟随画布选择</option>${models.map(model => `<option value="${escapeAttr(model)}" ${model === current ? 'selected' : ''}>${escapeHtml(promptRecipeModelLabel(providerId, model))}</option>`).join('')}`;
 }
 function renderPromptEditFields(item={}, assistant=false){
     const effort = String(item.recommended_reasoning_effort || '');
