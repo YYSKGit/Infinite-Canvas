@@ -1496,6 +1496,18 @@ function bindSmartCanvasVideo(host, nodeId){
     const {signal} = binding;
     video._smartCanvasBinding = binding;
     host.dataset.smartPlaybackBound = '1';
+    // This player owns its entire control surface. Keep the native shadow-DOM
+    // controls disabled even if a stale preview path or the browser context menu
+    // tries to restore the `controls` attribute while the element is reused.
+    const suppressNativeControls = () => {
+        if(!video.controls && !video.hasAttribute('controls')) return;
+        video.controls = false;
+        video.removeAttribute('controls');
+    };
+    suppressNativeControls();
+    const nativeControlsObserver = new MutationObserver(suppressNativeControls);
+    nativeControlsObserver.observe(video, {attributes:true, attributeFilter:['controls']});
+    signal.addEventListener('abort', () => nativeControlsObserver.disconnect(), {once:true});
     let hoverTimer = 0;
     let controlsTimer = 0;
     const clearTimer = () => { if(hoverTimer) clearTimeout(hoverTimer); hoverTimer = 0; };
@@ -1712,11 +1724,20 @@ function bindSmartCanvasVideo(host, nodeId){
         host.classList.remove('is-controls-hovered');
         if(host.matches(':hover')) showControlsTemporarily(); else hideControls();
     });
+    let controlsReleaseController = null;
     on(controls, 'pointerdown', () => {
         host.classList.add('is-controls-interacting');
         showControlsTemporarily();
+        // Listen outside the narrow strip only for the lifetime of this gesture.
+        // Persistent window listeners here would retain detached video nodes.
+        controlsReleaseController?.abort();
+        controlsReleaseController = new AbortController();
+        const releaseSignal = controlsReleaseController.signal;
+        window.addEventListener('pointerup', finishEscapedControlsPointer, {capture:true, signal:releaseSignal});
+        window.addEventListener('pointercancel', finishEscapedControlsPointer, {capture:true, signal:releaseSignal});
     });
     const finishControlsInteraction = () => {
+        if(!host.classList.contains('is-controls-interacting')) return;
         host.classList.remove('is-controls-interacting');
         showControlsTemporarily();
     };
@@ -1772,7 +1793,12 @@ function bindSmartCanvasVideo(host, nodeId){
             scrubFinishTimer = setTimeout(complete, 1200);
         } else complete();
     };
-    on(progress, 'pointerdown', beginProgressScrub);
+    on(progress, 'pointerdown', e => {
+        beginProgressScrub();
+        // Keep a fast drag/release targeted at the range input even after the
+        // pointer leaves the narrow custom control strip.
+        try { progress.setPointerCapture?.(e.pointerId); } catch(error) {}
+    });
     on(progress, 'input', () => {
         seekFromProgress();
         progress.style.setProperty('--smart-video-progress', `${Number(progress.value) / 10}%`);
@@ -1781,6 +1807,17 @@ function bindSmartCanvasVideo(host, nodeId){
     on(progress, 'change', finishProgressScrub);
     on(progress, 'pointerup', finishProgressScrub);
     on(progress, 'pointercancel', finishProgressScrub);
+    const finishEscapedControlsPointer = () => {
+        controlsReleaseController?.abort();
+        controlsReleaseController = null;
+        finishProgressScrub();
+        finishControlsInteraction();
+    };
+    // Native range inputs do not deliver pointerup consistently to their own
+    // element after a very fast perpendicular drag. Window capture and lost
+    // pointer capture guarantee that neither scrubbing nor the visible-controls
+    // interaction state can remain stuck.
+    on(progress, 'lostpointercapture', finishEscapedControlsPointer);
     on(volume, 'pointerdown', () => { volume.dataset.adjusting = '1'; });
     on(volume, 'input', () => {
         video.volume = Math.max(0, Math.min(1, Number(volume.value)));
@@ -1928,7 +1965,12 @@ function smartActivateVideoPreview(target){
     const root = target?.closest?.('.media-video-card,.video-thumb,.image-wrap,.thumb-item') || target?.parentElement || null;
     const img = target?.matches?.('img[data-preview-kind="video"]') ? target : root?.querySelector?.('img[data-preview-kind="video"]');
     if(!img){
-        const fallback = target?.matches?.('video[data-url]') ? target : root?.querySelector?.('video[data-url]');
+        // Custom canvas players must never enter this legacy/native-controls
+        // fallback. A range drag can end outside the strip and promote a click
+        // to its surrounding media item, which used to match the player here.
+        const fallback = target?.matches?.('video[data-url]:not(.smart-canvas-video)')
+            ? target
+            : root?.querySelector?.('video[data-url]:not(.smart-canvas-video)');
         if(fallback){
             fallback.controls = true;
             fallback.muted = false;
@@ -8687,6 +8729,11 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         if(!res.ok){ shell.classList.remove('smart-grid-loading'); minimap?.classList.remove('smart-minimap-loading'); return false; }
         const data = await res.json();
         if(!data?.canvas){ shell.classList.remove('smart-grid-loading'); minimap?.classList.remove('smart-minimap-loading'); return false; }
+        // Nodes and their SVG connections are one visual scene. Hide the whole
+        // world before clearing or rebuilding either half, then reveal it only
+        // after both have rendered and the initial media is ready.
+        world.classList.remove('smart-initial-media-reveal');
+        world.classList.add('smart-initial-media-preparing');
         if(options.switching) resetSmartCanvasTransientStateForSwitch();
         smartCanvasLoadGeneration += 1;
         canvasId = requestedCanvasId;
@@ -8735,8 +8782,6 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         // saved viewport has set the correct dot/grid blend and spacing, so the
         // first painted background already matches the actual canvas zoom.
         shell.classList.remove('smart-grid-loading');
-        world.classList.remove('smart-initial-media-reveal');
-        world.classList.add('smart-initial-media-preparing');
         render();
         // Reveal only after the real nodes and viewport have been rendered, so
         // the browser never paints the temporary default minimap geometry.
