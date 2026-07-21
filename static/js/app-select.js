@@ -38,7 +38,10 @@
         shell.style.order = style.order !== '0' || !baseStyle ? style.order : baseStyle.order;
         shell.style.alignSelf = style.alignSelf !== 'auto' || !baseStyle ? style.alignSelf : baseStyle.alignSelf;
         shell.style.justifySelf = style.justifySelf !== 'auto' || !baseStyle ? style.justifySelf : baseStyle.justifySelf;
-        shell.style.gridArea = style.gridArea !== 'auto' || !baseStyle ? style.gridArea : baseStyle.gridArea;
+        // Preserve the select's grid placement from before enhancement. Once the
+        // select is moved into the shell, the hiding rule gives it grid-area:1/1;
+        // copying that computed value back would move the shell to the first cell.
+        shell.style.gridArea = baseStyle?.gridArea || style.gridArea;
         shell.style.margin = baseStyle?.margin || style.margin;
         shell.style.width = resolvedWidth;
         shell.style.minWidth = baseStyle?.minWidth || style.minWidth;
