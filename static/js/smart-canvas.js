@@ -10110,23 +10110,48 @@ function closeSmartLogLightbox(){
     box.classList.remove('open');
     const img = box.querySelector('img');
     if(img){ img.onerror = null; img.removeAttribute('src'); }
+    const video = box.querySelector('video');
+    if(video){
+        video.onerror = null;
+        video.pause?.();
+        video.removeAttribute('src');
+        video.load?.();
+    }
 }
-// 日志缩略图的轻量预览：只弹一张大图（不进编辑器那套裁剪/涂抹的重组件），点背景或关闭按钮即关。
+// 日志缩略图的轻量预览：图片和视频共用当前页浮层（不进入编辑器重组件），点背景或关闭按钮即关。
 function openSmartLogLightbox(url, kind='image'){
     if(!url) return;
-    if(kind === 'video' || outputUrlLooksVideo(url)){ window.open(displayMediaUrl({url}), '_blank'); return; }
+    const isVideo = kind === 'video' || outputUrlLooksVideo(url);
     let box = document.getElementById('smartLogLightbox');
     if(!box){
         box = document.createElement('div');
         box.id = 'smartLogLightbox';
         box.className = 'smart-log-lightbox';
-        box.innerHTML = `<img alt="preview" draggable="false"><button class="smart-log-lightbox-close" type="button" aria-label="${escapeAttr(tr('common.close') || '关闭')}"><i data-lucide="x"></i></button>`;
+        box.innerHTML = `<img alt="preview" draggable="false"><video controls playsinline preload="metadata" aria-label="视频预览"></video><button class="smart-log-lightbox-close" type="button" aria-label="${escapeAttr(tr('common.close') || '关闭')}"><i data-lucide="x"></i></button>`;
         document.body.appendChild(box);
         box.addEventListener('click', e => {
             if(e.target === box || e.target.closest('.smart-log-lightbox-close')) closeSmartLogLightbox();
         });
     }
     const img = box.querySelector('img');
+    const video = box.querySelector('video');
+    img.onerror = null;
+    img.removeAttribute('src');
+    video.onerror = null;
+    video.pause?.();
+    video.removeAttribute('src');
+    video.load?.();
+    img.style.display = isVideo ? 'none' : 'block';
+    video.style.display = isVideo ? 'block' : 'none';
+    if(isVideo){
+        video.src = displayMediaUrl({url});
+        video.load?.();
+        box.classList.add('open');
+        refreshIcons();
+        const playPromise = video.play?.();
+        if(playPromise?.catch) playPromise.catch(() => {});
+        return;
+    }
     // 原图加载失败时回退到缩略图同款的 media-preview 代理（PIL 渲染，对截断文件更宽容）。
     let triedFallback = false;
     img.onerror = () => {

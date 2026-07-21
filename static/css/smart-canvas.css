@@ -1641,7 +1641,9 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 /* 日志缩略图的轻量预览灯箱：只展示大图，点背景/关闭按钮/Esc 关闭。z-index 高于日志面板(86)。 */
 .smart-log-lightbox { position:fixed; inset:0; z-index:96; display:none; align-items:center; justify-content:center; padding:32px; background:rgba(15,23,42,.62); backdrop-filter:blur(10px); cursor:zoom-out; }
 .smart-log-lightbox.open { display:flex; }
-.smart-log-lightbox img { max-width:min(94vw, 1400px); max-height:92vh; object-fit:contain; border-radius:12px; background:var(--soft); box-shadow:0 24px 64px rgba(2,6,23,.5); cursor:default; }
+.smart-log-lightbox img,.smart-log-lightbox video { max-width:min(94vw, 1400px); max-height:92vh; object-fit:contain; border-radius:12px; box-shadow:0 24px 64px rgba(2,6,23,.5); cursor:default; }
+.smart-log-lightbox img { background:var(--soft); }
+.smart-log-lightbox video { display:none; background:#0f172a; }
 .smart-log-lightbox-close { position:absolute; top:18px; right:18px; width:40px; height:40px; border-radius:999px; border:1px solid rgba(255,255,255,.28); background:rgba(15,23,42,.5); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:background .14s ease; }
 .smart-log-lightbox-close:hover { background:rgba(15,23,42,.78); }
 .smart-log-lightbox-close i,.smart-log-lightbox-close svg { width:18px !important; height:18px !important; }
