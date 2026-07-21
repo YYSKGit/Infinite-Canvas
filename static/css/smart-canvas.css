@@ -939,7 +939,7 @@ body.smart-prompt-assistant-resize { cursor:ns-resize !important; user-select:no
 .prompt-row { position:relative; display:block; min-width:0; }
 .composer-card > .prompt-row { grid-area:prompt; }
 .prompt-row { position:relative; }
-.prompt-input { position:relative; width:100%; height:var(--prompt-h, 124px); min-height:60px; max-height:380px; resize:none; border:1px solid var(--line); border-radius:13px; outline:none; padding:0; background:var(--card); color:var(--text); font-size:11.5px; font-weight:400; line-height:1.5; overflow:auto; transition:border-color .15s ease, box-shadow .15s ease; white-space:pre-wrap; overflow-wrap:anywhere; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
+.prompt-input { --prompt-line-box:18px; position:relative; width:100%; height:var(--prompt-h, 124px); min-height:60px; max-height:380px; resize:none; border:1px solid var(--line); border-radius:13px; outline:none; padding:0; background:var(--card); color:var(--text); font-size:11.5px; font-weight:400; line-height:var(--prompt-line-box); overflow:auto; transition:border-color .15s ease, box-shadow .15s ease; white-space:pre-wrap; overflow-wrap:anywhere; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; }
 .prompt-input::-webkit-scrollbar { width:6px; height:6px; }
 .prompt-input::-webkit-scrollbar-track { background:transparent; }
 .prompt-input::-webkit-scrollbar-thumb { background:rgba(148,163,184,.4); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
@@ -955,7 +955,7 @@ body.smart-prompt-assistant-resize { cursor:ns-resize !important; user-select:no
 .prompt-input.prompt-input-locked { cursor:default; background:var(--soft); color:var(--muted); border-style:dashed; }
 .prompt-input.prompt-input-locked, .prompt-input.prompt-input-locked * { cursor:default; }
 .smart-prompt-editor-content { position:relative; z-index:2; min-height:100%; padding:10px 12px; outline:none; white-space:pre-wrap; overflow-wrap:anywhere; }
-.smart-prompt-editor-content p { min-height:1.5em; margin:0; }
+.smart-prompt-editor-content p { min-height:var(--prompt-line-box); margin:0; }
 .smart-prompt-editor-content p + p { margin-top:0; }
 .smart-prompt-editor-content img.ProseMirror-separator { display:inline !important; width:0 !important; height:0 !important; margin:0 !important; border:0 !important; }
 .smart-prompt-editor-content br.ProseMirror-trailingBreak { line-height:1; }
@@ -969,7 +969,7 @@ body.smart-prompt-assistant-resize { cursor:ns-resize !important; user-select:no
 .theme-dark .composer-template-btn { background:transparent; border-color:transparent; color:#9aa6b8; }
 .theme-dark .composer-template-btn:hover,.theme-dark .composer-template-btn:focus-visible { background:rgba(23,29,41,.96); border-color:rgba(216,222,233,.52); color:#e5e9f0; }
 .theme-dark .composer-template-btn.active,.theme-dark .composer-template-btn.active:hover,.theme-dark .composer-template-btn.active:focus-visible { background:var(--strong); border-color:var(--strong); color:var(--strong-text); }
-.mention-image-token { height:18px; max-width:132px; margin:0 2px; padding:0 5px 0 2px; border-radius:6px; display:inline-flex; align-items:center; gap:4px; vertical-align:middle; transform:translateY(-1px); background:var(--soft); border:1px solid var(--line); color:var(--text); font-size:10.5px; line-height:1; font-weight:600; white-space:nowrap; cursor:default; }
+.mention-image-token { height:var(--prompt-line-box); max-width:132px; margin:0 2px; padding:0 5px 0 2px; border-radius:6px; display:inline-flex; align-items:center; gap:4px; vertical-align:middle; transform:translateY(-1px); background:var(--soft); border:1px solid var(--line); color:var(--text); font-size:10.5px; line-height:1; font-weight:600; white-space:nowrap; cursor:default; }
 .mention-image-token img,.mention-image-token video { width:14px; height:14px; border-radius:4px; object-fit:cover; border:1px solid var(--line); flex:0 0 auto; background:#0f172a; }
 .mention-audio-thumb { width:14px; height:14px; border-radius:4px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; background:var(--card); border:1px solid var(--line); color:var(--muted); }
 .mention-audio-thumb i,.mention-audio-thumb svg { width:9px !important; height:9px !important; }
