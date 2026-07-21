@@ -10374,6 +10374,13 @@ function downloadPreviewFile(item){
     link.remove();
 }
 function previewDownloadGroupItems(){
+    if(previewNavState.seqType === 'history' && Array.isArray(previewNavState.seq)){
+        return previewNavState.seq.map((ref, index) => {
+            const node = nodes.find(item => item.id === ref.nodeId);
+            const image = imageForDisplay(node?.images?.[ref.index]);
+            return image?.url ? {...image, __index:index} : null;
+        }).filter(Boolean);
+    }
     // 分组预览：整组所有成员图片按阅读顺序打包。
     if(previewNavState.groupId){
         const group = nodes.find(n => n.id === previewNavState.groupId && isSmartGroupNode(n));
@@ -10422,8 +10429,9 @@ async function zipDownloadImageItems(title, items){
     }
 }
 async function downloadPreviewGroup(){
+    const historyOwner = previewNavState.historyForId ? nodes.find(n => n.id === previewNavState.historyForId) : null;
     const group = previewNavState.groupId ? nodes.find(n => n.id === previewNavState.groupId) : null;
-    const owner = group || nodes.find(n => n.id === previewNavState.nodeId);
+    const owner = historyOwner || group || nodes.find(n => n.id === previewNavState.nodeId);
     return zipDownloadImageItems(owner?.title, previewDownloadGroupItems());
 }
 function downloadSmartGroupImages(group){
@@ -13770,6 +13778,28 @@ function refreshComparePanel(){
     const previewSrc = alreadyShowingOriginal ? originalPreviewSrc : quickPreviewSrc;
     const sourceChanged = currentImg.getAttribute('src') !== previewSrc;
     currentImg.dataset.previewQuick = previewSrc !== originalPreviewSrc ? '1' : '';
+    const installDecodedPreview = (loaded, isOriginal=false) => {
+        const live = document.getElementById('previewCurrentImage');
+        const current = currentEditImage();
+        if(!loaded || !live || live.dataset.previewSrcToken !== previewToken) return false;
+        if(!imageEditModal.classList.contains('open') || imageEditMode !== 'preview' || panoramaState.enabled) return false;
+        if(current.node?.id !== editing.node?.id || Number(current.index ?? 0) !== Number(editing.index ?? 0)) return false;
+        loaded.id = 'previewCurrentImage';
+        loaded.className = 'preview-current';
+        loaded.alt = 'current';
+        loaded.style.display = 'block';
+        loaded.style.visibility = '';
+        loaded.dataset.previewSrcToken = previewToken;
+        loaded.dataset.previewQuick = isOriginal ? '' : '1';
+        if(isOriginal) loaded.dataset.previewOriginalSrc = originalPreviewSrc;
+        else delete loaded.dataset.previewOriginalSrc;
+        live.replaceWith(loaded);
+        if(isOriginal) rememberPreviewImageResolution();
+        syncPreviewFrameSize();
+        updatePreviewMetaHint();
+        revealPreparedImageEditor();
+        return true;
+    };
     const scheduleOriginalUpgrade = () => {
         if(!originalPreviewSrc || quickPreviewSrc === originalPreviewSrc || alreadyShowingOriginal) return;
         previewOriginalUpgradeTimer = setTimeout(async () => {
@@ -13778,42 +13808,46 @@ function refreshComparePanel(){
             if(!beforeLoad || beforeLoad.dataset.previewSrcToken !== previewToken) return;
             if(!imageEditModal.classList.contains('open') || imageEditMode !== 'preview' || panoramaState.enabled) return;
             const loaded = await loadDecodedImage(originalPreviewSrc);
-            const live = document.getElementById('previewCurrentImage');
-            const current = currentEditImage();
-            if(!loaded || !live || live.dataset.previewSrcToken !== previewToken) return;
-            if(!imageEditModal.classList.contains('open') || imageEditMode !== 'preview' || panoramaState.enabled) return;
-            if(current.node?.id !== editing.node?.id || Number(current.index ?? 0) !== Number(editing.index ?? 0)) return;
-            loaded.id = 'previewCurrentImage';
-            loaded.className = 'preview-current';
-            loaded.alt = 'current';
-            loaded.style.display = 'block';
-            loaded.style.visibility = '';
-            loaded.dataset.previewSrcToken = previewToken;
-            loaded.dataset.previewQuick = '';
-            loaded.dataset.previewOriginalSrc = originalPreviewSrc;
-            live.replaceWith(loaded);
-            rememberPreviewImageResolution();
-            syncPreviewFrameSize();
-            updatePreviewMetaHint();
+            installDecodedPreview(loaded, true);
         }, 240);
     };
     if(sourceChanged){
         currentImg.dataset.proxyFallbackTried = '';
         delete currentImg.dataset.previewOriginalSrc;
-        if(imageEditModal.classList.contains('media-preparing')) currentImg.style.visibility = 'hidden';
-        currentImg.src = previewSrc;
+        const canKeepCurrentVisible = imageEditModal.classList.contains('open')
+            && !imageEditModal.classList.contains('media-preparing')
+            && currentImg.complete
+            && currentImg.naturalWidth;
+        if(canKeepCurrentVisible){
+            // Cold server caches can take noticeable time to generate the next
+            // 2048 preview. Decode it off-DOM and keep the previous image visible
+            // until the replacement is ready, so navigation never flashes blank.
+            (async () => {
+                const loaded = await loadDecodedImage(previewSrc);
+                if(!installDecodedPreview(loaded, previewSrc === originalPreviewSrc)) return;
+                if(previewSrc !== originalPreviewSrc) scheduleOriginalUpgrade();
+            })();
+        } else {
+            if(imageEditModal.classList.contains('media-preparing')) currentImg.style.visibility = 'hidden';
+            currentImg.src = previewSrc;
+            if(previewSrc !== originalPreviewSrc){
+                currentImg.addEventListener('load', () => {
+                    if(currentImg.dataset.previewSrcToken !== previewToken) return;
+                    scheduleOriginalUpgrade();
+                }, {once:true});
+            }
+        }
     } else if(currentImg.complete && currentImg.naturalWidth) {
         requestAnimationFrame(onCurrentLoaded);
+        if(previewSrc !== originalPreviewSrc) scheduleOriginalUpgrade();
     } else {
         currentImg.style.visibility = 'hidden';
-    }
-    if(previewSrc !== originalPreviewSrc){
-        const startUpgradeAfterQuickPreview = () => {
-            if(currentImg.dataset.previewSrcToken !== previewToken) return;
-            scheduleOriginalUpgrade();
-        };
-        if(currentImg.complete && currentImg.naturalWidth) startUpgradeAfterQuickPreview();
-        else currentImg.addEventListener('load', startUpgradeAfterQuickPreview, {once:true});
+        if(previewSrc !== originalPreviewSrc){
+            currentImg.addEventListener('load', () => {
+                if(currentImg.dataset.previewSrcToken !== previewToken) return;
+                scheduleOriginalUpgrade();
+            }, {once:true});
+        }
     }
     const sources = previewCompareSources();
     const hasSource = sources.length > 0;
@@ -14910,7 +14944,7 @@ function resetCropBox(){
 }
 function updatePreviewNavButtons(){
     let count;
-    if(previewNavState.groupId && Array.isArray(previewNavState.seq)){
+    if(Array.isArray(previewNavState.seq)){
         count = previewNavState.seq.length;
     } else {
         const node = nodes.find(n => n.id === previewNavState.nodeId);
@@ -14920,18 +14954,27 @@ function updatePreviewNavButtons(){
     const show = imageEditModal.classList.contains('open') && imageEditMode === 'preview' && count > 1;
     document.getElementById('previewPrevBtn')?.classList.toggle('visible', show);
     document.getElementById('previewNextBtn')?.classList.toggle('visible', show);
+    const downloadAll = document.getElementById('previewDownloadAllBtn');
+    const currentKind = mediaKindForItem(currentEditImage().image || {});
+    if(downloadAll) downloadAll.style.display = show && currentKind !== 'video' && previewDownloadGroupItems().length > 1 ? 'inline-flex' : 'none';
 }
 function navigatePreviewImage(delta){
     if(!imageEditModal.classList.contains('open') || imageEditMode !== 'preview') return;
-    // 分组预览：跨成员节点按整组序列左右切换（openImageEditor 会重置 previewNavState，故切换后重新挂回分组上下文）。
-    if(previewNavState.groupId && Array.isArray(previewNavState.seq) && previewNavState.seq.length > 1){
-        const groupId = previewNavState.groupId;
+    // 分组/历史预览：跨节点按既定序列左右切换。openImageEditor 会重置
+    // previewNavState，因此切换后要把序列上下文完整挂回去。
+    if(Array.isArray(previewNavState.seq) && previewNavState.seq.length > 1){
+        const sequenceContext = {
+            groupId:previewNavState.groupId || '',
+            historyForId:previewNavState.historyForId || '',
+            historyGroupId:previewNavState.historyGroupId || '',
+            seqType:previewNavState.seqType || '',
+        };
         const seq = previewNavState.seq;
         const pos = (Number(previewNavState.seqPos || 0) + Number(delta || 0) + seq.length) % seq.length;
         const ref = seq[pos];
         openImageEditor(ref.nodeId, ref.index);
         if(imageEditModal.classList.contains('open')){
-            previewNavState.groupId = groupId;
+            Object.assign(previewNavState, sequenceContext);
             previewNavState.seq = seq;
             previewNavState.seqPos = pos;
             // openImageEditor 重置了 previewNavState，需在恢复分组上下文后重算导航/下载全部按钮。
@@ -14949,8 +14992,61 @@ function navigatePreviewImage(delta){
 function openImagePreview(nodeId, imageIndex=0){
     openImageEditor(nodeId, imageIndex);
 }
+function historyPreviewContextForNode(nodeId){
+    const clicked = nodes.find(node => node.id === nodeId);
+    if(!clicked || !isSmartImageNode(clicked)) return null;
+    if(isHistoryGroupNode(clicked)){
+        const owner = nodes.find(node => node.id === clicked.historyFor && isSmartImageNode(node) && !isHistoryGroupNode(node));
+        if(!owner || historyGroupForNode(owner)?.id !== clicked.id) return null;
+        return {owner, history:clicked};
+    }
+    const history = historyGroupForNode(clicked);
+    return history ? {owner:clicked, history} : null;
+}
+function historyPreviewRefs(owner, history){
+    const refs = [];
+    const seen = new Set();
+    const appendNodeImages = node => {
+        (node?.images || []).forEach((source, index) => {
+            const item = imageForDisplay(source);
+            const kind = mediaKindForItem(item || {});
+            if(!item?.url || !['image','video'].includes(kind)) return;
+            const key = `${kind}:${canonicalSmartMediaUrl(item) || item.url}`;
+            if(seen.has(key)) return;
+            seen.add(key);
+            refs.push({nodeId:node.id, index, source, item});
+        });
+    };
+    // 当前节点始终是最新结果；历史节点自身按“较新 → 更旧”存储。
+    appendNodeImages(owner);
+    appendNodeImages(history);
+    return refs;
+}
+function openHistoryImagePreview(context, startNodeId, startIndex=0){
+    const owner = context?.owner;
+    const history = context?.history;
+    if(!owner || !history){ openImagePreview(startNodeId, startIndex); return; }
+    const refs = historyPreviewRefs(owner, history);
+    if(refs.length <= 1){ openImagePreview(startNodeId, startIndex); return; }
+    const seq = refs.map(ref => ({nodeId:ref.nodeId, index:ref.index}));
+    let pos = seq.findIndex(ref => ref.nodeId === startNodeId && Number(ref.index) === Number(startIndex));
+    if(pos < 0) pos = 0;
+    openImagePreview(seq[pos].nodeId, seq[pos].index);
+    if(!imageEditModal.classList.contains('open')) return;
+    previewNavState.historyForId = owner.id;
+    previewNavState.historyGroupId = history.id;
+    previewNavState.seqType = 'history';
+    previewNavState.seq = seq;
+    previewNavState.seqPos = pos;
+    updatePreviewNavButtons();
+}
 // 双击组内图片时按整组预览；非分组成员退回单节点预览。
 function openImagePreviewSmart(nodeId, imageIndex=0){
+    const historyContext = historyPreviewContextForNode(nodeId);
+    if(historyContext){
+        openHistoryImagePreview(historyContext, nodeId, imageIndex);
+        return;
+    }
     const group = smartGroupContainingNode(nodeId);
     if(group){
         openGroupImagePreview(group, nodeId, imageIndex);
@@ -14969,6 +15065,7 @@ function openGroupImagePreview(group, startNodeId, startIndex=0){
     openImagePreview(seq[pos].nodeId, seq[pos].index);
     if(!imageEditModal.classList.contains('open')) return;
     previewNavState.groupId = group.id;
+    previewNavState.seqType = 'group';
     previewNavState.seq = seq;
     previewNavState.seqPos = pos;
     // 恢复分组上下文后重算导航/下载全部按钮（openImageEditor 已把 previewNavState 重置成单节点态）。
