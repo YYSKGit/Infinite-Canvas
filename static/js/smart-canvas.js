@@ -13114,6 +13114,7 @@ let previewCompareOn = false;
 let previewCompareIndex = -1;
 let previewCompareLoadToken = 0;
 let previewComparePendingKey = '';
+let previewOriginalUpgradeTimer = 0;
 let previewMetaExtraText = '';
 function setPreviewCompareLayerVisible(visible){
     const stage = document.getElementById('previewStage');
@@ -13639,6 +13640,10 @@ function refreshComparePanel(){
     const isVideoPreview = mediaKindForItem(editing.image || {}) === 'video';
     const isPreviewMode = imageEditMode === 'preview';
     const previewToken = `${editing.node?.id || ''}:${editing.index ?? 0}:${Date.now()}`;
+    if(previewOriginalUpgradeTimer){
+        clearTimeout(previewOriginalUpgradeTimer);
+        previewOriginalUpgradeTimer = 0;
+    }
     let videoHandoffReady = Promise.resolve(false);
     let currentLoadHandled = false;
     currentImg.dataset.previewSrcToken = previewToken;
@@ -13757,48 +13762,58 @@ function refreshComparePanel(){
         currentImg.src = fallback;
     };
     const originalPreviewSrc = displayMediaUrl(editing.image || curUrl);
-    const previewSrc = smartMediaPreviewUrl(editing.image || curUrl, 1536) || originalPreviewSrc;
-    const sourceChanged = currentImg.getAttribute('src') !== previewSrc;
-    currentImg.dataset.previewQuick = previewSrc !== originalPreviewSrc ? '1' : '';
-    const canSwapAfterDecode = sourceChanged
-        && imageEditModal.classList.contains('open')
-        && !imageEditModal.classList.contains('media-preparing')
+    const quickPreviewSrc = smartMediaPreviewUrl(editing.image || curUrl, 2048) || originalPreviewSrc;
+    const alreadyShowingOriginal = currentImg.dataset.previewOriginalSrc === originalPreviewSrc
+        && currentImg.getAttribute('src') === originalPreviewSrc
         && currentImg.complete
         && currentImg.naturalWidth;
-    if(canSwapAfterDecode){
-        const candidates = [previewSrc, originalPreviewSrc, proxiedMediaUrl(editing.image || curUrl)]
-            .filter(Boolean)
-            .filter((url, index, all) => all.indexOf(url) === index);
-        (async () => {
-            let loaded = null;
-            for(const candidate of candidates){
-                loaded = await loadDecodedImage(candidate);
-                const live = document.getElementById('previewCurrentImage');
-                if(!live || live.dataset.previewSrcToken !== previewToken) return;
-                if(loaded) break;
-            }
+    const previewSrc = alreadyShowingOriginal ? originalPreviewSrc : quickPreviewSrc;
+    const sourceChanged = currentImg.getAttribute('src') !== previewSrc;
+    currentImg.dataset.previewQuick = previewSrc !== originalPreviewSrc ? '1' : '';
+    const scheduleOriginalUpgrade = () => {
+        if(!originalPreviewSrc || quickPreviewSrc === originalPreviewSrc || alreadyShowingOriginal) return;
+        previewOriginalUpgradeTimer = setTimeout(async () => {
+            previewOriginalUpgradeTimer = 0;
+            const beforeLoad = document.getElementById('previewCurrentImage');
+            if(!beforeLoad || beforeLoad.dataset.previewSrcToken !== previewToken) return;
+            if(!imageEditModal.classList.contains('open') || imageEditMode !== 'preview' || panoramaState.enabled) return;
+            const loaded = await loadDecodedImage(originalPreviewSrc);
             const live = document.getElementById('previewCurrentImage');
+            const current = currentEditImage();
             if(!loaded || !live || live.dataset.previewSrcToken !== previewToken) return;
+            if(!imageEditModal.classList.contains('open') || imageEditMode !== 'preview' || panoramaState.enabled) return;
+            if(current.node?.id !== editing.node?.id || Number(current.index ?? 0) !== Number(editing.index ?? 0)) return;
             loaded.id = 'previewCurrentImage';
             loaded.className = 'preview-current';
             loaded.alt = 'current';
             loaded.style.display = 'block';
             loaded.style.visibility = '';
             loaded.dataset.previewSrcToken = previewToken;
-            loaded.dataset.previewQuick = loaded.getAttribute('src') !== originalPreviewSrc ? '1' : '';
+            loaded.dataset.previewQuick = '';
+            loaded.dataset.previewOriginalSrc = originalPreviewSrc;
             live.replaceWith(loaded);
-            if(loaded.dataset.previewQuick !== '1') rememberPreviewImageResolution();
+            rememberPreviewImageResolution();
             syncPreviewFrameSize();
             updatePreviewMetaHint();
-        })();
-    } else if(sourceChanged){
+        }, 240);
+    };
+    if(sourceChanged){
         currentImg.dataset.proxyFallbackTried = '';
+        delete currentImg.dataset.previewOriginalSrc;
         if(imageEditModal.classList.contains('media-preparing')) currentImg.style.visibility = 'hidden';
         currentImg.src = previewSrc;
     } else if(currentImg.complete && currentImg.naturalWidth) {
         requestAnimationFrame(onCurrentLoaded);
     } else {
         currentImg.style.visibility = 'hidden';
+    }
+    if(previewSrc !== originalPreviewSrc){
+        const startUpgradeAfterQuickPreview = () => {
+            if(currentImg.dataset.previewSrcToken !== previewToken) return;
+            scheduleOriginalUpgrade();
+        };
+        if(currentImg.complete && currentImg.naturalWidth) startUpgradeAfterQuickPreview();
+        else currentImg.addEventListener('load', startUpgradeAfterQuickPreview, {once:true});
     }
     const sources = previewCompareSources();
     const hasSource = sources.length > 0;
@@ -15127,6 +15142,10 @@ function closeImageEditor(){
     cleanupSmartLogPreviewNode();
     previewCompareLoadToken++;
     previewComparePendingKey = '';
+    if(previewOriginalUpgradeTimer){
+        clearTimeout(previewOriginalUpgradeTimer);
+        previewOriginalUpgradeTimer = 0;
+    }
     imageEditModal.classList.remove('open', 'media-preparing');
     delete imageEditModal.dataset.openRequestKey;
     delete imageEditModal.dataset.openRequestAt;
