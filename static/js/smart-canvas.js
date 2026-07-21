@@ -3345,16 +3345,15 @@ function playGenerationErrorSound(){
         const play = () => {
             const start = ctx.currentTime + 0.015;
             [
-                {freq:520, at:0, duration:0.13},
-                {freq:380, at:0.14, duration:0.13},
-                {freq:260, at:0.28, duration:0.22}
+                {freq:440, at:0, duration:0.20},
+                {freq:349.23, at:0.14, duration:0.28}
             ].forEach(tone => {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-                osc.type = 'square';
+                osc.type = 'sine';
                 osc.frequency.setValueAtTime(tone.freq, start + tone.at);
                 gain.gain.setValueAtTime(0.0001, start + tone.at);
-                gain.gain.exponentialRampToValueAtTime(0.18, start + tone.at + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.075, start + tone.at + 0.028);
                 gain.gain.exponentialRampToValueAtTime(0.0001, start + tone.at + tone.duration);
                 osc.connect(gain).connect(ctx.destination);
                 osc.start(start + tone.at);
