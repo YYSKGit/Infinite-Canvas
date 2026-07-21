@@ -12300,6 +12300,8 @@ function bindNodeEvents(){
             selectedId = id;
             selectedIds = [];
             selectedImage = {nodeId:target.targetNodeId, index:target.imageIndex};
+            syncSelectionUi();
+            updateComposer();
             openImagePreviewSmart(target.targetNodeId, target.imageIndex);
         }, true);
         });
