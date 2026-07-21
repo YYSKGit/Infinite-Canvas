@@ -1644,6 +1644,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-log-lightbox img,.smart-log-lightbox video { max-width:min(94vw, 1400px); max-height:92vh; object-fit:contain; border-radius:12px; box-shadow:0 24px 64px rgba(2,6,23,.5); cursor:default; }
 .smart-log-lightbox img { background:var(--soft); }
 .smart-log-lightbox video { display:none; background:#0f172a; }
+.smart-log-lightbox.is-video-loading video { width:min(88vw, 960px); aspect-ratio:16 / 9; visibility:hidden; }
+.smart-log-lightbox.is-video-loading::after { content:''; position:absolute; left:50%; top:50%; width:28px; height:28px; margin:-14px 0 0 -14px; border:3px solid rgba(255,255,255,.24); border-top-color:#fff; border-radius:50%; pointer-events:none; animation:smart-video-spin .72s linear infinite; }
 .smart-log-lightbox-close { position:absolute; top:18px; right:18px; width:40px; height:40px; border-radius:999px; border:1px solid rgba(255,255,255,.28); background:rgba(15,23,42,.5); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:background .14s ease; }
 .smart-log-lightbox-close:hover { background:rgba(15,23,42,.78); }
 .smart-log-lightbox-close i,.smart-log-lightbox-close svg { width:18px !important; height:18px !important; }

@@ -10107,12 +10107,15 @@ function cleanupSmartLogPreviewNode(){
 function closeSmartLogLightbox(){
     const box = document.getElementById('smartLogLightbox');
     if(!box) return;
-    box.classList.remove('open');
+    box.dataset.mediaToken = String(Number(box.dataset.mediaToken || 0) + 1);
+    box.classList.remove('open', 'is-video-loading');
     const img = box.querySelector('img');
     if(img){ img.onerror = null; img.removeAttribute('src'); }
     const video = box.querySelector('video');
     if(video){
         video.onerror = null;
+        video.onloadeddata = null;
+        video.style.visibility = '';
         video.pause?.();
         video.removeAttribute('src');
         video.load?.();
@@ -10135,21 +10138,36 @@ function openSmartLogLightbox(url, kind='image'){
     }
     const img = box.querySelector('img');
     const video = box.querySelector('video');
+    const mediaToken = String(Number(box.dataset.mediaToken || 0) + 1);
+    box.dataset.mediaToken = mediaToken;
+    box.classList.remove('is-video-loading');
     img.onerror = null;
     img.removeAttribute('src');
     video.onerror = null;
+    video.onloadeddata = null;
+    video.style.visibility = '';
     video.pause?.();
     video.removeAttribute('src');
     video.load?.();
     img.style.display = isVideo ? 'none' : 'block';
     video.style.display = isVideo ? 'block' : 'none';
     if(isVideo){
+        const revealVideo = () => {
+            if(box.dataset.mediaToken !== mediaToken) return;
+            box.classList.remove('is-video-loading');
+            video.style.visibility = '';
+        };
+        video.style.visibility = 'hidden';
+        video.onloadeddata = revealVideo;
+        video.onerror = revealVideo;
         video.src = displayMediaUrl({url});
         video.load?.();
+        box.classList.add('is-video-loading');
         box.classList.add('open');
         refreshIcons();
         const playPromise = video.play?.();
         if(playPromise?.catch) playPromise.catch(() => {});
+        if(video.readyState >= 2) requestAnimationFrame(revealVideo);
         return;
     }
     // 原图加载失败时回退到缩略图同款的 media-preview 代理（PIL 渲染，对截断文件更宽容）。
