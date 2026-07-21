@@ -1157,7 +1157,45 @@ function smartVideoHasUsableInitialPoster(video){
         && Boolean(host?.querySelector('.smart-video-poster'))
         && !host.classList.contains('is-video-poster-unavailable');
 }
-function paintSmartVideoResetFrame(video, expectedEpoch){
+function smartVideoResetFrameTargetSize(video){
+    if(!video?.videoWidth || !video?.videoHeight) return null;
+    const host = video.closest('.smart-canvas-video-host');
+    if(!host) return null;
+    const rect = host.getBoundingClientRect();
+    const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1));
+    const sourceW = video.videoWidth;
+    const sourceH = video.videoHeight;
+    // clientWidth/clientHeight are not affected by the world transform. They
+    // keep a reset frame sharp at the node's logical 1x size even when it was
+    // captured while the canvas was zoomed out or the tab was being restored.
+    const logicalW = Math.max(2, Number(host.clientWidth) || 0);
+    const logicalH = Math.max(2, Number(host.clientHeight) || 0);
+    const visibleW = document.visibilityState === 'visible' && rect.width > 1 ? rect.width : 0;
+    const visibleH = document.visibilityState === 'visible' && rect.height > 1 ? rect.height : 0;
+    const displayScale = Math.max(
+        Math.max(2, Math.max(logicalW, visibleW) * dpr) / sourceW,
+        Math.max(2, Math.max(logicalH, visibleH) * dpr) / sourceH
+    );
+    const memoryScale = 1280 / Math.max(sourceW, sourceH);
+    const minimumScale = 256 / Math.max(sourceW, sourceH);
+    const scale = Math.max(Math.min(1, minimumScale), Math.min(1, displayScale, memoryScale));
+    return {
+        width:Math.max(2, Math.round(sourceW * scale)),
+        height:Math.max(2, Math.round(sourceH * scale))
+    };
+}
+function smartVideoResetFrameNeedsRefresh(video, force=false){
+    const host = video?.closest('.smart-canvas-video-host');
+    const frame = host?.querySelector('.smart-video-reset-frame');
+    if(!host || !frame) return false;
+    if(force || video.dataset.smartResetFrameDirty === '1') return true;
+    const target = smartVideoResetFrameTargetSize(video);
+    if(!target) return false;
+    // A little hysteresis prevents repeated reallocations around a zoom/DPR
+    // boundary while still upgrading a visibly undersized backing store.
+    return frame.width < target.width * .9 || frame.height < target.height * .9;
+}
+function paintSmartVideoResetFrame(video, expectedEpoch, options={}){
     if(!video?.isConnected) return false;
     if(String(video.dataset.smartPlaybackEpoch || 0) !== String(expectedEpoch)) return false;
     if(video.dataset.smartPlaybackWanted === '1' || !video.paused || video.seeking) return false;
@@ -1165,25 +1203,26 @@ function paintSmartVideoResetFrame(video, expectedEpoch){
     const host = video.closest('.smart-canvas-video-host');
     const frame = host?.querySelector('.smart-video-reset-frame');
     if(!host || !frame) return false;
-    const rect = host.getBoundingClientRect();
-    const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1));
-    const sourceW = video.videoWidth;
-    const sourceH = video.videoHeight;
-    const displayScale = Math.max(
-        Math.max(2, rect.width * dpr) / sourceW,
-        Math.max(2, rect.height * dpr) / sourceH
-    );
-    const memoryScale = 1280 / Math.max(sourceW, sourceH);
-    const minimumScale = 256 / Math.max(sourceW, sourceH);
-    const scale = Math.max(Math.min(1, minimumScale), Math.min(1, displayScale, memoryScale));
-    const width = Math.max(2, Math.round(sourceW * scale));
-    const height = Math.max(2, Math.round(sourceH * scale));
+    const target = smartVideoResetFrameTargetSize(video);
+    if(!target) return false;
+    const force = options.force === true || video.dataset.smartResetFrameDirty === '1';
+    if(!force && host.classList.contains('is-reset-frame-visible')
+        && frame.width >= target.width * .9 && frame.height >= target.height * .9) return true;
+    // Never downsample an already-good frame during the same DOM lifetime.
+    // Resizing the canvas and drawing happen synchronously in one task, so the
+    // browser cannot paint an empty backing store between them.
+    const hasPaintedFrame = host.classList.contains('is-reset-frame-visible');
+    const width = Math.max(target.width, hasPaintedFrame && frame.width > 1 ? frame.width : 0);
+    const height = Math.max(target.height, hasPaintedFrame && frame.height > 1 ? frame.height : 0);
     try {
         if(frame.width !== width) frame.width = width;
         if(frame.height !== height) frame.height = height;
         const context = frame.getContext('2d', {alpha:false});
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
         context.drawImage(video, 0, 0, width, height);
         delete video.dataset.smartResetFramePending;
+        delete video.dataset.smartResetFrameDirty;
         host.classList.add('is-reset-frame-visible');
         return true;
     } catch(e) {
@@ -1192,12 +1231,19 @@ function paintSmartVideoResetFrame(video, expectedEpoch){
         return false;
     }
 }
-function scheduleSmartVideoResetFrame(video, expectedEpoch){
+function scheduleSmartVideoResetFrame(video, expectedEpoch, options={}){
     if(!video) return;
     const epoch = String(expectedEpoch ?? video.dataset.smartPlaybackEpoch ?? 0);
     const existingHost = video.closest('.smart-canvas-video-host');
     const existingFrame = existingHost?.querySelector('.smart-video-reset-frame');
-    if(existingHost?.classList.contains('is-reset-frame-visible') && existingFrame?.width > 1 && existingFrame?.height > 1) return;
+    const force = options.force === true || video.dataset.smartResetFrameDirty === '1';
+    if(document.visibilityState === 'hidden'){
+        video.dataset.smartResetFrameDirty = '1';
+        return;
+    }
+    if(existingHost?.classList.contains('is-reset-frame-visible')
+        && existingFrame?.width > 1 && existingFrame?.height > 1
+        && !smartVideoResetFrameNeedsRefresh(video, force)) return;
     if(video.dataset.smartResetFramePending === epoch) return;
     video.dataset.smartResetFrameEpoch = epoch;
     video.dataset.smartResetFramePending = epoch;
@@ -1215,16 +1261,92 @@ function scheduleSmartVideoResetFrame(video, expectedEpoch){
         if(typeof video.requestVideoFrameCallback === 'function'){
             video.requestVideoFrameCallback((_, metadata) => {
                 if(!isCurrent()) return;
-                if(Number(metadata?.mediaTime || 0) <= .025) paintSmartVideoResetFrame(video, epoch);
+                if(Number(metadata?.mediaTime || 0) <= .025) paintSmartVideoResetFrame(video, epoch, {force});
             });
         }
         // drawImage after seeked is already reliable even when Chromium keeps
         // displaying an older video compositor surface. The next-frame retry
         // covers browsers without requestVideoFrameCallback.
-        paintSmartVideoResetFrame(video, epoch);
-        requestAnimationFrame(() => paintSmartVideoResetFrame(video, epoch));
+        paintSmartVideoResetFrame(video, epoch, {force});
+        requestAnimationFrame(() => paintSmartVideoResetFrame(video, epoch, {force}));
     };
     present();
+}
+const SMART_VIDEO_RESET_REFRESH_BATCH = 3;
+let smartVideoResetRefreshRaf = 0;
+let smartVideoResetRefreshQueued = false;
+let smartVideoResetRefreshTimer = 0;
+function smartVideoResetFrameIsInViewport(video){
+    const host = video?.closest('.smart-canvas-video-host');
+    if(!host) return false;
+    const rect = host.getBoundingClientRect();
+    return rect.width > 1 && rect.height > 1
+        && rect.right >= 0 && rect.bottom >= 0
+        && rect.left <= window.innerWidth && rect.top <= window.innerHeight;
+}
+function markSmartVideoResetFramesDirty(){
+    world?.querySelectorAll?.('.smart-canvas-video-host.is-reset-frame-visible .smart-canvas-video').forEach(video => {
+        video.dataset.smartResetFrameDirty = '1';
+    });
+}
+function refreshVisibleSmartVideoResetFrames(){
+    if(document.visibilityState !== 'visible') return;
+    const videos = [...(world?.querySelectorAll?.('.smart-canvas-video') || [])]
+        .filter(video => {
+            const host = video.closest('.smart-canvas-video-host');
+            return (host?.classList.contains('is-reset-frame-visible') || video.dataset.smartResetFrameDirty === '1')
+                && video.paused
+                && video.dataset.smartPlaybackWanted !== '1'
+                && (Number(video.currentTime) || 0) <= .025
+                && smartVideoResetFrameIsInViewport(video)
+                && smartVideoResetFrameNeedsRefresh(video);
+        });
+    let index = 0;
+    const paintBatch = () => {
+        if(document.visibilityState !== 'visible') return;
+        const end = Math.min(videos.length, index + SMART_VIDEO_RESET_REFRESH_BATCH);
+        for(; index < end; index++){
+            const video = videos[index];
+            if(!video?.isConnected) continue;
+            scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0, {
+                force:video.dataset.smartResetFrameDirty === '1'
+            });
+        }
+        if(index < videos.length) requestAnimationFrame(paintBatch);
+    };
+    paintBatch();
+}
+function scheduleSmartVideoResetFrameRefresh(options={}){
+    if(options.markDirty) markSmartVideoResetFramesDirty();
+    if(document.visibilityState !== 'visible') return;
+    if(options.debounce === true){
+        if(smartVideoResetRefreshTimer) clearTimeout(smartVideoResetRefreshTimer);
+        smartVideoResetRefreshTimer = setTimeout(() => {
+            smartVideoResetRefreshTimer = 0;
+            scheduleSmartVideoResetFrameRefresh({...options, debounce:false});
+        }, 90);
+        return;
+    }
+    if(smartVideoResetRefreshTimer){
+        clearTimeout(smartVideoResetRefreshTimer);
+        smartVideoResetRefreshTimer = 0;
+    }
+    smartVideoResetRefreshQueued = smartVideoResetRefreshQueued || options.settle === true;
+    if(smartVideoResetRefreshRaf) return;
+    const run = () => {
+        smartVideoResetRefreshRaf = 0;
+        const settle = smartVideoResetRefreshQueued;
+        smartVideoResetRefreshQueued = false;
+        if(settle){
+            smartVideoResetRefreshRaf = requestAnimationFrame(() => {
+                smartVideoResetRefreshRaf = 0;
+                refreshVisibleSmartVideoResetFrames();
+            });
+            return;
+        }
+        refreshVisibleSmartVideoResetFrames();
+    };
+    smartVideoResetRefreshRaf = requestAnimationFrame(run);
 }
 function resetSmartCanvasVideo(video){
     if(!video) return;
@@ -4164,6 +4286,7 @@ function applyViewport(){
     shell.style.setProperty('--canvas-grid-color', `color-mix(in srgb, var(--grid) ${fineGridFade * 100}%, transparent)`);
     shell.style.setProperty('--canvas-major-grid-color', `color-mix(in srgb, var(--grid) ${(1 - fineGridFade) * 30}%, transparent)`);
     renderMinimap();
+    scheduleSmartVideoResetFrameRefresh({debounce:true});
 }
 function screenToWorld(event){
     const rect = shell.getBoundingClientRect();
@@ -9657,6 +9780,7 @@ function updateNodeElementDuringResize(node){
     const active = selectedNode();
     if(active?.id === node.id) positionComposerForNode(active);
     scheduleInteractionLayerRefresh();
+    scheduleSmartVideoResetFrameRefresh({debounce:true});
 }
 function syncSmartGroupMemberElements(group){
     if(!isSmartGroupNode(group)) return;
@@ -11189,6 +11313,7 @@ function render(){
     bindSmartPreviewImageFallbacks(world);
     measureSmartNodeImages();
     refreshRunTimerPills();
+    scheduleSmartVideoResetFrameRefresh();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -11228,6 +11353,7 @@ function render(){
     if(window.lucide) lucide.createIcons();
     measureSmartNodeImages();
     refreshRunTimerPills();
+    scheduleSmartVideoResetFrameRefresh();
 }
 function measureSmartNodeImages(){
     world.querySelectorAll('.image-node img,.image-node video').forEach(imgEl => {
@@ -20232,11 +20358,17 @@ function smartBackgroundNotify(title, body=''){
     }
 }
 document.addEventListener('visibilitychange', () => {
-    if(document.visibilityState === 'visible') closeSmartBackgroundNotifications();
+    if(document.visibilityState === 'visible'){
+        closeSmartBackgroundNotifications();
+        scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
+    } else markSmartVideoResetFramesDirty();
 });
 window.addEventListener('focus', closeSmartBackgroundNotifications);
 window.addEventListener('pageshow', () => {
-    if(document.visibilityState === 'visible') closeSmartBackgroundNotifications();
+    if(document.visibilityState === 'visible'){
+        closeSmartBackgroundNotifications();
+        scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
+    }
 });
 function smartTaskKindText(kind='image'){
     if(kind === 'video') return '视频';
@@ -23012,6 +23144,7 @@ window.addEventListener('resize', () => {
     if(composerExpanded && selectedNode()) positionComposerForNode(selectedNode());
     if(cropState) syncImageEditOverflow();
     if(panoramaState.enabled) resizePanoramaViewer();
+    scheduleSmartVideoResetFrameRefresh({settle:true});
 });
 document.addEventListener('keydown', event => {
     if(event.key === 'Escape' && composerExpanded){
