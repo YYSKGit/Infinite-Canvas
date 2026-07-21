@@ -13672,20 +13672,20 @@ function refreshComparePanel(){
         updatePreviewMetaHint(tr('smart.panoramaHint'));
         return;
     }
-    const onCurrentLoaded = async () => {
+    const onCurrentLoaded = async (loadedVideo=currentVideo) => {
         if(currentImg.dataset.previewSrcToken !== previewToken) return;
         if(!imageEditModal.classList.contains('open')) return;
         if(currentLoadHandled) return;
         currentLoadHandled = true;
         if(isVideoPreview){
-            if(currentVideo){
-                currentVideo.style.visibility = '';
-                currentVideo.muted = false;
-                const playPromise = currentVideo.play?.();
+            if(loadedVideo){
+                loadedVideo.style.visibility = '';
+                loadedVideo.muted = false;
+                const playPromise = loadedVideo.play?.();
                 if(playPromise?.catch) playPromise.catch(() => {
                     if(currentImg.dataset.previewSrcToken !== previewToken) return;
-                    currentVideo.muted = true;
-                    currentVideo.play?.().catch(() => {});
+                    loadedVideo.muted = true;
+                    loadedVideo.play?.().catch(() => {});
                 });
             }
         } else {
@@ -13705,24 +13705,60 @@ function refreshComparePanel(){
         currentImg.style.display = 'none';
         if(currentVideo){
             const previewSrc = displayMediaUrl(editing.image || curUrl);
-            currentVideo.style.display = 'block';
-            currentVideo.style.visibility = 'hidden';
-            currentVideo.onloadedmetadata = () => {
-                videoHandoffReady = applySmartVideoPreviewHandoff(currentVideo, editing.node?.id || '', editing.index ?? 0);
+            const canKeepCurrentVideoVisible = imageEditModal.classList.contains('open')
+                && !imageEditModal.classList.contains('media-preparing')
+                && currentVideo.style.display !== 'none'
+                && currentVideo.style.visibility !== 'hidden'
+                && currentVideo.readyState >= 2
+                && currentVideo.getAttribute('src')
+                && currentVideo.getAttribute('src') !== previewSrc;
+            const nextVideo = canKeepCurrentVideoVisible ? currentVideo.cloneNode(false) : currentVideo;
+            if(canKeepCurrentVideoVisible){
+                // Loading a new URL into the visible player clears its decoded
+                // frame immediately. Prepare a second player off-DOM and swap
+                // it in only after its first frame (and optional handoff seek)
+                // is ready, matching the image preview's decode-before-swap.
+                nextVideo.removeAttribute('id');
+                nextVideo.removeAttribute('src');
+                nextVideo.style.display = 'block';
+                nextVideo.style.visibility = 'hidden';
+                currentVideo.pause?.();
+            } else {
+                currentVideo.style.display = 'block';
+                currentVideo.style.visibility = 'hidden';
+            }
+            let metadataHandled = false;
+            const prepareVideoHandoff = () => {
+                if(metadataHandled) return;
+                metadataHandled = true;
+                videoHandoffReady = applySmartVideoPreviewHandoff(nextVideo, editing.node?.id || '', editing.index ?? 0);
                 syncPreviewFrameSize();
                 updatePreviewMetaHint();
             };
-            currentVideo.onloadeddata = () => { Promise.resolve(videoHandoffReady).then(onCurrentLoaded); };
-            currentVideo.onerror = () => {
+            nextVideo.onloadedmetadata = prepareVideoHandoff;
+            nextVideo.onloadeddata = () => {
+                Promise.resolve(videoHandoffReady).then(() => {
+                    if(currentImg.dataset.previewSrcToken !== previewToken || !imageEditModal.classList.contains('open')) return;
+                    if(canKeepCurrentVideoVisible){
+                        const current = currentEditImage();
+                        if(current.node?.id !== editing.node?.id || Number(current.index ?? 0) !== Number(editing.index ?? 0)) return;
+                        nextVideo.id = 'previewCurrentVideo';
+                        currentVideo.replaceWith(nextVideo);
+                    }
+                    onCurrentLoaded(nextVideo);
+                });
+            };
+            nextVideo.onerror = () => {
                 if(!imageEditModal.classList.contains('media-preparing')) return;
                 closeImageEditor();
                 toast(tr('smart.errImageRead'));
             };
-            if(currentVideo.getAttribute('src') !== previewSrc){
-                currentVideo.src = previewSrc;
-                currentVideo.load?.();
+            if(nextVideo.getAttribute('src') !== previewSrc){
+                nextVideo.src = previewSrc;
+                nextVideo.load?.();
             }
-            if(currentVideo.readyState >= 2) requestAnimationFrame(() => { Promise.resolve(videoHandoffReady).then(onCurrentLoaded); });
+            if(nextVideo.readyState >= 1) prepareVideoHandoff();
+            if(nextVideo.readyState >= 2) requestAnimationFrame(() => nextVideo.onloadeddata?.());
         }
         previewCompareOn = false;
         previewCompareIndex = -1;
@@ -15135,10 +15171,12 @@ function openImageEditor(nodeId, imageIndex=0){
         previewVideo.onloadedmetadata = null;
         previewVideo.onloadeddata = null;
         previewVideo.onerror = null;
-        previewVideo.removeAttribute('src');
-        previewVideo.load?.();
-        previewVideo.style.display = 'none';
-        previewVideo.style.visibility = 'hidden';
+        if(!switchingVisibleMedia){
+            previewVideo.removeAttribute('src');
+            previewVideo.load?.();
+            previewVideo.style.display = 'none';
+            previewVideo.style.visibility = 'hidden';
+        }
     }
     if(compareImg){
         compareImg.onload = null;
