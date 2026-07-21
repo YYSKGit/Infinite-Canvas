@@ -10064,6 +10064,7 @@ function addSmartGenerationLog({run, outputs=[], runMs=0, error=''}) {
     scheduleSave();
 }
 const SMART_LOG_PREVIEW_NODE_ID = '__smart_log_preview__';
+const SMART_LOG_VIDEO_LOADING_INDICATOR_DELAY_MS = 220;
 let smartLogPreviewRestore = null;
 function smartLogOutputItem(output){
     if(typeof output === 'string') return {url:output};
@@ -10108,7 +10109,7 @@ function closeSmartLogLightbox(){
     const box = document.getElementById('smartLogLightbox');
     if(!box) return;
     box.dataset.mediaToken = String(Number(box.dataset.mediaToken || 0) + 1);
-    box.classList.remove('open', 'is-video-loading');
+    box.classList.remove('open', 'is-video-loading', 'show-video-loading-indicator');
     const img = box.querySelector('img');
     if(img){ img.onerror = null; img.removeAttribute('src'); }
     const video = box.querySelector('video');
@@ -10140,7 +10141,7 @@ function openSmartLogLightbox(url, kind='image'){
     const video = box.querySelector('video');
     const mediaToken = String(Number(box.dataset.mediaToken || 0) + 1);
     box.dataset.mediaToken = mediaToken;
-    box.classList.remove('is-video-loading');
+    box.classList.remove('is-video-loading', 'show-video-loading-indicator');
     img.onerror = null;
     img.removeAttribute('src');
     video.onerror = null;
@@ -10154,7 +10155,7 @@ function openSmartLogLightbox(url, kind='image'){
     if(isVideo){
         const revealVideo = () => {
             if(box.dataset.mediaToken !== mediaToken) return;
-            box.classList.remove('is-video-loading');
+            box.classList.remove('is-video-loading', 'show-video-loading-indicator');
             video.style.visibility = '';
         };
         video.style.visibility = 'hidden';
@@ -10163,6 +10164,10 @@ function openSmartLogLightbox(url, kind='image'){
         video.src = displayMediaUrl({url});
         video.load?.();
         box.classList.add('is-video-loading');
+        setTimeout(() => {
+            if(box.dataset.mediaToken !== mediaToken || !box.classList.contains('is-video-loading')) return;
+            box.classList.add('show-video-loading-indicator');
+        }, SMART_LOG_VIDEO_LOADING_INDICATOR_DELAY_MS);
         box.classList.add('open');
         refreshIcons();
         const playPromise = video.play?.();
