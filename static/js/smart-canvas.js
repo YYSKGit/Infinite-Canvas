@@ -2145,6 +2145,107 @@ function bindSmartPreviewImageFallbacks(root=document){
         });
     });
 }
+const SMART_IMAGE_LOD_TIERS = [512, 768, 1024, 1536, 2048];
+const SMART_IMAGE_LOD_MAX_CONCURRENT = 2;
+const smartImageLodStates = new WeakMap();
+let smartImageLodTimer = 0;
+let smartImageLodActiveLoads = 0;
+const smartImageLodQueue = [];
+function smartImageLodState(img){
+    let state = smartImageLodStates.get(img);
+    if(!state){
+        const baseTier = Math.max(64, Number(img?.dataset?.smartImageLodBase) || 768);
+        state = {baseTier, currentTier:baseTier, requestedTier:baseTier, token:0, downgradeTimer:0, loader:null};
+        smartImageLodStates.set(img, state);
+    }
+    return state;
+}
+function smartImageLodTargetTier(img, state){
+    const rect = img.getBoundingClientRect();
+    if(rect.right <= 0 || rect.bottom <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return state.baseTier;
+    const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1));
+    const required = Math.max(rect.width, rect.height) * dpr;
+    // Keep the normal preview until it is visibly undersized. This hysteresis
+    // keeps small wheel movements around a tier boundary from causing churn.
+    if(required <= state.baseTier * 1.15) return state.baseTier;
+    return SMART_IMAGE_LOD_TIERS.find(tier => tier >= required * 1.05) || SMART_IMAGE_LOD_TIERS[SMART_IMAGE_LOD_TIERS.length - 1];
+}
+function drainSmartImageLodQueue(){
+    while(smartImageLodActiveLoads < SMART_IMAGE_LOD_MAX_CONCURRENT && smartImageLodQueue.length){
+        const job = smartImageLodQueue.shift();
+        const {img, state, tier, token} = job;
+        if(!img?.isConnected || state.token !== token || state.requestedTier !== tier) continue;
+        smartImageLodActiveLoads++;
+        const loader = new Image();
+        state.loader = loader;
+        loader.decoding = 'async';
+        const url = smartMediaPreviewUrl(img.dataset.originalSrc || '', tier);
+        const loaded = new Promise((resolve, reject) => {
+            loader.onload = resolve;
+            loader.onerror = reject;
+        });
+        loader.src = url;
+        loaded.then(() => loader.decode?.()).catch(() => {}).then(() => {
+            if(!img.isConnected || state.token !== token || state.requestedTier !== tier || !loader.naturalWidth) return;
+            // The replacement is already decoded, so assigning src preserves the
+            // old pixels until the browser can paint the new resource.
+            img.src = url;
+            img.dataset.previewSrc = url;
+            img.dataset.smartImageLodTier = String(tier);
+            state.currentTier = tier;
+        }).finally(() => {
+            if(state.token === token && state.currentTier !== tier) state.requestedTier = state.currentTier;
+            if(state.loader === loader) state.loader = null;
+            smartImageLodActiveLoads = Math.max(0, smartImageLodActiveLoads - 1);
+            drainSmartImageLodQueue();
+        });
+    }
+}
+function requestSmartImageLodTier(img, state, tier){
+    if(state.currentTier === tier || state.requestedTier === tier) return;
+    state.requestedTier = tier;
+    state.token++;
+    smartImageLodQueue.push({img, state, tier, token:state.token});
+    drainSmartImageLodQueue();
+}
+function refreshSmartImageLod(){
+    if(document.visibilityState !== 'visible') return;
+    world.querySelectorAll('img[data-smart-image-lod="1"]').forEach(img => {
+        const original = img.dataset.originalSrc || '';
+        if(!original || !smartMediaPreviewUrl(original, 768).includes('/api/media-preview?')) return;
+        const state = smartImageLodState(img);
+        const targetTier = smartImageLodTargetTier(img, state);
+        if(targetTier > state.currentTier){
+            if(state.downgradeTimer){ clearTimeout(state.downgradeTimer); state.downgradeTimer = 0; }
+            requestSmartImageLodTier(img, state, targetTier);
+        } else if(targetTier < state.currentTier){
+            // Downgrades are deliberately slow: brief zoom-outs retain the warm
+            // high-resolution bitmap and cannot oscillate between two tiers.
+            if(!state.downgradeTimer) state.downgradeTimer = setTimeout(() => {
+                state.downgradeTimer = 0;
+                if(!img.isConnected || document.visibilityState !== 'visible') return;
+                const settledTier = smartImageLodTargetTier(img, state);
+                if(settledTier < state.currentTier) requestSmartImageLodTier(img, state, settledTier);
+            }, 4000);
+        } else {
+            if(state.requestedTier !== state.currentTier){
+                state.requestedTier = state.currentTier;
+                state.token++;
+            }
+            if(state.downgradeTimer){
+                clearTimeout(state.downgradeTimer);
+                state.downgradeTimer = 0;
+            }
+        }
+    });
+}
+function scheduleSmartImageLodRefresh(options={}){
+    if(smartImageLodTimer) clearTimeout(smartImageLodTimer);
+    smartImageLodTimer = setTimeout(() => {
+        smartImageLodTimer = 0;
+        refreshSmartImageLod();
+    }, options.settle ? 320 : 220);
+}
 function cloneSmartSettings(source=settings){
     try {
         return JSON.parse(JSON.stringify(source || {}));
@@ -4286,6 +4387,7 @@ function applyViewport(){
     shell.style.setProperty('--canvas-major-grid-color', `color-mix(in srgb, var(--grid) ${(1 - fineGridFade) * 30}%, transparent)`);
     renderMinimap();
     scheduleSmartVideoResetFrameRefresh({debounce:true});
+    scheduleSmartImageLodRefresh();
 }
 function screenToWorld(event){
     const rect = shell.getBoundingClientRect();
@@ -9780,6 +9882,7 @@ function updateNodeElementDuringResize(node){
     if(active?.id === node.id) positionComposerForNode(active);
     scheduleInteractionLayerRefresh();
     scheduleSmartVideoResetFrameRefresh({debounce:true});
+    scheduleSmartImageLodRefresh();
 }
 function syncSmartGroupMemberElements(group){
     if(!isSmartGroupNode(group)) return;
@@ -9927,7 +10030,7 @@ function thumbMediaHtml(img){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="media-thumb file-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="${escapeAttr(mediaKindForItem(img))}"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i><span>${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</span></div>`;
     if(isAudioMediaItem(img)) return `<div class="media-thumb audio-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`;
     if(isVideoMediaItem(img)) return `<div class="media-thumb video-thumb smart-canvas-video-host">${smartCanvasVideoHtml(img.url || '')}</div>`;
-    return smartPreviewImgHtml(img, 512, 'draggable="false"');
+    return smartPreviewImgHtml(img, 512, 'draggable="false" data-smart-image-lod="1" data-smart-image-lod-base="512"');
 }
 function imageResolutionLabel(img){
     const w = Number(img?.natural_w || img?.width || img?.w || 0);
@@ -10045,7 +10148,7 @@ function singleMediaHtml(img, w, h){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card smart-canvas-video-host" style="width:${w}px;height:${h}px">${smartCanvasVideoHtml(img.url || '')}</div>`;
-    return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+    return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" data-smart-image-lod="1" data-smart-image-lod-base="768" style="width:${w}px;height:${h}px"`);
 }
 function smartNodeHasLiveMedia(node){
     return Boolean(!nodeHasLiveRunState(node) && (node?.images || []).some(img => img?.url));
@@ -11321,6 +11424,7 @@ function render(){
     measureSmartNodeImages();
     refreshRunTimerPills();
     scheduleSmartVideoResetFrameRefresh();
+    scheduleSmartImageLodRefresh();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -20522,6 +20626,7 @@ document.addEventListener('visibilitychange', () => {
     if(document.visibilityState === 'visible'){
         closeSmartBackgroundNotifications();
         scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
+        scheduleSmartImageLodRefresh({settle:true});
     } else markSmartVideoResetFramesDirty();
 });
 window.addEventListener('focus', closeSmartBackgroundNotifications);
@@ -20529,6 +20634,7 @@ window.addEventListener('pageshow', () => {
     if(document.visibilityState === 'visible'){
         closeSmartBackgroundNotifications();
         scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
+        scheduleSmartImageLodRefresh({settle:true});
     }
 });
 function smartTaskKindText(kind='image'){
@@ -23314,6 +23420,7 @@ window.addEventListener('resize', () => {
     if(cropState) syncImageEditOverflow();
     if(panoramaState.enabled) resizePanoramaViewer();
     scheduleSmartVideoResetFrameRefresh({settle:true});
+    scheduleSmartImageLodRefresh({settle:true});
 });
 document.addEventListener('keydown', event => {
     if(event.key === 'Escape' && composerExpanded){

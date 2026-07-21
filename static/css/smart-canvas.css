@@ -545,6 +545,23 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .smart-video-reset-frame { position:absolute; inset:0; z-index:2; width:100%; height:100%; object-fit:cover; display:block; visibility:hidden; opacity:0; pointer-events:none; background:#0f172a; }
 .thumb-item .smart-video-reset-frame,.media-thumb.video-thumb .smart-video-reset-frame { object-fit:contain; background:transparent; }
 .thumb-item .smart-video-poster,.media-thumb.video-thumb .smart-video-poster { width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; object-position:center; background:transparent; }
+/* Group thumbnails letterbox portrait/landscape video inside a square card.
+   Size the static poster/reset canvas like the live video element so the
+   radius clips the actual media edge instead of the transparent square. */
+.thumb-item .smart-video-poster,
+.thumb-item .smart-video-reset-frame,
+.media-thumb.video-thumb .smart-video-poster,
+.media-thumb.video-thumb .smart-video-reset-frame {
+    inset:auto;
+    left:50%;
+    top:50%;
+    width:auto;
+    height:auto;
+    max-width:100%;
+    max-height:100%;
+    transform:translate(-50%, -50%);
+    border-radius:11px;
+}
 .smart-canvas-video-host.is-reset-frame-visible .smart-video-reset-frame { visibility:visible; opacity:1; }
 .smart-canvas-video-host:not(.is-playing) .smart-canvas-video { cursor:pointer; }
 .smart-canvas-video-host.autoplay-blocked::after { content:'点击开启声音'; position:absolute; left:50%; top:50%; z-index:4; transform:translate(-50%,-50%); padding:7px 11px; border-radius:999px; background:rgba(15,23,42,.78); color:#fff; font-size:11px; font-weight:800; pointer-events:none; }
