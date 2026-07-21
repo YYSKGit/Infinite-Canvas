@@ -8955,6 +8955,24 @@ def venice_video_reference_url(ref):
     data_url = reference_to_data_url(ref.model_dump(), max_size=4096)
     return str(data_url or "").strip()
 
+def venice_video_image_fields(payload: CanvasVideoRequest) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {}
+    reference_urls = []
+    for ref in (payload.images or [])[:4]:
+        ref_url = venice_video_reference_url(ref)
+        if not ref_url:
+            continue
+        role = str(getattr(ref, "role", "") or "").strip().lower()
+        if role == "first_frame":
+            fields.setdefault("imageUrl", ref_url)
+        elif role == "last_frame":
+            fields.setdefault("endImageUrl", ref_url)
+        else:
+            reference_urls.append(ref_url)
+    if reference_urls:
+        fields["referenceImageUrls"] = reference_urls
+    return fields
+
 def venice_aspect_ratio_value(value: str) -> float:
     raw = str(value or "").strip()
     if not raw:
@@ -9418,13 +9436,7 @@ async def generate_venice_video(client, payload, provider, requested_model):
         "audio": bool(payload.generate_audio),
         "simpleMode": False,
     }
-    reference_urls = []
-    for ref in (payload.images or [])[:4]:
-        ref_url = venice_video_reference_url(ref)
-        if ref_url:
-            reference_urls.append(ref_url)
-    if reference_urls:
-        body["referenceImageUrls"] = reference_urls
+    body.update(venice_video_image_fields(payload))
     if venice_video_requires_face_consent(model):
         body["faceConsent"] = dict(VENICE_SEEDANCE_FACE_CONSENT)
     async def send(jwt, _user_id):
