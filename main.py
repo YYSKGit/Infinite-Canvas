@@ -3536,12 +3536,79 @@ def canvas_asset_log_times(canvas):
                 times[url] = max(timestamp, times.get(url, 0))
     return times
 
+def canvas_asset_log_metadata(canvas):
+    metadata = {}
+    logs = canvas.get("logs") if isinstance(canvas.get("logs"), list) else []
+    for log in logs:
+        if not isinstance(log, dict) or str(log.get("status") or "success") != "success":
+            continue
+        request = log.get("request") if isinstance(log.get("request"), dict) else {}
+        entry = {
+            "generation_prompt": str(log.get("prompt") or "").strip(),
+            "generation_model": str(log.get("model") or request.get("model") or "").strip(),
+            "generation_model_id": str(request.get("model") or "").strip(),
+            "generation_provider": str(log.get("platform") or "").strip(),
+        }
+        outputs = log.get("outputs") if isinstance(log.get("outputs"), list) else []
+        for output in outputs:
+            url = canvas_asset_downloadable_url(canvas_asset_url_value(output))
+            # Logs are newest-first. Preserve the first matching successful run
+            # so regenerating a node does not relabel an older output.
+            if url and url not in metadata:
+                metadata[url] = entry
+    return metadata
+
+def canvas_asset_settings_metadata(settings):
+    if not isinstance(settings, dict):
+        return {}
+    engine = str(settings.get("engine") or "").strip().lower()
+    api_kind = str(settings.get("apiKind") or "").strip().lower()
+    if engine == "modelscope":
+        model = settings.get("msCustomModel") or settings.get("msgenModel")
+    elif engine == "comfy":
+        model = settings.get("comfyWorkflow")
+    elif engine == "runninghub":
+        model = settings.get("rhConfigKey")
+    elif api_kind == "video":
+        model = settings.get("videoModel")
+    else:
+        model = settings.get("model")
+    return {
+        "generation_model": str(model or "").strip(),
+        "generation_model_id": str(model or "").strip(),
+    }
+
+def canvas_asset_generation_metadata(node, raw, log_meta=None):
+    result = dict(log_meta or {})
+    snapshot = raw.get("_genPrompt") if isinstance(raw, dict) and isinstance(raw.get("_genPrompt"), dict) else {}
+    node_has_run_snapshot = isinstance(node, dict) and any(
+        node.get(key) not in (None, "", 0)
+        for key in ("runPrompt", "runModelPrompt", "runAt")
+    )
+    source = snapshot or (node if node_has_run_snapshot else {})
+    settings = source.get("runSettings") if isinstance(source.get("runSettings"), dict) else {}
+    settings_meta = canvas_asset_settings_metadata(settings)
+    for key, value in settings_meta.items():
+        if not result.get(key):
+            result[key] = value
+    if not result.get("generation_prompt"):
+        result["generation_prompt"] = str(
+            source.get("runModelPrompt") or source.get("runPrompt")
+            or source.get("prompt") or source.get("text") or ""
+        ).strip()
+    if not result.get("generation_model"):
+        result["generation_model"] = str(source.get("model") or "").strip()
+    if not result.get("generation_model_id"):
+        result["generation_model_id"] = str(source.get("model") or result.get("generation_model") or "").strip()
+    return {key:value for key, value in result.items() if value not in (None, "", {}, 0)}
+
 def extract_canvas_assets(canvas):
     record = canvas_record(canvas)
     canvas_id = str(record.get("id") or "")
     items = []
     seen = set()
     log_times = canvas_asset_log_times(canvas)
+    log_metadata = canvas_asset_log_metadata(canvas)
     nodes = canvas.get("nodes") if isinstance(canvas.get("nodes"), list) else []
     for node_index, node in enumerate(nodes):
         if not isinstance(node, dict):
@@ -3582,6 +3649,7 @@ def extract_canvas_assets(canvas):
                 for key in ("natural_w", "natural_h", "width", "height", "size", "duration", "runMs"):
                     if raw.get(key) is not None:
                         item[key] = raw.get(key)
+            item.update(canvas_asset_generation_metadata(node, raw, log_metadata.get(url)))
             items.append(item)
     return items
 

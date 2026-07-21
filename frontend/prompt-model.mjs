@@ -110,15 +110,38 @@ function referenceForPlaceholder(type, index, references){
   return references.filter(ref => normalizeReferenceKind(ref.kind) === expectedKind)[Math.max(0, Number(index) - 1)] || null;
 }
 
+function promptReferenceMatch(match){
+  if(match[1]) return {type:match[1], index:match[2]};
+  if(match[3]) return {type:match[3], index:match[4]};
+  const chineseType = match[5];
+  return {
+    type:chineseType === '视频' ? 'Video' : chineseType === '音频' ? 'Audio' : 'Image',
+    index:match[6]
+  };
+}
+
+function hasPromptReferenceBoundary(value, match){
+  // Chinese references are commonly written inline (for example "参考图1的风格"),
+  // so only the @ aliases need a word/email boundary guard.
+  if(match[1] || match[5] || match.index === 0) return true;
+  return /[\s([{"'“‘，。,:：;；、]/.test(value[match.index - 1] || '');
+}
+
 export function parsePromptTextSegments(text, orderedReferences=[]){
   const value = String(text || '');
-  const pattern = /\{\{\s*(Image|Video|Audio)\s+(\d+)\s*\}\}/gi;
+  // Keep the canonical {{Image 1}} exchange format, while also accepting the
+  // compact forms commonly found in copied generation logs and prompts.
+  const pattern = /\{\{\s*(Image|Video|Audio)\s+(\d+)\s*\}\}|@(image|video|audio)\s*(\d+)|(\u56fe(?:\u7247)?|\u89c6\u9891|\u97f3\u9891)\s*(\d+)/gi;
   const segments = [];
   let cursor = 0;
   let match;
   while((match = pattern.exec(value))){
+    // Do not reinterpret substrings such as an email ending in @image1 as a
+    // media reference.
+    if(!hasPromptReferenceBoundary(value, match)) continue;
     if(match.index > cursor) segments.push({type:'text', text:value.slice(cursor, match.index)});
-    const ref = referenceForPlaceholder(match[1], match[2], orderedReferences);
+    const placeholder = promptReferenceMatch(match);
+    const ref = referenceForPlaceholder(placeholder.type, placeholder.index, orderedReferences);
     if(ref) segments.push({type:'reference', refId:ref.refId});
     else segments.push({type:'text', text:match[0], unresolved:true});
     cursor = pattern.lastIndex;

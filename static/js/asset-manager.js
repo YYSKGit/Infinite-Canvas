@@ -156,6 +156,7 @@ let selectedCanvasAssetIds = new Set();
 let canvasAssetQuery = '';
 let canvasAssetSort = readCanvasAssetSort();
 let canvasAssetManageMode = false;
+let canvasAssetDetailSwapToken = 0;
 let previewMuted = savedPreviewSettings.muted !== false;
 let searchCompositionActive = false;
 let searchRenderTimer = null;
@@ -565,7 +566,9 @@ function renderDetailMedia(item, options={}){
             <button class="asset-icon-btn detail-media-toggle" type="button" data-preview-mute-toggle title="${escapeAttr(previewMuted ? '开启声音' : '静音')}"><i data-lucide="${previewMuted ? 'volume-x' : 'volume-2'}"></i></button>
         </div>`;
     }
-    const thumb = options.thumbHtml || assetThumb(item);
+    const thumb = options.thumbHtml || (kind === 'image'
+        ? `<img src="${escapeAttr(assetPreviewUrl(item.url, 1024))}" alt="${escapeAttr(item.name || 'asset')}" loading="eager" decoding="async">`
+        : assetThumb(item));
     if(kind === 'image' && options.previewAttr){
         return `<button class="detail-media-frame detail-media-zoomable" type="button" ${options.previewAttr} title="${escapeAttr(options.previewTitle || '点击放大预览')}">${thumb}</button>`;
     }
@@ -1173,7 +1176,8 @@ function moveSelectionByArrowKey(key){
     if(!nextId) return false;
     ctx.setSelected(nextId);
     pendingBatchDelete = '';
-    render();
+    if(activeTab === 'canvas-assets') refreshCanvasAssetSelectionOnly();
+    else render();
     requestAnimationFrame(() => {
         const nextEl = [...root.querySelectorAll(ctx.selector)].find(el => (el.dataset?.[ctx.dataKey] || '') === nextId);
         nextEl?.scrollIntoView({block:'nearest', inline:'nearest'});
@@ -1440,7 +1444,7 @@ function renderCanvasAssetsManager(){
                 </div>
             </div>
         </section>
-        <aside class="asset-panel asset-detail">
+        <aside class="asset-panel asset-detail" data-canvas-asset-detail-id="${escapeAttr(detail?.id || '')}">
             ${renderCanvasAssetDetail(detail)}
         </aside>
     `;
@@ -1501,6 +1505,10 @@ function renderCanvasAssetDetail(item){
     if(!item) return `<div class="panel-head"><div class="panel-title"><strong>画布资产详情</strong><span>选择一个画布资产查看详情</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="layout-dashboard"></i><span>暂无画布资产</span></div></div>`;
     const kind = assetKind(item);
     const canPreview = ['image','video'].includes(kind);
+    const generationPrompt = String(item.generation_prompt || '').trim();
+    const generationModel = String(item.generation_model || item.generation_model_id || '').trim();
+    const generationModelId = String(item.generation_model_id || '').trim();
+    const generationProvider = String(item.generation_provider || '').trim();
     return `
         <div class="panel-head">
             <div class="panel-title"><strong>画布资产详情</strong><span>${escapeHtml(canvasAssetKindLabel(item))}</span></div>
@@ -1521,17 +1529,56 @@ function renderCanvasAssetDetail(item){
             <div class="detail-body">
                 <div class="detail-name">${escapeHtml(item.name || '画布资产')}</div>
                 <div class="detail-meta-grid">
-                    <div class="detail-meta"><span>类型</span><strong>${escapeHtml(canvasAssetKindLabel(item))}</strong></div>
-                    <div class="detail-meta"><span>画布分类</span><strong>${escapeHtml(canvasKindLabel(item.canvas_kind))}</strong></div>
+                    <div class="detail-meta"><span>生成模型</span><strong title="${escapeAttr(generationModelId || generationModel)}">${escapeHtml(generationModel || '未记录')}</strong></div>
+                    <div class="detail-meta"><span>生成平台</span><strong>${escapeHtml(generationProvider || '未记录')}</strong></div>
                     <div class="detail-meta"><span>来源画布</span><strong title="${escapeAttr(item.canvas_title || '')}">${escapeHtml(item.canvas_title || '未命名画布')}</strong></div>
                     <div class="detail-meta"><span>创建时间</span><strong>${escapeHtml(formatDate(item.created_at))}</strong></div>
-                    <div class="detail-meta"><span>来源节点</span><strong title="${escapeAttr(item.node_title || item.node_type || '')}">${escapeHtml(item.node_title || item.node_type || '节点')}</strong></div>
-                    <div class="detail-meta"><span>节点类型</span><strong>${escapeHtml(item.node_type || '-')}</strong></div>
                 </div>
-                <div class="detail-url">${escapeHtml(item.url || '')}</div>
+                ${generationPrompt ? `<section class="canvas-generation-card">
+                    <div class="canvas-generation-card-head">生成提示词</div>
+                    <div class="canvas-generation-prompt">${escapeHtml(generationPrompt)}</div>
+                </section>` : `<div class="canvas-generation-empty">该资产没有可用的生成提示词记录</div>`}
             </div>
         </div>
     `;
+}
+function waitForCanvasAssetDetailMedia(media, timeoutMs=4000){
+    if(!media) return Promise.resolve();
+    const ready = async () => {
+        if(media.tagName === 'IMG' && typeof media.decode === 'function'){
+            try { await media.decode(); } catch(_) {}
+        }
+    };
+    if(media.tagName === 'IMG' && media.complete) return ready();
+    if(media.tagName === 'VIDEO' && media.readyState >= 2) return Promise.resolve();
+    const eventName = media.tagName === 'VIDEO' ? 'loadeddata' : 'load';
+    return Promise.race([
+        new Promise(resolve => {
+            media.addEventListener(eventName, () => { Promise.resolve(ready()).finally(resolve); }, {once:true});
+            media.addEventListener('error', resolve, {once:true});
+        }),
+        new Promise(resolve => setTimeout(resolve, timeoutMs))
+    ]);
+}
+async function swapCanvasAssetDetailWhenReady(detail, item){
+    const token = ++canvasAssetDetailSwapToken;
+    const nextId = String(item?.id || '');
+    if(String(detail?.dataset?.canvasAssetDetailId || '') === nextId) return;
+    const staging = document.createElement('div');
+    staging.innerHTML = renderCanvasAssetDetail(item);
+    const media = staging.querySelector('.detail-media-frame img,.detail-preview-video');
+    if(media?.tagName === 'VIDEO'){
+        media.muted = !!previewMuted;
+        media.defaultMuted = !!previewMuted;
+        media.load?.();
+    }
+    await waitForCanvasAssetDetailMedia(media);
+    if(token !== canvasAssetDetailSwapToken || !detail?.isConnected || String(selectedCanvasAsset()?.id || '') !== nextId) return;
+    detail.querySelectorAll('video').forEach(video => { try { video.pause?.(); } catch(_) {} });
+    detail.replaceChildren(...staging.childNodes);
+    detail.dataset.canvasAssetDetailId = nextId;
+    refreshIcons();
+    initializeDetailPreviewMedia(detail);
 }
 function refreshCanvasAssetSelectionOnly(){
     document.querySelectorAll('[data-canvas-asset-card]').forEach(card => {
@@ -1541,11 +1588,7 @@ function refreshCanvasAssetSelectionOnly(){
         input.checked = selectedCanvasAssetIds.has(input.dataset.canvasAssetCheck);
     });
     const detail = root.querySelector('.asset-detail');
-    if(detail){
-        detail.innerHTML = renderCanvasAssetDetail(selectedCanvasAsset());
-        refreshIcons();
-        initializeDetailPreviewMedia(detail);
-    }
+    if(detail) swapCanvasAssetDetailWhenReady(detail, selectedCanvasAsset());
 }
 function renderHeadTreeInlineEdit(edit, inputId, saveAttr, cancelAttr){
     if(!edit || edit.placement !== 'head') return '';
