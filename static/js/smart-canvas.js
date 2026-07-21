@@ -13679,6 +13679,10 @@ function refreshComparePanel(){
         currentLoadHandled = true;
         if(isVideoPreview){
             if(loadedVideo){
+                // Native video controls tend to reveal themselves for about a
+                // second after a programmatic load/play. Keep them dormant
+                // until the user actually points at or presses the video.
+                loadedVideo.controls = false;
                 loadedVideo.style.visibility = '';
                 loadedVideo.muted = false;
                 const playPromise = loadedVideo.play?.();
@@ -13720,6 +13724,7 @@ function refreshComparePanel(){
                 // is ready, matching the image preview's decode-before-swap.
                 nextVideo.removeAttribute('id');
                 nextVideo.removeAttribute('src');
+                nextVideo.controls = false;
                 nextVideo.style.display = 'block';
                 nextVideo.style.visibility = 'hidden';
                 currentVideo.pause?.();
@@ -15168,6 +15173,7 @@ function openImageEditor(nodeId, imageIndex=0){
     }
     if(previewVideo){
         previewVideo.pause?.();
+        previewVideo.controls = false;
         previewVideo.onloadedmetadata = null;
         previewVideo.onloadeddata = null;
         previewVideo.onerror = null;
@@ -23130,6 +23136,14 @@ document.getElementById('previewStage').addEventListener('mousedown', event => {
     }
     previewPanDrag = {clientX:event.clientX, clientY:event.clientY, startX:previewPan.x, startY:previewPan.y};
 });
+function revealPreviewVideoControls(event){
+    const video = event.target?.closest?.('#previewCurrentVideo');
+    if(video) video.controls = true;
+}
+// Do not let programmatic autoplay summon the native progress bar. The normal
+// controls remain one genuine mouse/touch interaction away.
+document.getElementById('previewStage').addEventListener('pointermove', revealPreviewVideoControls);
+document.getElementById('previewStage').addEventListener('pointerdown', revealPreviewVideoControls);
 document.getElementById('imageEditStage').addEventListener('mousedown', event => {
     if(imageEditMode === 'preview' || event.button !== 0) return;
     if(event.target.closest('.image-edit-actions, .preview-tools-overlay, .preview-download-overlay, .crop-box, .crop-handle')) return;
