@@ -46,6 +46,14 @@ function escapeHtml(value){
   return String(value || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
 
+function inlineNeighborNeedsSpace(node, edge){
+  if(!node || node.type === schema.nodes.hard_break) return false;
+  if(!node.isText) return true;
+  const text = node.text || '';
+  const character = edge === 'left' ? text.at(-1) : text[0];
+  return Boolean(character && !/\s/u.test(character));
+}
+
 function sliceReferenceIds(slice){
   const ids = new Set();
   slice.content.descendants(node => {
@@ -491,8 +499,15 @@ export class SmartPromptEditor {
       const before = state.doc.textBetween(state.selection.from - 1, state.selection.from, '', '');
       if(before === '@') transaction = transaction.delete(state.selection.from - 1, state.selection.from);
     }
+    const insertion = transaction.selection;
+    const insertionFrom = insertion.from;
+    const addLeftSpace = inlineNeighborNeedsSpace(insertion.$from.nodeBefore, 'left');
+    const addRightSpace = !insertion.$to.nodeAfter
+      || inlineNeighborNeedsSpace(insertion.$to.nodeAfter, 'right');
     transaction = transaction.replaceSelectionWith(schema.nodes.media_reference.create({refId:ref.refId}), false);
-    transaction = transaction.insertText(' ').scrollIntoView();
+    if(addRightSpace) transaction = transaction.insertText(' ');
+    if(addLeftSpace) transaction = transaction.insertText(' ', insertionFrom);
+    transaction = transaction.scrollIntoView();
     this.view.dispatch(transaction);
     this.view.focus();
     return ref;
