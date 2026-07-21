@@ -1138,15 +1138,35 @@ function keyboardSelectionContext(){
     }
     return null;
 }
-function inferGridColumns(elements){
-    if(!elements.length) return 1;
-    const firstTop = elements[0].offsetTop;
-    let cols = 0;
-    for(const el of elements){
-        if(Math.abs(el.offsetTop - firstTop) > 4) break;
-        cols += 1;
-    }
-    return Math.max(1, cols || 1);
+function findVerticalSelectionIndex(elements, currentIndex, direction){
+    const currentRect = elements[currentIndex]?.getBoundingClientRect?.();
+    if(!currentRect) return currentIndex;
+    const currentTop = currentRect.top;
+    const currentCenterX = currentRect.left + currentRect.width / 2;
+    const candidates = elements.map((element, index) => {
+        const rect = element?.getBoundingClientRect?.();
+        return rect ? {index, rect} : null;
+    }).filter(candidate => {
+        if(!candidate || candidate.index === currentIndex) return false;
+        const topDelta = candidate.rect.top - currentTop;
+        return direction < 0 ? topDelta < -4 : topDelta > 4;
+    });
+    if(!candidates.length) return currentIndex;
+
+    // Asset grids can be split into groups with empty CSS grid tracks. DOM-index
+    // arithmetic therefore does not reliably represent the card directly above
+    // or below the current one. First find the adjacent visual row, then choose
+    // the card on that row whose horizontal centre is closest to the current card.
+    const targetTop = direction < 0
+        ? Math.max(...candidates.map(candidate => candidate.rect.top))
+        : Math.min(...candidates.map(candidate => candidate.rect.top));
+    const rowCandidates = candidates.filter(candidate => Math.abs(candidate.rect.top - targetTop) <= 4);
+    rowCandidates.sort((a, b) => {
+        const aCenterX = a.rect.left + a.rect.width / 2;
+        const bCenterX = b.rect.left + b.rect.width / 2;
+        return Math.abs(aCenterX - currentCenterX) - Math.abs(bCenterX - currentCenterX) || a.index - b.index;
+    });
+    return rowCandidates[0]?.index ?? currentIndex;
 }
 function shouldIgnoreKeyboardSelection(event){
     const target = event.target;
@@ -1163,14 +1183,13 @@ function moveSelectionByArrowKey(key){
     if(!elements.length) return false;
     const currentId = String(ctx.getSelected() || '');
     const currentIndex = Math.max(0, elements.findIndex(el => (el.dataset?.[ctx.dataKey] || '') === currentId));
-    const cols = ctx.columns ? inferGridColumns(elements) : 1;
-    let delta = 0;
-    if(key === 'ArrowLeft') delta = -1;
-    else if(key === 'ArrowRight') delta = 1;
-    else if(key === 'ArrowUp') delta = -cols;
-    else if(key === 'ArrowDown') delta = cols;
+    let nextIndex = currentIndex;
+    if(key === 'ArrowLeft') nextIndex = currentIndex - 1;
+    else if(key === 'ArrowRight') nextIndex = currentIndex + 1;
+    else if(key === 'ArrowUp') nextIndex = findVerticalSelectionIndex(elements, currentIndex, -1);
+    else if(key === 'ArrowDown') nextIndex = findVerticalSelectionIndex(elements, currentIndex, 1);
     else return false;
-    const nextIndex = Math.max(0, Math.min(elements.length - 1, currentIndex + delta));
+    nextIndex = Math.max(0, Math.min(elements.length - 1, nextIndex));
     if(nextIndex === currentIndex) return false;
     const nextId = elements[nextIndex].dataset?.[ctx.dataKey] || '';
     if(!nextId) return false;
@@ -2696,7 +2715,7 @@ function renderPromptDetail(item, readonly){
             <div class="prompt-detail-head"><div class="prompt-detail-title">${escapeHtml(item.name || '助手指令')}</div><div class="prompt-detail-scene">${escapeHtml(item.scene || '提示词助手')}</div></div>
             <section class="prompt-block"><div class="prompt-block-head"><span>系统提示词</span><span>${String(item.system_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.system_template || '未填写')}</textarea></section>
             <section class="prompt-block"><div class="prompt-block-head"><span>用户提示词模板</span><span>${String(item.user_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.user_template || '未填写')}</textarea></section>
-            <div class="params-list">
+            <div class="params-list assistant-params-list">
                 <div class="param-row"><strong>媒体引用保护</strong><span>${item.preserve_references !== false ? '开启' : '关闭'}</span></div>
                 <div class="param-row"><strong>推荐平台</strong><span>${escapeHtml(item.recommended_provider || '跟随当前选择')}</span></div>
                 <div class="param-row"><strong>推荐模型</strong><span>${escapeHtml(item.recommended_model || '跟随当前选择')}</span></div>

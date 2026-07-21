@@ -382,6 +382,8 @@ body.theme-dark .asset-card.active { border-color:rgba(248,250,252,.86); box-sha
 .prompt-recipe-body { font-family:inherit; font-size:12px; font-weight:600; }
 .prompt-block-body.negative { color:var(--muted); }
 .params-list { display:flex; flex-direction:column; gap:7px; }
+.assistant-params-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); align-items:stretch; }
+.assistant-params-list .param-row { min-width:0; }
 .param-row { border:1px solid var(--line); border-radius:11px; background:var(--card); padding:9px; }
 .param-row strong { display:block; color:var(--text); font-size:11px; line-height:1.2; font-weight:900; margin-bottom:5px; }
 .param-row span { display:block; color:var(--muted); font-size:11px; line-height:1.45; font-weight:650; overflow-wrap:anywhere; }
