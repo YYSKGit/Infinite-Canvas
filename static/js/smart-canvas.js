@@ -19,6 +19,7 @@ const smartCanvasSwitcher = document.getElementById('smartCanvasSwitcher');
 const smartCanvasSwitcherBtn = document.getElementById('smartCanvasSwitcherBtn');
 const smartCanvasSwitcherMenu = document.getElementById('smartCanvasSwitcherMenu');
 const smartCanvasSwitcherList = document.getElementById('smartCanvasSwitcherList');
+const smartCanvasSwitcherCreateBtn = document.getElementById('smartCanvasSwitcherCreateBtn');
 const smartCanvasSwitcherLabel = document.getElementById('smartCanvasSwitcherLabel');
 function cachedSmartCanvasTitle(id){
     if(!id) return '';
@@ -2658,9 +2659,14 @@ async function backToCanvasList(){
 }
 function setSmartCanvasSwitcherOpen(open){
     if(!smartCanvasSwitcher || !smartCanvasSwitcherMenu || !smartCanvasSwitcherBtn) return;
+    if(!open){
+        cancelSmartCanvasSwitcherCreate({render:false});
+        cancelSmartCanvasSwitcherRename({render:false});
+    }
     smartCanvasSwitcher.classList.toggle('open', open);
     smartCanvasSwitcherMenu.hidden = !open;
     smartCanvasSwitcherBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if(open) renderSmartCanvasSwitcher();
 }
 let smartCanvasSwitchInFlight = false;
 let pendingSmartCanvasSwitch = null;
@@ -2784,18 +2790,268 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
     }
 }
 let smartCanvasSwitcherItems = null;
+let smartCanvasSwitcherProjectBoardItems = null;
 let smartCanvasSwitcherLoadPromise = null;
+let smartCanvasSwitcherCreating = false;
+let smartCanvasSwitcherCreateDraft = '';
+let smartCanvasSwitcherRenaming = false;
+let smartCanvasSwitcherRenameId = '';
+let smartCanvasSwitcherRenameDraft = '';
+function defaultSmartCanvasSwitcherTitle(){
+    const time = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', hour12:false});
+    return `智能画布 ${time}`;
+}
+function cancelSmartCanvasSwitcherCreate(options={}){
+    if(smartCanvasSwitcherCreating || !smartCanvasSwitcherCreateDraft) return;
+    smartCanvasSwitcherCreateDraft = '';
+    if(options.render !== false) renderSmartCanvasSwitcher();
+}
+function cancelSmartCanvasSwitcherRename(options={}){
+    if(smartCanvasSwitcherRenaming || !smartCanvasSwitcherRenameId) return;
+    smartCanvasSwitcherRenameId = '';
+    smartCanvasSwitcherRenameDraft = '';
+    if(options.render !== false) renderSmartCanvasSwitcher();
+}
+function focusSmartCanvasSwitcherCreateInput(){
+    requestAnimationFrame(() => {
+        const input = smartCanvasSwitcherList?.querySelector('.smart-canvas-switcher-create-input');
+        if(!input) return;
+        input.focus();
+        input.select();
+    });
+}
+function beginSmartCanvasSwitcherCreate(){
+    if(smartCanvasSwitcherCreating || smartCanvasSwitcherRenaming || smartCanvasSwitchInFlight) return;
+    if(smartCanvasSwitcherCreateDraft){
+        focusSmartCanvasSwitcherCreateInput();
+        return;
+    }
+    cancelSmartCanvasSwitcherRename({render:false});
+    smartCanvasSwitcherCreateDraft = defaultSmartCanvasSwitcherTitle();
+    renderSmartCanvasSwitcher();
+    focusSmartCanvasSwitcherCreateInput();
+}
+function focusSmartCanvasSwitcherRenameInput(){
+    requestAnimationFrame(() => {
+        const input = smartCanvasSwitcherList?.querySelector('.smart-canvas-switcher-rename-input');
+        if(!input) return;
+        input.focus();
+        input.select();
+    });
+}
+function beginSmartCanvasSwitcherRename(item){
+    if(!item?.id || smartCanvasSwitcherCreating || smartCanvasSwitcherRenaming || smartCanvasSwitchInFlight) return;
+    cancelSmartCanvasSwitcherCreate({render:false});
+    smartCanvasSwitcherRenameId = item.id;
+    smartCanvasSwitcherRenameDraft = String(item.title || '智能画布');
+    renderSmartCanvasSwitcher();
+    focusSmartCanvasSwitcherRenameInput();
+}
+async function confirmSmartCanvasSwitcherRename(input, item){
+    if(!item?.id || smartCanvasSwitcherRenaming || smartCanvasSwitchInFlight) return;
+    const previousTitle = String(item.title || '智能画布');
+    const title = String(input?.value || smartCanvasSwitcherRenameDraft || '').trim() || previousTitle;
+    if(title === previousTitle){
+        cancelSmartCanvasSwitcherRename();
+        return;
+    }
+    smartCanvasSwitcherRenameDraft = title;
+    smartCanvasSwitcherRenaming = true;
+    input?.setAttribute('disabled', '');
+    input?.closest('.smart-canvas-switcher-rename-row')?.classList.add('is-saving');
+    if(smartCanvasSwitcherCreateBtn) smartCanvasSwitcherCreateBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(item.id)}/meta`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({title})
+        });
+        if(!res.ok) throw new Error('rename smart canvas failed');
+        const data = await res.json();
+        const savedTitle = String(data?.canvas?.title || title);
+        [smartCanvasSwitcherItems, smartCanvasSwitcherProjectBoardItems].forEach(items => {
+            items?.forEach(entry => { if(entry.id === item.id) entry.title = savedTitle; });
+        });
+        try { localStorage.setItem(`smart_canvas_title:${item.id}`, savedTitle); } catch(error) {}
+        if(item.id === canvasId){
+            if(canvas) canvas.title = savedTitle;
+            document.title = savedTitle;
+            const titleEl = document.getElementById('smartTitle');
+            if(titleEl) titleEl.textContent = savedTitle;
+            setSmartCanvasTitle(savedTitle, item.id);
+        }
+        smartCanvasSwitcherRenameId = '';
+        smartCanvasSwitcherRenameDraft = '';
+        smartCanvasSwitcherRenaming = false;
+        if(smartCanvasSwitcherCreateBtn) smartCanvasSwitcherCreateBtn.disabled = false;
+        renderSmartCanvasSwitcher();
+    } catch(error) {
+        console.error(error);
+        smartCanvasSwitcherRenaming = false;
+        if(smartCanvasSwitcherCreateBtn) smartCanvasSwitcherCreateBtn.disabled = false;
+        renderSmartCanvasSwitcher();
+        focusSmartCanvasSwitcherRenameInput();
+        toast(tr('canvas.metaSaveFailed') || '重命名失败');
+    }
+}
+function nextSmartCanvasBoardPosition(){
+    const cardWidth = 248;
+    const cardHeight = 150;
+    const strideX = 276;
+    const strideY = 176;
+    const clearance = 18;
+    const positioned = (smartCanvasSwitcherProjectBoardItems || []).filter(item =>
+        item?.board_x != null
+        && item?.board_y != null
+        && Number.isFinite(Number(item.board_x))
+        && Number.isFinite(Number(item.board_y))
+    );
+    if(!positioned.length) return {x:40, y:40};
+    const isFree = (x, y) => positioned.every(item => {
+        const px = Number(item.board_x);
+        const py = Number(item.board_y);
+        return x + cardWidth + clearance <= px
+            || px + cardWidth + clearance <= x
+            || y + cardHeight + clearance <= py
+            || py + cardHeight + clearance <= y;
+    });
+    const centerX = positioned.reduce((sum, item) => sum + Number(item.board_x), 0) / positioned.length;
+    const centerY = positioned.reduce((sum, item) => sum + Number(item.board_y), 0) / positioned.length;
+    const directions = [
+        {dx:strideX, dy:0, preference:0},
+        {dx:0, dy:strideY, preference:1},
+        {dx:-strideX, dy:0, preference:2},
+        {dx:0, dy:-strideY, preference:3}
+    ];
+    const candidates = new Map();
+    positioned.forEach(item => {
+        const originX = Number(item.board_x);
+        const originY = Number(item.board_y);
+        directions.forEach(direction => {
+            const x = Math.round(originX + direction.dx);
+            const y = Math.round(originY + direction.dy);
+            if(!isFree(x, y)) return;
+            const key = `${x}:${y}`;
+            const distance = Math.pow((x - centerX) / strideX, 2) + Math.pow((y - centerY) / strideY, 2);
+            const candidate = {x, y, distance, preference:direction.preference};
+            const previous = candidates.get(key);
+            if(!previous || candidate.preference < previous.preference) candidates.set(key, candidate);
+        });
+    });
+    const nearest = [...candidates.values()].sort((a, b) =>
+        a.distance - b.distance || a.preference - b.preference || a.y - b.y || a.x - b.x
+    )[0];
+    if(nearest) return {x:nearest.x, y:nearest.y};
+    const rightmost = positioned.slice().sort((a, b) => Number(b.board_x) - Number(a.board_x))[0];
+    return {x:Math.round(Number(rightmost.board_x) + strideX), y:Math.round(Number(rightmost.board_y))};
+}
+async function confirmSmartCanvasSwitcherCreate(input){
+    if(smartCanvasSwitcherCreating || smartCanvasSwitcherRenaming || smartCanvasSwitchInFlight) return;
+    const title = String(input?.value || smartCanvasSwitcherCreateDraft || '').trim() || defaultSmartCanvasSwitcherTitle();
+    smartCanvasSwitcherCreateDraft = title;
+    smartCanvasSwitcherCreating = true;
+    input?.setAttribute('disabled', '');
+    input?.closest('.smart-canvas-switcher-create-row')?.classList.add('is-saving');
+    if(smartCanvasSwitcherCreateBtn) smartCanvasSwitcherCreateBtn.disabled = true;
+    try {
+        const projectId = canvas?.project || sourceProjectId || 'default';
+        if(!smartCanvasSwitcherProjectBoardItems) await loadSmartCanvasSwitcher();
+        const boardPosition = nextSmartCanvasBoardPosition();
+        const res = await fetch('/api/canvases', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                title,
+                icon:'sparkles',
+                kind:'smart',
+                project:projectId,
+                board_x:boardPosition.x,
+                board_y:boardPosition.y
+            })
+        });
+        if(!res.ok) throw new Error('create smart canvas failed');
+        const data = await res.json();
+        const created = data?.canvas;
+        if(!created?.id) throw new Error('created canvas missing id');
+        if(created.project == null) created.project = projectId;
+        smartCanvasSwitcherItems = [created, ...(smartCanvasSwitcherItems || []).filter(item => item.id !== created.id)];
+        smartCanvasSwitcherProjectBoardItems = [created, ...(smartCanvasSwitcherProjectBoardItems || []).filter(item => item.id !== created.id)];
+        smartCanvasSwitcherCreateDraft = '';
+        smartCanvasSwitcherCreating = false;
+        if(smartCanvasSwitcherCreateBtn) smartCanvasSwitcherCreateBtn.disabled = false;
+        await switchToSmartCanvas(created.id);
+    } catch(error) {
+        console.error(error);
+        smartCanvasSwitcherCreating = false;
+        if(smartCanvasSwitcherCreateBtn) smartCanvasSwitcherCreateBtn.disabled = false;
+        renderSmartCanvasSwitcher();
+        focusSmartCanvasSwitcherCreateInput();
+        toast(tr('canvas.createFailed') || '新建画布失败');
+    }
+}
 function renderSmartCanvasSwitcher(){
     if(!smartCanvasSwitcherList) return;
-    const items = smartCanvasSwitcherItems;
-    if(!items) return;
+    const items = smartCanvasSwitcherItems || [];
     smartCanvasSwitcherList.innerHTML = '';
-    if(!items.length){
+    const fragment = document.createDocumentFragment();
+    if(smartCanvasSwitcherCreateDraft){
+        const row = document.createElement('div');
+        row.className = `smart-canvas-switcher-create-row${smartCanvasSwitcherCreating ? ' is-saving' : ''}`;
+        row.setAttribute('role', 'presentation');
+        const input = document.createElement('input');
+        input.className = 'smart-canvas-switcher-create-input';
+        input.type = 'text';
+        input.maxLength = 80;
+        input.value = smartCanvasSwitcherCreateDraft;
+        input.setAttribute('aria-label', '新画布名称');
+        input.disabled = smartCanvasSwitcherCreating;
+        input.addEventListener('input', () => { smartCanvasSwitcherCreateDraft = input.value; });
+        input.addEventListener('keydown', event => {
+            event.stopPropagation();
+            if(event.key === 'Enter'){
+                event.preventDefault();
+                confirmSmartCanvasSwitcherCreate(input);
+            } else if(event.key === 'Escape'){
+                event.preventDefault();
+                cancelSmartCanvasSwitcherCreate();
+            }
+        });
+        row.appendChild(input);
+        fragment.appendChild(row);
+    }
+    if(!items.length && !smartCanvasSwitcherCreateDraft){
         smartCanvasSwitcherList.innerHTML = '<div class="smart-canvas-switcher-empty">暂无其他智能画布</div>';
         return;
     }
-    const fragment = document.createDocumentFragment();
     items.forEach(item => {
+        if(item.id === smartCanvasSwitcherRenameId){
+            const renameRow = document.createElement('div');
+            renameRow.className = `smart-canvas-switcher-create-row smart-canvas-switcher-rename-row${smartCanvasSwitcherRenaming ? ' is-saving' : ''}`;
+            renameRow.setAttribute('role', 'presentation');
+            const renameInput = document.createElement('input');
+            renameInput.className = 'smart-canvas-switcher-create-input smart-canvas-switcher-rename-input';
+            renameInput.type = 'text';
+            renameInput.maxLength = 80;
+            renameInput.value = smartCanvasSwitcherRenameDraft;
+            renameInput.setAttribute('aria-label', '画布名称');
+            renameInput.disabled = smartCanvasSwitcherRenaming;
+            renameInput.addEventListener('input', () => { smartCanvasSwitcherRenameDraft = renameInput.value; });
+            renameInput.addEventListener('keydown', event => {
+                event.stopPropagation();
+                if(event.key === 'Enter'){
+                    event.preventDefault();
+                    confirmSmartCanvasSwitcherRename(renameInput, item);
+                } else if(event.key === 'Escape'){
+                    event.preventDefault();
+                    cancelSmartCanvasSwitcherRename();
+                }
+            });
+            renameRow.appendChild(renameInput);
+            fragment.appendChild(renameRow);
+            return;
+        }
+        const row = document.createElement('div');
+        row.className = `smart-canvas-switcher-item-row${item.id === canvasId ? ' active' : ''}`;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = `smart-canvas-switcher-item${item.id === canvasId ? ' active' : ''}`;
@@ -2805,10 +3061,23 @@ function renderSmartCanvasSwitcher(){
         label.textContent = item.title || '智能画布';
         button.appendChild(label);
         if(item.id === canvasId){
-            button.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20 6-11 11-5-5"></path></svg>');
+            button.insertAdjacentHTML('beforeend', '<svg class="smart-canvas-switcher-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20 6-11 11-5-5"></path></svg>');
         }
         button.addEventListener('click', () => switchToSmartCanvas(item.id));
-        fragment.appendChild(button);
+        const renameButton = document.createElement('button');
+        renameButton.type = 'button';
+        renameButton.className = 'smart-canvas-switcher-rename-btn';
+        renameButton.title = '重命名画布';
+        renameButton.setAttribute('aria-label', `重命名 ${item.title || '智能画布'}`);
+        renameButton.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path></svg>';
+        renameButton.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            beginSmartCanvasSwitcherRename(item);
+        });
+        row.appendChild(button);
+        row.appendChild(renameButton);
+        fragment.appendChild(row);
     });
     smartCanvasSwitcherList.appendChild(fragment);
 }
@@ -2825,8 +3094,10 @@ async function loadSmartCanvasSwitcher(force=false){
         if(!res.ok) throw new Error('canvas list failed');
         const data = await res.json();
         const projectId = canvas?.project || sourceProjectId || 'default';
-        smartCanvasSwitcherItems = (data.canvases || [])
-            .filter(item => (item.kind || 'classic') === 'smart' && (item.project || 'default') === projectId)
+        smartCanvasSwitcherProjectBoardItems = (data.canvases || [])
+            .filter(item => (item.project || 'default') === projectId);
+        smartCanvasSwitcherItems = smartCanvasSwitcherProjectBoardItems
+            .filter(item => (item.kind || 'classic') === 'smart')
             // Saving the canvas being left updates `updated_at`.  Sorting by that
             // field makes the switcher reshuffle after every selection, so keep a
             // deterministic creation order (while still respecting pinned items).
@@ -2852,6 +3123,11 @@ smartCanvasSwitcherBtn?.addEventListener('click', () => {
         smartCanvasSwitcherList.innerHTML = '<div class="smart-canvas-switcher-empty">...</div>';
         loadSmartCanvasSwitcher();
     }
+});
+smartCanvasSwitcherCreateBtn?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginSmartCanvasSwitcherCreate();
 });
 document.addEventListener('pointerdown', e => {
     if(smartCanvasSwitcher?.classList.contains('open') && !e.target.closest('#smartCanvasSwitcher')) setSmartCanvasSwitcherOpen(false);
@@ -11491,7 +11767,7 @@ function scheduleMagneticPortCatch(){
 }
 function updateMagneticPort(e){
     if(portDragState || dragState || resizeState || panState || selectionState){ resetMagneticPort(); return; }
-    if(e.target?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')){ resetMagneticPort(); return; }
+    if(e.target?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')){ resetMagneticPort(); return; }
     const shellRect = shell.getBoundingClientRect();
     const magneticRadius = MAGNETIC_PORT_RADIUS_WORLD * viewport.scale;
     let best = null;
@@ -11556,7 +11832,7 @@ function handlePortDrop(drag, e){
         return;
     }
     if(!drag.moved){ discardPendingUndo(); render(); return; }
-    if(hit?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
+    if(hit?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
         discardPendingUndo(); render(); return;
     }
     const p = screenToWorld(e);
@@ -20819,7 +21095,8 @@ function smartFloatingPanelContains(target){
         '.shortcut-modal',
         '.smart-shortcut-toggle',
         '.workflow-transfer-panel',
-        '.smart-workflow-toggle'
+        '.smart-workflow-toggle',
+        '.smart-top-actions-cursor-bridge'
     ].join(',')));
 }
 function closeSmartFloatingPanels(){
@@ -20841,14 +21118,14 @@ shell.addEventListener('click', e => {
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
 }, true);
 shell.addEventListener('click', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
     const nodeEl = e.target.closest('.image-node');
@@ -20856,7 +21133,7 @@ shell.addEventListener('click', e => {
     else exitZoomPreview(screenToWorld(e));
 }, true);
 shell.onmousedown = e => {
-    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     // The animated port can visually lag behind the pointer. Treat its whole
     // magnetic region as the real hit target so dragging starts immediately.
     if(e.button === 0 && magneticPortEl && !isRKeyDown && !e.ctrlKey && !e.metaKey){
@@ -20872,7 +21149,7 @@ shell.onmousedown = e => {
         }));
         return;
     }
-    if(e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
+    if(e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.create-menu,.smart-minimap')) return;
     closeCreateMenu();
     if(e.button === 0 && isRKeyDown){
         e.preventDefault();
@@ -20900,7 +21177,7 @@ shell.oncontextmenu = e => {
         e.stopPropagation();
         return;
     }
-    if(didPan || e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(didPan || e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -20916,14 +21193,14 @@ shell.oncontextmenu = e => {
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     openCreateMenu(e);
 };
 shell.onclick = e => {
     if(selectionJustFinished) return;
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     closeCreateMenu();
     selectedConnectionKey = '';
@@ -21488,7 +21765,7 @@ window.onmouseup = e => {
     }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
