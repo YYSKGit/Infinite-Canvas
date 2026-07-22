@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "build:prompt-editor": "esbuild frontend/smart-prompt-editor.js --bundle --format=iife --platform=browser --target=es2020 --outfile=static/js/smart-prompt-editor.js",
-    "test:prompt-model": "node --test frontend/prompt-model.test.mjs"
+    "test": "node --test frontend/prompt-model.test.mjs frontend/smart-reference-state.test.mjs",
+    "test:prompt-model": "node --test frontend/prompt-model.test.mjs",
+    "test:smart-reference": "node --test frontend/smart-reference-state.test.mjs"
   },
   "dependencies": {
     "prosemirror-commands": "^1.7.1",

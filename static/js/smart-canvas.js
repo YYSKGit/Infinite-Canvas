@@ -12661,7 +12661,10 @@ function disconnectConnections(spec){
         if(toNode && Array.isArray(toNode.inputNodeIds)){
             toNode.inputNodeIds = toNode.inputNodeIds.filter(id => id !== conn.from);
         }
-        if(toNode && ['input','flow'].includes(conn.kind || 'flow')) clearDetachedRunInputRefs(toNode);
+        if(toNode && ['input','flow'].includes(conn.kind || 'flow')){
+            pruneStaleSavedRunInputRefs(toNode);
+            clearDetachedRunInputRefs(toNode);
+        }
         if((conn.kind || 'flow') === 'history'){
             const group = nodes.find(n => n.id === conn.to && isHistoryGroupNode(n) && n.historyFor === conn.from);
             demoteHistoryGroupNode(group);
@@ -17468,8 +17471,8 @@ function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
         promptDoc:promptSnapshot.doc,
         promptReferences:promptSnapshot.references,
         promptText:promptSnapshot.text || promptPlainText(),
-        promptRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
-        inputRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
+        promptRefs:(refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
+        inputRefs:(refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
         sourceNodeId:sourceId,
         settings:JSON.parse(JSON.stringify(settings)),
         createdAt:Date.now()
@@ -17511,13 +17514,7 @@ function attachRunMeta(targetNode, meta){
     targetNode.runPrompt = meta.displayPrompt || meta.promptText || meta.prompt;
     targetNode.runModelPrompt = meta.prompt;
     targetNode.runPromptRefs = cleanPromptRefs;
-    targetNode.runInputRefs = cleanInputRefs.map(ref => ({
-        url:ref.url || '',
-        name:ref.name || '',
-        nodeId:ref.nodeId || '',
-        imageIndex:ref.imageIndex ?? '',
-        kind:ref.kind || ''
-    })).filter(ref => ref.url);
+    targetNode.runInputRefs = cleanInputRefs.map(savedSmartRunInputRef).filter(ref => ref.url);
     targetNode.runSettings = meta.settings;
     targetNode.runSnapshotSettings = meta.settings ? cloneSmartSettings(meta.settings) : undefined;
     if(meta.sourceNodeId) targetNode.sourceNodeId = meta.sourceNodeId;
@@ -17645,6 +17642,23 @@ function clearDetachedRunInputRefs(node){
     delete node.runPromptRefs;
     delete node.sourceNodeId;
 }
+function savedSmartRunInputRef(ref){
+    const saved = {
+        url:ref?.url || '',
+        name:ref?.name || '',
+        nodeId:ref?.nodeId || '',
+        imageIndex:ref?.imageIndex ?? '',
+        kind:ref?.kind || ''
+    };
+    if(ref?.groupNodeId) saved.groupNodeId = ref.groupNodeId;
+    if(ref?.groupImageIndex !== undefined && ref?.groupImageIndex !== '') saved.groupImageIndex = ref.groupImageIndex;
+    if(ref?.manualAdded === true) saved.manualAdded = true;
+    if(ref?.promptMentioned === true) saved.promptMentioned = true;
+    if(ref?.sourceUrl) saved.sourceUrl = ref.sourceUrl;
+    if(ref?.originalLocalUrl) saved.originalLocalUrl = ref.originalLocalUrl;
+    if(ref?.asset_uris && typeof ref.asset_uris === 'object') saved.asset_uris = {...ref.asset_uris};
+    return saved;
+}
 function downstreamNodeIdsForMediaSource(sourceNodeId){
     if(!sourceNodeId) return new Set();
     const sources = new Set([sourceNodeId]);
@@ -17693,6 +17707,7 @@ function cleanupDetachedRunInputRefs(){
         const hadRefs = Array.isArray(node?.runInputRefs) && node.runInputRefs.length;
         const hadPromptRefs = Array.isArray(node?.runPromptRefs) && node.runPromptRefs.length;
         const hadSource = Boolean(node?.sourceNodeId);
+        pruneStaleSavedRunInputRefs(node);
         clearDetachedRunInputRefs(node);
         if(hadRefs !== (Array.isArray(node?.runInputRefs) && node.runInputRefs.length)
             || hadPromptRefs !== (Array.isArray(node?.runPromptRefs) && node.runPromptRefs.length)
@@ -17960,25 +17975,77 @@ function isGeneratedOutputRef(ref){
     const url = canonicalSmartMediaUrl(ref);
     return /^\/assets\/output\//i.test(url) || /^\/output\//i.test(url);
 }
+function canonicalSmartMediaUrlSet(refs=[]){
+    return new Set((refs || []).map(ref => canonicalSmartMediaUrl(ref)).filter(Boolean));
+}
+function savedRunInputLiveStateForNode(node, savedRefs=[]){
+    const upstreamIds = upstreamLineNodeIds(node).filter(nodeId => nodeId !== node?.id);
+    const upstreamRefs = upstreamIds
+        .flatMap(nodeId => imagesForNode(nodes.find(candidate => candidate.id === nodeId)))
+        .filter(ref => ref?.url);
+    const needsLegacyOwnerLookup = (savedRefs || []).some(ref => ref?.url
+        && !ref.nodeId && !ref.groupNodeId && ref.manualAdded !== true && ref.promptMentioned !== true);
+    const ownHistoryIds = needsLegacyOwnerLookup
+        ? new Set(nodes
+            .filter(candidate => isHistoryGroupNode(candidate) && candidate.historyFor === node?.id)
+            .map(candidate => candidate.id))
+        : new Set();
+    const externalRefs = needsLegacyOwnerLookup
+        ? nodes
+            .filter(candidate => candidate?.id && candidate.id !== node?.id && !ownHistoryIds.has(candidate.id))
+            .flatMap(candidate => imagesForNode(candidate))
+            .filter(ref => ref?.url)
+        : [];
+    return {
+        liveUpstreamUrls:canonicalSmartMediaUrlSet(upstreamRefs),
+        liveManualUrls:canonicalSmartMediaUrlSet(manualReferenceImagesFor(node)),
+        livePromptUrls:canonicalSmartMediaUrlSet(collectMentionedImagesFromPrompt(node)),
+        legacyExternalUrls:canonicalSmartMediaUrlSet(externalRefs)
+    };
+}
+function shouldKeepSavedRunInputRef(node, ref, liveState){
+    const url = canonicalSmartMediaUrl(ref);
+    if(!url) return false;
+    if(liveState.liveUpstreamUrls.has(url) || liveState.liveManualUrls.has(url) || liveState.livePromptUrls.has(url)) return true;
+    if(ref?.nodeId && ref.nodeId === node?.id) return true;
+    // Explicit/manual references are snapshots, not permanent hidden inputs. Once
+    // removed from the current UI/prompt they must not be resurrected on rerun.
+    if(ref?.manualAdded === true || ref?.promptMentioned === true) return false;
+    // Provenanced refs owned by another node are valid only while their exact
+    // media URL is reachable through the current upstream graph.
+    if(ref?.nodeId || ref?.groupNodeId) return false;
+    // Older canvases lost provenance while buildPromptRequest projected refs.
+    // If another live/history node owns that URL, it was an external input and
+    // must not survive after its line is detached. Unowned legacy URLs are kept
+    // because they can be an uploaded self-reference replaced by the first run.
+    return !liveState.legacyExternalUrls.has(url);
+}
+function liveSavedRunInputRefsForNode(node, refs=[]){
+    const liveState = savedRunInputLiveStateForNode(node, refs);
+    return (refs || []).filter(ref => shouldKeepSavedRunInputRef(node, ref, liveState));
+}
+function pruneStaleSavedRunInputRefs(node){
+    if(!node || !Array.isArray(node.runInputRefs) || !node.runInputRefs.length) return false;
+    const next = liveSavedRunInputRefsForNode(node, node.runInputRefs);
+    if(next.length === node.runInputRefs.length) return false;
+    if(next.length) node.runInputRefs = next;
+    else delete node.runInputRefs;
+    return true;
+}
 function generationReferenceImagesForRun(node, consume=false, ctx=smartLoopContext){
     const defaults = defaultReferenceImagesFor(node, consume, ctx);
     if(!isSmartImageNode(node) || isHistoryGroupNode(node) || smartImageUsesWorkflowInput(node, ctx)) return defaults;
     if(isGeneratedSmartOutputNode(node)){
         const rawSavedInputs = Array.isArray(node.runInputRefs) ? node.runInputRefs.filter(ref => ref?.url) : [];
+        const filteredDefaults = cleanSavedRunRefsForNode(node, defaults);
+        if(!rawSavedInputs.length) return filteredDefaults;
         // Saved inputs preserve an uploaded self-reference after this node's output
         // replaces it. References owned by another node are valid only while that
         // exact media URL is still present on the live upstream line. Without this
         // guard, deleting/replacing an upstream image combines its stale snapshot
         // with the newly uploaded image and sends both to the backend.
-        const liveUpstreamUrls = new Set(upstreamLineNodeIds(node)
-            .filter(nodeId => nodeId !== node.id)
-            .flatMap(nodeId => imagesForNode(nodes.find(candidate => candidate.id === nodeId)))
-            .map(ref => canonicalSmartMediaUrl(ref))
-            .filter(Boolean));
-        const liveSavedInputs = rawSavedInputs
-            .filter(ref => !ref.nodeId || ref.nodeId === node.id || liveUpstreamUrls.has(canonicalSmartMediaUrl(ref)));
+        const liveSavedInputs = liveSavedRunInputRefsForNode(node, rawSavedInputs);
         const savedInputs = cleanSavedRunRefsForNode(node, liveSavedInputs, {dropGeneratedOutputs:true});
-        const filteredDefaults = cleanSavedRunRefsForNode(node, defaults);
         return uniqueReferenceImages([...filteredDefaults, ...savedInputs]);
     }
     const self = selfReferenceImagesForNode(node, consume, ctx).filter(img => img?.url);
@@ -18069,7 +18136,10 @@ function uniqueReferenceImages(images){
     return refs;
 }
 function visibleReferenceImagesFor(node){
-    const base = defaultReferenceImagesFor(node);
+    // Keep the composer thumbnails on the same authoritative ref set used by
+    // runGeneration. This also makes preserved self-inputs visible instead of
+    // allowing a hidden runInputRefs snapshot to diverge from the UI.
+    const base = generationReferenceImagesForRun(node, false, smartLoopContext);
     return uniqueReferenceImages([...base, ...promptReferenceImagesFor(node)]);
 }
 function mentionInputNodeLabel(img, fallback='图片'){
@@ -18476,9 +18546,10 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
             const position = refs.length + 1;
             const label = promptMentionTokenLabel(kind, typeIndex);
             refMap.set(part.url, {position, kind, typeIndex, label});
-            refs.push({url:part.url, name:part.name || label, nodeId:part.nodeId, imageIndex:part.imageIndex, kind, asset_uris:part.asset_uris || {}, role:`image_${position}`});
+            refs.push({...part, url:part.url, name:part.name || label, nodeId:part.nodeId, imageIndex:part.imageIndex, kind, asset_uris:part.asset_uris || {}, role:`image_${position}`, promptMentioned:true});
         }
         const refMeta = refMap.get(part.url);
+        if(refs[refMeta.position - 1]) refs[refMeta.position - 1].promptMentioned = true;
         body += refMeta.label;
         veniceBody += venicePromptReferenceLabel(refMeta.kind, refMeta.typeIndex);
     });
@@ -18500,7 +18571,7 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
             prompt:body,
             displayPrompt,
             providerPrompts:{api_image:body, venice_video:veniceBody || body},
-            refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
+            refs:refs.map(smartGenerationRequestRef),
             mentioned:true
         };
     }
@@ -18508,8 +18579,18 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         prompt:body,
         displayPrompt,
         providerPrompts:{api_image:body, venice_video:veniceBody || body},
-        refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
+        refs:refs.map(smartGenerationRequestRef),
         mentioned:false
+    };
+}
+function smartGenerationRequestRef(img, index){
+    return {
+        ...img,
+        url:img?.url || '',
+        name:img?.name || `图${index + 1}`,
+        kind:img?.kind || mediaKindForItem(img),
+        asset_uris:img?.asset_uris || {},
+        role:`image_${index + 1}`
     };
 }
 function outgoingConnectionsFor(node, kinds=['input']){
@@ -18805,13 +18886,7 @@ function showDirectLoopRoundPreview(loopNode, target, refs, loopIndex, total){
     delete target.runElapsedMs;
     delete target.runFailed;
     target.runTimerHidden = false;
-    target.runInputRefs = cleanRefs.map(ref => ({
-        url:ref.url || '',
-        name:ref.name || '',
-        nodeId:ref.nodeId || '',
-        imageIndex:ref.imageIndex ?? '',
-        kind:ref.kind || ''
-    })).filter(ref => ref.url);
+    target.runInputRefs = cleanRefs.map(savedSmartRunInputRef).filter(ref => ref.url);
     target.outputKind = mediaKindForUrls(preview, preview.some(isVideoMediaItem) ? 'video' : 'image');
     target.scale = preview.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
     target.title = total > 1 ? `Image ${loopIndex}/${total}` : (target.title || 'Image');
@@ -19431,8 +19506,8 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     const meta = {
         prompt,
         displayPrompt:request.displayPrompt || '',
-        promptRefs:(request.refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
-        inputRefs:(request.refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
+        promptRefs:(request.refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
+        inputRefs:(request.refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
         sourceNodeId:sourceNode.id,
         settings:JSON.parse(JSON.stringify(runSettings)),
         createdAt:Date.now()
@@ -19527,8 +19602,8 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         const meta = {
             prompt,
             displayPrompt:request.displayPrompt || '',
-            promptRefs:(request.refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
-            inputRefs:(request.refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
+            promptRefs:(request.refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
+            inputRefs:(request.refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
             sourceNodeId:rootNode.id,
             settings:JSON.parse(JSON.stringify(runSettings)),
             createdAt:Date.now()
@@ -20311,7 +20386,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
         ? requestMeta.providerPrompts
         : {};
     const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
-    const payload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)};
+    const payload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(apiImageReferencePayload)};
     const requestBodyJson = JSON.stringify(payload);
     smartLogActualGenerationRequest('API Image', {
         kind:'image',
@@ -20327,6 +20402,15 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
         return r.json();
     })));
     return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+}
+function apiImageReferencePayload(ref, index){
+    return {
+        url:ref?.url || '',
+        name:ref?.name || `图${index + 1}`,
+        role:ref?.role || `image_${index + 1}`,
+        kind:ref?.kind || mediaKindForItem(ref),
+        mime:ref?.mime || ''
+    };
 }
 async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const ref = selectedRunningHubRef(runSettings);
