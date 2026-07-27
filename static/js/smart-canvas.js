@@ -3891,7 +3891,7 @@ function playGenerationErrorSound(){
     } catch(e) {}
 }
 let veniceCreditsChangeSoundAt = 0;
-function playVeniceCreditsChangeSound(){
+function playVeniceCreditsChangeSound(direction='increase'){
     const now = Date.now();
     if(now - veniceCreditsChangeSoundAt < 1200) return;
     veniceCreditsChangeSoundAt = now;
@@ -3901,16 +3901,20 @@ function playVeniceCreditsChangeSound(){
         const ctx = playGenerationCompleteSound._ctx || (playGenerationCompleteSound._ctx = new AudioCtx());
         const play = () => {
             const start = ctx.currentTime + 0.015;
-            [
-                {freq:523.25, at:0, duration:0.11},
-                {freq:783.99, at:0.1, duration:0.2}
-            ].forEach(tone => {
+            const tones = [
+                {freq:392, at:0, duration:0.14},
+                {freq:659.25, at:0.22, duration:0.24}
+            ];
+            if(direction === 'decrease'){
+                [tones[0].freq, tones[1].freq] = [tones[1].freq, tones[0].freq];
+            }
+            tones.forEach(tone => {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(tone.freq, start + tone.at);
                 gain.gain.setValueAtTime(0.0001, start + tone.at);
-                gain.gain.exponentialRampToValueAtTime(0.11, start + tone.at + 0.018);
+                gain.gain.exponentialRampToValueAtTime(0.085, start + tone.at + 0.024);
                 gain.gain.exponentialRampToValueAtTime(0.0001, start + tone.at + tone.duration);
                 osc.connect(gain).connect(ctx.destination);
                 osc.start(start + tone.at);
@@ -5820,9 +5824,10 @@ async function refreshVeniceCredits(options={}){
         const totalLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(total)));
         const percent = veniceCreditPercent(remaining, total);
         const observedProviderId = String(data?.provider_id || providerId);
+        const previousObservedRemaining = Number(veniceCreditsObservedRemaining);
         const balanceChanged = veniceCreditsObservedProviderId === observedProviderId
             && Number.isFinite(Number(veniceCreditsObservedRemaining))
-            && remaining !== Number(veniceCreditsObservedRemaining);
+            && remaining !== previousObservedRemaining;
         veniceCreditsObservedProviderId = observedProviderId;
         veniceCreditsObservedRemaining = remaining;
         setVeniceCreditsUi({
@@ -5837,7 +5842,7 @@ async function refreshVeniceCredits(options={}){
             state:'ready',
             title:`Venice 剩余额度 ${remainingLabel} / ${totalLabel} (${percent.toFixed(1)}%)`,
         });
-        if(balanceChanged) playVeniceCreditsChangeSound();
+        if(balanceChanged) playVeniceCreditsChangeSound(remaining > previousObservedRemaining ? 'increase' : 'decrease');
         veniceCreditsAutoFailureCount = 0;
         veniceCreditsNextAutoRetryAt = 0;
         return data;
