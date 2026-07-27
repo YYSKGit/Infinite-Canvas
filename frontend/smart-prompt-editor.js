@@ -463,7 +463,7 @@ export class SmartPromptEditor {
   setReferenceContext(references=[]){
     const next = mergeReferenceLists(references);
     const signature = list => JSON.stringify(list.map(ref => [
-      ref.refId || '', referenceIdentity(ref), ref.url || '', ref.kind || '', ref.name || ''
+      ref.refId || '', referenceIdentity(ref), ref.url || '', ref.previewUrl || '', ref.kind || '', ref.name || ''
     ]));
     if(signature(next) === signature(this.referenceContext)) return;
     this.referenceContext = next;
@@ -765,7 +765,8 @@ export class SmartPromptEditor {
     dom.dataset.assetUris = JSON.stringify(ref?.asset_uris || {});
     dom.dataset.refLabel = label;
     dom.classList.toggle('prompt-reference-missing', !ref);
-    const renderSignature = JSON.stringify([ref?.kind || 'image', ref?.url || '', label, Boolean(ref)]);
+    const previewUrl = ref?.previewUrl || '';
+    const renderSignature = JSON.stringify([ref?.kind || 'image', ref?.url || '', previewUrl, label, Boolean(ref)]);
     if(dom.dataset.renderSignature === renderSignature) return;
     dom.dataset.renderSignature = renderSignature;
     dom.innerHTML = '';
@@ -774,6 +775,21 @@ export class SmartPromptEditor {
       icon.className = 'mention-audio-thumb';
       icon.textContent = '♪';
       dom.appendChild(icon);
+    } else if(ref?.kind === 'video' && previewUrl){
+      const image = document.createElement('img');
+      image.src = previewUrl;
+      image.alt = '';
+      image.draggable = false;
+      image.addEventListener('error', () => {
+        const video = document.createElement('video');
+        video.src = ref.url || '';
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+        video.draggable = false;
+        image.replaceWith(video);
+      }, {once:true});
+      dom.appendChild(image);
     } else if(ref?.kind === 'video'){
       const video = document.createElement('video');
       video.src = ref.url || '';
@@ -784,9 +800,14 @@ export class SmartPromptEditor {
       dom.appendChild(video);
     } else {
       const image = document.createElement('img');
-      image.src = ref?.url || '';
+      image.src = previewUrl || ref?.url || '';
       image.alt = '';
       image.draggable = false;
+      if(previewUrl && ref?.url && previewUrl !== ref.url){
+        image.addEventListener('error', () => {
+          image.src = ref.url;
+        }, {once:true});
+      }
       dom.appendChild(image);
     }
     const labelElement = document.createElement('span');

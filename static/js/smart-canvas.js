@@ -17015,7 +17015,7 @@ function renderInputThumbsRow(node){
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
-    promptEditor?.setReferenceContext(dedup);
+    promptEditor?.setReferenceContext(dedup.map(withPromptReferencePreview));
     syncVeniceImageQuote();
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const addActive = mentionInsertMode === 'manual-ref';
@@ -17950,6 +17950,18 @@ function promptReferenceKind(itemOrKind){
     if(kind === 'video' || kind === 'audio') return kind;
     return 'image';
 }
+function promptReferencePreviewUrl(img){
+    const kind = promptReferenceKind(img);
+    if(kind === 'audio') return '';
+    const previewUrl = smartMediaPreviewUrl(img, 256);
+    if(kind === 'video' && !previewUrl.includes('/api/media-preview?')) return '';
+    return previewUrl;
+}
+function withPromptReferencePreview(img){
+    if(!img || typeof img !== 'object') return img;
+    const previewUrl = promptReferencePreviewUrl(img);
+    return previewUrl ? {...img, previewUrl} : img;
+}
 function promptMentionTokenLabel(kind, index){
     const n = Math.max(1, Number(index) || 1);
     const normalizedKind = promptReferenceKind(kind);
@@ -17972,7 +17984,8 @@ function promptMentionRefKey(part){
 }
 function refreshPromptReferenceContext(){
     const target = selectedNode() || activeComposerNode();
-    promptEditor?.setReferenceContext(target ? visibleReferenceImagesFor(target) : []);
+    const references = target ? visibleReferenceImagesFor(target) : [];
+    promptEditor?.setReferenceContext(references.map(withPromptReferencePreview));
 }
 function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
     const promptSnapshot = promptEditor?.snapshot?.() || {doc:null, references:[], text:''};
@@ -18979,7 +18992,7 @@ function maybeOpenMentionPicker(){
 }
 function insertMentionToken(img){
     if(!img?.url) return;
-    promptEditor?.insertReference?.({...img, name:img.alias || img.name || ''});
+    promptEditor?.insertReference?.(withPromptReferencePreview({...img, name:img.alias || img.name || ''}));
     closeMentionPicker();
 }
 function collectPromptParts(node=activeComposerNode() || selectedNode()){
@@ -19095,12 +19108,15 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     };
 }
 function smartGenerationRequestRef(img, index){
+    const {previewUrl:_previewUrl, preview_url:_previewUrlLegacy, ...source} = img || {};
     return {
-        ...img,
-        url:img?.url || '',
-        name:img?.name || `图${index + 1}`,
-        kind:img?.kind || mediaKindForItem(img),
-        asset_uris:img?.asset_uris || {},
+        ...source,
+        // Preview URLs are display-only. Always unwrap a media-preview URL here
+        // so no generation provider can accidentally receive the thumbnail.
+        url:smartOriginalMediaUrl(source) || '',
+        name:source.name || `图${index + 1}`,
+        kind:source.kind || mediaKindForItem(source),
+        asset_uris:source.asset_uris || {},
         role:`image_${index + 1}`
     };
 }
