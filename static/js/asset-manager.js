@@ -1609,6 +1609,34 @@ function refreshCanvasAssetSelectionOnly(){
     const detail = root.querySelector('.asset-detail');
     if(detail) swapCanvasAssetDetailWhenReady(detail, selectedCanvasAsset());
 }
+function renderCanvasAssetViewPreservingDetail(){
+    const detail = root?.querySelector('.asset-detail');
+    if(!detail){
+        render();
+        return;
+    }
+    const scrollState = [...root.querySelectorAll('.nav-scroll,.content-scroll')]
+        .map((el, index) => ({index, top:el.scrollTop, left:el.scrollLeft}));
+
+    // Keep the currently decoded image/video alive while the canvas tree and grid
+    // are rebuilt. The existing staged swap will replace this detail only after the
+    // first asset from the newly selected canvas is ready to paint.
+    detail.remove();
+    renderCanvasAssetsManager();
+    const renderedDetail = root.querySelector('.asset-detail');
+    if(renderedDetail) renderedDetail.replaceWith(detail);
+    else root.appendChild(detail);
+
+    root.querySelectorAll('.nav-scroll,.content-scroll').forEach((el, index) => {
+        const saved = scrollState.find(item => item.index === index);
+        if(!saved) return;
+        el.scrollTop = saved.top;
+        el.scrollLeft = saved.left;
+    });
+    refreshIcons();
+    initializeDetailPreviewMedia(detail);
+    swapCanvasAssetDetailWhenReady(detail, selectedCanvasAsset());
+}
 function renderHeadTreeInlineEdit(edit, inputId, saveAttr, cancelAttr){
     if(!edit || edit.placement !== 'head') return '';
     const label = edit.label || '名称';
@@ -3589,7 +3617,7 @@ async function handleClick(event){
         activeCanvasAssetCanvasId = '';
         selectedCanvasAssetId = '';
         selectedCanvasAssetIds.clear();
-        render();
+        renderCanvasAssetViewPreservingDetail();
         return;
     }
     const canvasAssetCanvas = target.closest?.('[data-canvas-asset-canvas]');
@@ -3598,7 +3626,7 @@ async function handleClick(event){
         activeCanvasAssetCanvasId = canvasAssetCanvas.dataset.canvasAssetCanvas || '';
         selectedCanvasAssetId = '';
         selectedCanvasAssetIds.clear();
-        render();
+        renderCanvasAssetViewPreservingDetail();
         return;
     }
     if(target.closest?.('[data-canvas-asset-manage]')){
