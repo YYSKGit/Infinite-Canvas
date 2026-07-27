@@ -100,6 +100,7 @@ test('runs only ancestors of the selected node and excludes downstream siblings'
     );
     assert.equal(plan.invalid, '');
     assert.deepEqual([...plan.stepIds], ['a', 'b', 'target']);
+    assert.deepEqual(new Set(plan.reachableIds), new Set(['upload', 'a', 'b', 'target']));
     assert.ok(!plan.activeIds.includes('sibling'));
 });
 
@@ -195,4 +196,48 @@ test('concurrent generation does not mutate or read composer settings after disp
         extractFunction('runComfyEdit')
     ].join('\n');
     assert.doesNotMatch(comfySource, /\bsettings\./, 'Comfy execution must use its explicit settings snapshot');
+});
+
+test('ancestor run node visuals expose wait, active, done, and failed states', () => {
+    const run = {
+        plan:{
+            stepIds:['wait','active','done','failed'],
+            reachableIds:['wait','active','done','failed','source','skipped','boundary'],
+            skippedIds:['skipped','boundary'],
+            pinnedBoundaryIds:['boundary']
+        },
+        runningIds:new Set(['active']),
+        completedIds:new Set(['done']),
+        failedIds:new Set(['failed'])
+    };
+    const sandbox = vm.createContext({smartAncestorCascadeRun:run, smartAncestorCascadePreview:null});
+    vm.runInContext(
+        `${extractFunction('smartAncestorNodeVisualState')}
+        globalThis.states = ['outside','wait','active','done','failed','source','skipped','boundary'].map(smartAncestorNodeVisualState);`,
+        sandbox
+    );
+    assert.deepEqual([...sandbox.states], ['', 'wait', 'active', 'done', 'failed', 'source', 'skipped', 'boundary']);
+});
+
+test('hover preview marks the complete ancestor chain before execution', () => {
+    const preview = {
+        stepIds:['a','target'],
+        reachableIds:['upload','a','checkpoint','hidden-upstream','target'],
+        skippedIds:['checkpoint','hidden-upstream'],
+        pinnedBoundaryIds:['checkpoint']
+    };
+    const sandbox = vm.createContext({smartAncestorCascadeRun:null, smartAncestorCascadePreview:preview});
+    vm.runInContext(
+        `${extractFunction('smartAncestorNodeVisualState')}
+        globalThis.states = ['outside','upload','a','checkpoint','hidden-upstream','target'].map(smartAncestorNodeVisualState);`,
+        sandbox
+    );
+    assert.deepEqual([...sandbox.states], ['', 'source', 'preview', 'boundary', 'skipped', 'preview']);
+});
+
+test('ancestor route owns its animation instead of stacking selected-line flow', () => {
+    const connectionRenderer = extractFunction('renderConnections');
+    assert.match(connectionRenderer, /hasSelectionFlow = isSelectedLine && !isAncestorCascade/);
+    assert.match(connectionRenderer, /conn-ancestor-flow/);
+    assert.match(connectionRenderer, /cutControl = !isAncestorCascade/);
 });

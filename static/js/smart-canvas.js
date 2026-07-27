@@ -247,6 +247,7 @@ let smartCascadeSilentSelection = false;
 let smartCascadeRunPath = null;
 const smartCascadeRuns = new Map();
 let smartAncestorCascadeRun = null;
+let smartAncestorCascadePreview = null;
 let smartLoopContext = null;
 let transientSmartCloudLinks = [];
 let runBtnCooldownToken = 0;
@@ -352,6 +353,21 @@ function smartCascadeEdgeState(edgeKey){
         if(state) return state;
     }
     return smartCascadeRunPath?.states?.[edgeKey] || '';
+}
+function smartAncestorNodeVisualState(nodeId){
+    const run = smartAncestorCascadeRun;
+    const plan = run?.plan || smartAncestorCascadePreview;
+    if(!plan?.reachableIds?.includes(nodeId)) return '';
+    if(plan.pinnedBoundaryIds?.includes(nodeId)) return 'boundary';
+    if(run && plan.stepIds?.includes(nodeId)){
+        if(run.failedIds?.has(nodeId)) return 'failed';
+        if(run.completedIds?.has(nodeId)) return 'done';
+        if(run.runningIds?.has(nodeId)) return 'active';
+        return 'wait';
+    }
+    if(!run && plan.stepIds?.includes(nodeId)) return 'preview';
+    if(plan.skippedIds?.includes(nodeId)) return 'skipped';
+    return 'source';
 }
 function smartCascadePathForCtx(ctx=null){
     return ctx?.runState?.runPath || ctx?.runPath || smartCascadeRunPath;
@@ -10258,7 +10274,9 @@ function shellPoint(event){
 function renderConnections(){
     const conns = (canvas?.connections || []).map((conn, index) => ({...conn, index})).filter(c => nodes.some(n => n.id === c.from) && nodes.some(n => n.id === c.to));
     const cascadeKeys = cascadeConnectionKeys();
-    const activeCascadeCount = (smartCascadeRunPath?.states && Object.values(smartCascadeRunPath.states).filter(state => state && state !== 'done').length) || 0;
+    const loopCascadeCount = (smartCascadeRunPath?.states && Object.values(smartCascadeRunPath.states).filter(state => state && state !== 'done').length) || 0;
+    const ancestorCascadeCount = (smartAncestorCascadeRun?.runPath?.states && Object.values(smartAncestorCascadeRun.runPath.states).filter(state => state && state !== 'done').length) || 0;
+    const activeCascadeCount = loopCascadeCount + ancestorCascadeCount;
     let reduceMotion = activeCascadeCount > 24;
     let selectedFlowCount = 0;
     const selectedConnIds = new Set(selectedNodeIds());
@@ -10296,6 +10314,13 @@ function renderConnections(){
         const connectionSelectionKey = `${kind}:${item.from}:${item.toId}:${item.targets.join(',')}`;
         const isInsertPreview = item.indices.some(i => loopInsertPreview?.index === i);
         const edgeKeys = item.targets.map(t => `${item.from}->${t}`);
+        const ancestorStates = edgeKeys.map(key => smartAncestorCascadeRun?.runPath?.states?.[key]).filter(Boolean);
+        let ancestorState = '';
+        if(ancestorStates.includes('active')) ancestorState = 'active';
+        else if(ancestorStates.includes('failed')) ancestorState = 'failed';
+        else if(ancestorStates.some(state => state !== 'done')) ancestorState = ancestorStates.find(state => state !== 'done');
+        else if(ancestorStates.length) ancestorState = 'done';
+        const isAncestorCascade = ancestorStates.length > 0;
         const states = edgeKeys.map(smartCascadeEdgeState).filter(Boolean);
         let cascadeState = '';
         if(states.includes('active')) cascadeState = 'active';
@@ -10318,7 +10343,9 @@ function renderConnections(){
         const isSelectedLine = isPersistentlySelectedLine || isConnectionHoveredLine || isNodeHoveredLine || isNodeLinkedLine;
         // Pending edges use the same selected treatment as the other dashed
         // relations while keeping their own animation in the unselected state.
-        const hasSelectionFlow = isSelectedLine;
+        // The ancestor runner owns its route visuals while it is active. Stacking
+        // the normal selection flow here creates conflicting dash animations.
+        const hasSelectionFlow = isSelectedLine && !isAncestorCascade;
         const hasDashedSelectionFlow = isDashedRelation || isPendingLine;
         if(hasSelectionFlow) selectedFlowCount += 1;
         const fx = isHistory ? fr.x + fr.width / 2 : fr.x + fr.width;
@@ -10334,25 +10361,44 @@ function renderConnections(){
         const cls = [
             isPendingLine ? 'conn-pending' : '',
             isCascade ? 'conn-cascade' : '',
-            isCascade && cascadeState === 'done' ? 'conn-cascade-done' : '',
-            isCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
-            isCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
+            isCascade && !isAncestorCascade && cascadeState === 'done' ? 'conn-cascade-done' : '',
+            isCascade && !isAncestorCascade && Boolean(cascadeState) && cascadeState !== 'done' ? 'conn-cascade-wait' : '',
+            isCascade && !isAncestorCascade && cascadeState === 'active' ? 'conn-cascade-active' : '',
+            isAncestorCascade ? 'conn-ancestor' : '',
+            isAncestorCascade && ancestorState ? `conn-ancestor-${ancestorState}` : '',
             isDashedRelation ? 'conn-history' : '',
             hasSelectionFlow ? 'conn-selected' : '',
             hasSelectionFlow && hasDashedSelectionFlow ? 'conn-selected-dashed' : ''
         ].filter(Boolean).join(' ');
-        const color = isCascade ? '#16a34a' : hasDashedSelectionFlow ? 'rgba(100,116,139,0.46)' : kind === 'input' ? 'rgba(100,116,139,0.62)' : 'rgba(148,163,184,0.62)';
+        const color = isAncestorCascade
+            ? ancestorState === 'failed'
+            ? 'var(--ancestor-route-failed)'
+            : ancestorState === 'active'
+            ? 'var(--ancestor-route-active)'
+            : ancestorState === 'done'
+            ? 'var(--ancestor-route-done)'
+            : 'var(--ancestor-route-wait)'
+            : isCascade
+            ? '#16a34a'
+            : hasDashedSelectionFlow
+            ? 'rgba(100,116,139,0.46)'
+            : kind === 'input'
+            ? 'rgba(100,116,139,0.62)'
+            : 'rgba(148,163,184,0.62)';
         const opacity = '1';
-        const width = hasDashedSelectionFlow ? '1.6' : kind === 'input' ? '1.9' : '1.6';
+        const width = isAncestorCascade ? (ancestorState === 'active' ? '2.2' : '1.8') : hasDashedSelectionFlow ? '1.6' : kind === 'input' ? '1.9' : '1.6';
         const selectedFlow = hasSelectionFlow
             ? `<path class="conn-selection-flow${hasDashedSelectionFlow ? ' conn-selection-flow-dashed' : ''}" data-conn-flow="${dataIndex}" d="${curve}"${hasDashedSelectionFlow ? '' : ' pathLength="100"'} fill="none"></path>`
             : '';
+        const ancestorFlow = isAncestorCascade && ancestorState === 'active'
+            ? `<path class="conn-ancestor-flow" data-conn-flow="${dataIndex}" d="${curve}" pathLength="100" fill="none"></path>`
+            : '';
         // Hovering a line itself is a visual preview only. Do not introduce the
         // midpoint delete control under the pointer, which would steal hover.
-        const cutControl = (isPersistentlySelectedLine || isNodeHoveredLine || isNodeLinkedLine)
+        const cutControl = !isAncestorCascade && (isPersistentlySelectedLine || isNodeHoveredLine || isNodeLinkedLine)
             ? `<g class="conn-cut" data-conn-index="${dataIndex}" transform="translate(${mx} ${my})"><circle r="8" fill="var(--card)" stroke="var(--connection-flow)" stroke-width="1.4"></circle><path d="M-3 -3 L3 3 M3 -3 L-3 3" stroke="var(--connection-flow)" stroke-width="1.5" stroke-linecap="round"></path></g>`
             : '';
-        return `<path class="${cls}" d="${curve}" stroke="${color}" stroke-width="${width}" fill="none" opacity="${opacity}"></path>${selectedFlow}<path class="conn-hit" data-conn-index="${dataIndex}" data-conn-selection-key="${escapeAttr(connectionSelectionKey)}" d="${curve}" stroke="transparent" stroke-width="14" fill="none"></path><circle cx="${tx}" cy="${ty}" r="3.5" fill="${color}" opacity=".66"></circle>${cutControl}`;
+        return `<path class="${cls}" d="${curve}" stroke="${color}" stroke-width="${width}" fill="none" opacity="${opacity}"></path>${selectedFlow}${ancestorFlow}<path class="conn-hit" data-conn-index="${dataIndex}" data-conn-selection-key="${escapeAttr(connectionSelectionKey)}" d="${curve}" stroke="transparent" stroke-width="14" fill="none"></path><circle class="${isAncestorCascade ? 'conn-ancestor-endpoint' : ''}" cx="${tx}" cy="${ty}" r="${isAncestorCascade && ancestorState === 'active' ? '4.2' : '3.5'}" fill="${color}" opacity="${isAncestorCascade ? '.9' : '.66'}"></circle>${cutControl}`;
     }).join('');
     // A large multi-selection should stay cheap: keep the selected styling and
     // controls, but avoid running dozens of continuous SVG animations.
@@ -10360,7 +10406,8 @@ function renderConnections(){
     const selectionDelay = continuousAnimationDelay(1250);
     const dashedSelectionDelay = continuousAnimationDelay(900);
     const dashDelay = continuousAnimationDelay(900);
-    return `<svg class="connection-layer ${reduceMotion ? 'conn-reduce-motion' : ''}" style="--connection-selection-delay:${selectionDelay}ms;--connection-dashed-selection-delay:${dashedSelectionDelay}ms;--connection-dash-delay:${dashDelay}ms" width="6000" height="4000" viewBox="0 0 6000 4000" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
+    const ancestorFlowDelay = continuousAnimationDelay(1100);
+    return `<svg class="connection-layer ${reduceMotion ? 'conn-reduce-motion' : ''}" style="--connection-selection-delay:${selectionDelay}ms;--connection-dashed-selection-delay:${dashedSelectionDelay}ms;--connection-dash-delay:${dashDelay}ms;--ancestor-route-delay:${ancestorFlowDelay}ms" width="6000" height="4000" viewBox="0 0 6000 4000" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
 }
 function refreshConnectionLayer(){
     connectionLayerRaf = 0;
@@ -12009,6 +12056,7 @@ function render(){
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const isGenerating = nodeHasLiveRunState(node);
+        const ancestorRunState = smartAncestorNodeVisualState(node.id);
         const shimmerDelay = continuousAnimationDelay(1500, node.runStartedAt);
         const pendingSpinDelay = continuousAnimationDelay(1000, node.runStartedAt);
         const body = nodeBodyHtml(node, layout);
@@ -12017,7 +12065,7 @@ function render(){
         const floatingDeleteBtn = !isEmpty && !isGroup && !isPending ? `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>` : '';
         const floatingActions = `${floatingPinBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
@@ -19790,6 +19838,7 @@ function buildSmartAncestorRunPlan(targetId){
         targetRunnable,
         unpinTarget,
         hasUpstream:allReachable.size > 1,
+        reachableIds:[...allReachable],
         layers,
         stepIds:layers.flat(),
         dependencies,
@@ -20212,6 +20261,20 @@ function syncCascadeRunButton(node=selectedNode()){
         : `<i data-lucide="workflow"></i><span>${escapeHtml(label)}</span>`;
     refreshIcons();
 }
+function setSmartAncestorCascadePreview(enabled){
+    if(smartAncestorCascadeRun){
+        smartAncestorCascadePreview = null;
+        return;
+    }
+    const node = enabled ? selectedNode() : null;
+    const next = node?.id ? buildSmartAncestorRunPlan(node.id) : null;
+    const nextPlan = next?.hasUpstream ? next : null;
+    const currentTargetId = smartAncestorCascadePreview?.targetId || '';
+    const nextTargetId = nextPlan?.targetId || '';
+    if(currentTargetId === nextTargetId && Boolean(smartAncestorCascadePreview) === Boolean(nextPlan)) return;
+    smartAncestorCascadePreview = nextPlan;
+    render();
+}
 function smartAncestorRunErrorMessage(plan){
     if(plan?.invalid === 'cycle') return '无法运行：存在循环连线';
     if(plan?.invalid === 'loop') return '该链路包含循环节点，暂未接入新运行模式';
@@ -20258,6 +20321,7 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
         return;
     }
     if(!targetNode?.id) return;
+    smartAncestorCascadePreview = null;
     if(activeComposerNode()?.id === targetNode.id) savePromptDraftForCurrent();
     const plan = buildSmartAncestorRunPlan(targetNode.id);
     if(plan.invalid){
@@ -20277,6 +20341,7 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
             .map(nodeId => nodes.find(candidate => candidate.id === nodeId))
             .filter(node => smartAncestorRunnableKind(node) === 'generation')
             .map(node => [node.id, cloneSmartSettings(smartSettingsForNode(node))])),
+        runningIds:new Set(),
         completedIds:new Set(),
         failedIds:new Set()
     };
@@ -20284,8 +20349,11 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
     render();
     try {
         for(const layer of plan.layers){
+            runState.runningIds = new Set(layer);
             layer.forEach(nodeId => setSmartAncestorStepEdgeState(runState, nodeId, 'active'));
+            render();
             const results = await Promise.allSettled(layer.map(nodeId => executeSmartAncestorPlanNode(nodeId)));
+            runState.runningIds.clear();
             results.forEach((result, index) => {
                 const nodeId = layer[index];
                 if(result.status === 'fulfilled'){
@@ -20296,6 +20364,7 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
                     setSmartAncestorStepEdgeState(runState, nodeId, 'failed');
                 }
             });
+            render();
             syncCascadeRunButton();
             if(runState.failedIds.size) break;
         }
@@ -23556,9 +23625,18 @@ runBtn.onclick = event => {
     return result;
 };
 cascadeRunBtn.onclick = () => {
+    setSmartAncestorCascadePreview(false);
     runSmartAncestorCascade();
     if(composerExpanded) setComposerExpanded(false);
 };
+cascadeRunBtn.addEventListener('pointerenter', () => setSmartAncestorCascadePreview(true));
+cascadeRunBtn.addEventListener('pointerleave', () => {
+    if(document.activeElement !== cascadeRunBtn) setSmartAncestorCascadePreview(false);
+});
+cascadeRunBtn.addEventListener('focus', () => setSmartAncestorCascadePreview(true));
+cascadeRunBtn.addEventListener('blur', () => {
+    if(!cascadeRunBtn.matches(':hover')) setSmartAncestorCascadePreview(false);
+});
 fileInput.onchange = () => {
     const groupPoint = pendingGroupUploadPoint;
     if(!fileInput.files?.length){
