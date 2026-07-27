@@ -2054,7 +2054,9 @@ function bindSmartCanvasVideo(host, nodeId){
         delete video.dataset.smartWaiting;
         syncSmartVideoControls(host, video);
         syncControlsPinned();
-        if(!nodeSelected()) showControlsTemporarily();
+        // Hover autoplay must not reveal the controls by itself. Mouse movement
+        // after playback begins (or an explicit selection/control interaction)
+        // is what promotes the player into the visible-controls state.
     });
     on(video, 'playing', () => {
         delete video.dataset.smartWaiting;

@@ -658,6 +658,19 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-resolution-badge { position:absolute; left:7px; top:7px; z-index:4; max-width:calc(100% - 14px); height:22px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(255,255,255,.88); color:#334155; border:1px solid rgba(148,163,184,.34); box-shadow:0 8px 18px rgba(15,23,42,.12); backdrop-filter:blur(12px); font-size:10px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; transform:translateY(-2px); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
 .theme-dark .image-resolution-badge { background:rgba(15,23,42,.82); color:#e2e8f0; border-color:rgba(148,163,184,.32); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .thumb-item:hover .image-resolution-badge, .image-wrap:hover .image-resolution-badge, .thumb-item.image-selected .image-resolution-badge, .image-wrap.image-selected .image-resolution-badge { opacity:1; transform:translateY(0); }
+/* Before hover playback starts, video badges/actions keep the normal immediate
+   node-hover behavior. Once playback has started, their opacity follows the
+   custom control strip so the top and bottom chrome fade as one unit. */
+:is(.image-wrap,.thumb-item):has(.smart-canvas-video[data-smart-has-played="1"]) > :is(.image-resolution-badge,.mini-x),
+.image-node:has(.smart-canvas-video[data-smart-has-played="1"]) > .floating-node-actions { opacity:0; pointer-events:none; }
+:is(.image-wrap,.thumb-item):has(.smart-canvas-video-host:is(.is-controls-visible,.is-controls-pinned,.is-controls-interacting)) > :is(.image-resolution-badge,.mini-x),
+.image-node:has(.smart-canvas-video-host:is(.is-controls-visible,.is-controls-pinned,.is-controls-interacting)) > .floating-node-actions { opacity:1; }
+:is(.image-wrap,.thumb-item):has(.smart-canvas-video-host:is(.is-controls-visible,.is-controls-pinned,.is-controls-interacting)) > .mini-x,
+.image-node:has(.smart-canvas-video-host:is(.is-controls-visible,.is-controls-pinned,.is-controls-interacting)) > .floating-node-actions { pointer-events:auto; }
+:is(.image-wrap,.thumb-item):has(.smart-canvas-video[data-smart-has-played="1"]) > .image-resolution-badge { transform:translateY(-2px); transition-duration:.22s; }
+:is(.image-wrap,.thumb-item):has(.smart-canvas-video-host:is(.is-controls-visible,.is-controls-pinned,.is-controls-interacting)) > .image-resolution-badge { transform:translateY(0); }
+:is(.image-wrap,.thumb-item):has(.smart-canvas-video[data-smart-has-played="1"]) > .mini-x,
+.image-node:has(.smart-canvas-video[data-smart-has-played="1"]) > .floating-node-actions { transition-duration:.22s; }
 .image-wrap-loading:hover .image-resolution-badge { opacity:0 !important; transform:translateY(-2px) !important; pointer-events:none !important; }
 .image-node.dragging .image-resolution-badge { opacity:0 !important; transform:translateY(-2px) !important; }
 .node-hint { padding:0 12px 10px; color:var(--faint); font-size:10.5px; line-height:1.35; font-weight:700; }
