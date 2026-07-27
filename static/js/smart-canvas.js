@@ -3901,13 +3901,15 @@ function playVeniceCreditsChangeSound(direction='increase'){
         const ctx = playGenerationCompleteSound._ctx || (playGenerationCompleteSound._ctx = new AudioCtx());
         const play = () => {
             const start = ctx.currentTime + 0.015;
-            const tones = [
-                {freq:392, at:0, duration:0.14},
-                {freq:659.25, at:0.22, duration:0.24}
-            ];
-            if(direction === 'decrease'){
-                [tones[0].freq, tones[1].freq] = [tones[1].freq, tones[0].freq];
-            }
+            const tones = direction === 'decrease'
+                ? [
+                    {freq:440, at:0, duration:0.12},
+                    {freq:523.25, at:0.16, duration:0.22}
+                ]
+                : [
+                    {freq:392, at:0, duration:0.14},
+                    {freq:659.25, at:0.22, duration:0.24}
+                ];
             tones.forEach(tone => {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
