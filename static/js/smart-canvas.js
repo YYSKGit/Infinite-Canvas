@@ -5654,9 +5654,7 @@ function renderVeniceCreditsPanel(){
     if(veniceCreditsPanelUpdatedAt) veniceCreditsPanelUpdatedAt.textContent = veniceAgoText(veniceCreditsState.updatedAt);
     setVeniceRowTooltip(veniceCreditsPanelRemaining, valid ? `约 ${veniceCreditsCnyText(remaining)}` : '--');
     setVeniceRowTooltip(veniceCreditsPanelTotal, valid ? `约 ${veniceCreditsCnyText(total)}` : '--');
-    const available = Number(veniceCreditsState.available);
-    const fallbackAvailable = valid ? Math.max(0, remaining) : NaN;
-    const remainingCredits = Number.isFinite(available) ? Math.max(0, available) : fallbackAvailable;
+    const remainingCredits = valid ? Math.max(0, remaining) : NaN;
     const refillAt = Number(veniceCreditsState.nextRefillAt);
     const remainingDays = Number.isFinite(refillAt) && refillAt > Date.now()
         ? Math.max(1, Math.ceil((refillAt - Date.now()) / 86400000))
@@ -5805,15 +5803,12 @@ function startVeniceCreditsAutoRefresh(){
         refreshVeniceCredits({automatic:true});
     }, VENICE_CREDITS_AUTO_REFRESH_MS);
 }
-function veniceQuoteRemainingShareText(quote){
+function veniceQuoteRemainingCountText(quote){
     const remaining = Number(veniceCreditsState.remaining);
-    const total = Number(veniceCreditsState.total);
     const cost = Math.max(0, Number(quote) || 0);
-    if(!Number.isFinite(remaining) || !Number.isFinite(total) || total <= 0) return '';
-    if(remaining <= 0) return ` (${cost === 0 ? '0%' : '∞%'})`;
-    const percent = cost / remaining * 100;
-    const percentText = percent > 0 && percent < 0.01 ? '<0.01%' : `${percent.toFixed(percent >= 10 ? 1 : 2)}%`;
-    return ` (${percentText})`;
+    if(!Number.isFinite(remaining) || cost <= 0) return '';
+    const count = Math.max(0, Math.floor(remaining / cost));
+    return ` (${count}次)`;
 }
 function hideVeniceImageQuote(){
     if(veniceImageQuoteTimer){
@@ -5864,7 +5859,7 @@ function renderVeniceImageQuoteAmount(unitQuote){
     setVeniceImageQuoteStatus(
         totalQuote === 0 ? 'free' : 'ready',
         totalQuote === 0 ? '免费' : `¥${totalCny.toFixed(2)}`,
-        `${unitQuote} 积分/张 × ${count} = ${creditsText} 积分 ≈ $${totalUsd.toFixed(2)} × 7${veniceQuoteRemainingShareText(totalQuote)}`
+        `${unitQuote} 积分/张 × ${count} = ${creditsText} 积分 ≈ $${totalUsd.toFixed(2)} × 7${veniceQuoteRemainingCountText(totalQuote)}`
     );
 }
 function veniceImageQuoteHasReferenceImage(subject){
@@ -6004,7 +5999,7 @@ function syncVeniceVideoQuote(){
         const cny = Number(cached.cny);
         const usd = Number.isFinite(Number(cached.usd)) ? Number(cached.usd) : quote / 100;
         veniceVideoQuoteSignature = activeKey;
-        setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingShareText(quote)}`);
+        setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingCountText(quote)}`);
         return;
     }
     if(activeKey === veniceVideoQuoteSignature) return;
@@ -6035,7 +6030,7 @@ function syncVeniceVideoQuote(){
                 subject.veniceVideoQuoteCache = {signature, quote, usd, cny, updatedAt:Date.now()};
                 scheduleSave();
             }
-            setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingShareText(quote)}`);
+            setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingCountText(quote)}`);
         } catch(error) {
             if(error?.name === 'AbortError') return;
             if(requestToken !== veniceVideoQuoteRequestToken || activeKey !== veniceVideoQuoteSignature) return;
