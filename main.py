@@ -44,6 +44,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
+    "/api/comfyui/health",
     "/api/canvases",
     "/api/canvases/trash",
     "/api/venice/credits",
@@ -532,6 +533,8 @@ load_env_file()
 
 COMFYUI_INSTANCES = [s.strip() for s in os.getenv("COMFYUI_INSTANCES", "127.0.0.1:8188").split(",") if s.strip()]
 COMFYUI_ADDRESS = COMFYUI_INSTANCES[0]
+COMFYUI_HEALTH_TTL_SECONDS = 5.0
+COMFYUI_HEALTH_CACHE = {"checked_at": 0.0, "online_instances": []}
 
 AI_BASE_URL = os.getenv("COMFLY_BASE_URL", "https://ai.comfly.chat").rstrip("/")
 AI_API_KEY = os.getenv("COMFLY_API_KEY", "")
@@ -2938,6 +2941,34 @@ def collect_required_comfy_media(params: Dict[str, Any]) -> List[str]:
             if is_comfy_input_media_value(input_name, value):
                 required.append(value)
     return list(dict.fromkeys(required))
+
+async def comfyui_online_instances(force: bool = False) -> List[str]:
+    now = time.monotonic()
+    cached_at = float(COMFYUI_HEALTH_CACHE.get("checked_at") or 0.0)
+    if not force and now - cached_at < COMFYUI_HEALTH_TTL_SECONDS:
+        return list(COMFYUI_HEALTH_CACHE.get("online_instances") or [])
+
+    async def probe(client: httpx.AsyncClient, addr: str) -> str:
+        try:
+            response = await client.get(f"http://{addr}/queue")
+            if response.status_code != 200:
+                return ""
+            data = response.json()
+            if not isinstance(data, dict):
+                return ""
+            if "queue_running" not in data or "queue_pending" not in data:
+                return ""
+            return addr
+        except (httpx.HTTPError, ValueError, TypeError):
+            return ""
+
+    timeout = httpx.Timeout(1.0, connect=0.5)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        results = await asyncio.gather(*(probe(client, addr) for addr in COMFYUI_INSTANCES))
+    online = [addr for addr in results if addr]
+    COMFYUI_HEALTH_CACHE["checked_at"] = time.monotonic()
+    COMFYUI_HEALTH_CACHE["online_instances"] = online
+    return list(online)
 
 def get_best_backend(required_images: List[str] = None):
     best_backend = COMFYUI_INSTANCES[0]
@@ -18460,6 +18491,15 @@ def runninghub_collect_workflow_fields(workflow_json):
 class ComfyInstancesPayload(BaseModel):
     instances: List[str] = []
 
+@app.get("/api/comfyui/health")
+async def get_comfyui_health():
+    online = await comfyui_online_instances()
+    return {
+        "available": bool(online),
+        "online_instances": online,
+        "configured_instances": len(COMFYUI_INSTANCES),
+    }
+
 @app.get("/api/comfyui/instances")
 def get_comfyui_instances():
     return {"instances": COMFYUI_INSTANCES}
@@ -18493,6 +18533,8 @@ def save_comfyui_instances(payload: ComfyInstancesPayload):
     global COMFYUI_INSTANCES, COMFYUI_ADDRESS, BACKEND_LOCAL_LOAD
     COMFYUI_INSTANCES = cleaned
     COMFYUI_ADDRESS = cleaned[0]
+    COMFYUI_HEALTH_CACHE["checked_at"] = 0.0
+    COMFYUI_HEALTH_CACHE["online_instances"] = []
     new_load = {addr: 0 for addr in cleaned}
     for addr, n in (BACKEND_LOCAL_LOAD or {}).items():
         if addr in new_load:

@@ -185,6 +185,9 @@ let saveTimer = null;
 let apiProviders = [];
 let comfyWorkflows = [];
 let comfyInstanceCount = 1;
+let comfyRuntimeAvailable = false;
+let comfyHealthRefreshToken = 0;
+let engineAvailabilityReady = false;
 let assetLibrary = {categories:[]};
 let assetLibraryOpen = false;
 let assetTab = 'image';
@@ -4950,6 +4953,83 @@ function toggleZoomPreview(){
 function imageProviders(){
     return (apiProviders || []).filter(p => p.enabled !== false && p.id !== 'modelscope' && p.id !== 'volcengine' && (p.image_models || []).length);
 }
+function smartProviderProtocol(provider){
+    return String(provider?.protocol || '').trim().toLowerCase();
+}
+function smartProviderModels(provider, kind){
+    const key = kind === 'video' ? 'video_models' : 'image_models';
+    return Array.isArray(provider?.[key]) ? provider[key].filter(model => String(model || '').trim()) : [];
+}
+function smartApiProviderUsable(provider){
+    if(!provider || provider.enabled === false) return false;
+    const id = String(provider.id || '').trim().toLowerCase();
+    const protocol = smartProviderProtocol(provider);
+    if(['modelscope','volcengine','runninghub'].includes(id) || ['volcengine','runninghub'].includes(protocol)) return false;
+    const hasImageModels = smartProviderModels(provider, 'image').length > 0;
+    const hasVideoModels = smartProviderModels(provider, 'video').length > 0;
+    if(!hasImageModels && !hasVideoModels) return false;
+    if(['codex','gemini-cli','jimeng'].includes(protocol)) return true;
+    if(protocol === 'venice'){
+        return (hasImageModels && provider.has_venice_client === true)
+            || (hasVideoModels && provider.has_key === true);
+    }
+    return provider.has_key === true && Boolean(String(provider.base_url || '').trim());
+}
+function smartVolcengineUsable(){
+    const provider = (apiProviders || []).find(item => String(item?.id || '').trim().toLowerCase() === 'volcengine');
+    if(!provider || provider.enabled === false || provider.has_key !== true) return false;
+    return smartProviderModels(provider, 'image').length > 0 || smartProviderModels(provider, 'video').length > 0;
+}
+function smartModelscopeUsable(){
+    const provider = (apiProviders || []).find(item => String(item?.id || '').trim().toLowerCase() === 'modelscope');
+    return Boolean(
+        provider
+        && provider.enabled !== false
+        && provider.has_key === true
+        && smartProviderModels(provider, 'image').length > 0
+    );
+}
+function smartRunningHubEntryUsable(ref){
+    if(!ref?.id) return false;
+    let fields = rhEntryFields(ref.entry);
+    if(ref.kind === 'workflow'){
+        const cached = runningHubWorkflowCache[ref.id];
+        if(Array.isArray(cached?.fields) && cached.fields.length) fields = cached.fields;
+    }
+    return rhUsableFields(fields).length > 0;
+}
+function smartRunningHubUsable(){
+    const provider = runningHubProvider();
+    if(!provider || (!provider.has_key && !provider.has_wallet_key)) return false;
+    return runningHubAllEntries().some(smartRunningHubEntryUsable);
+}
+function smartEngineAvailability(){
+    return {
+        api:(apiProviders || []).some(smartApiProviderUsable),
+        volcengine:smartVolcengineUsable(),
+        modelscope:smartModelscopeUsable(),
+        comfy:comfyRuntimeAvailable && comfyWorkflows.length > 0,
+        runninghub:smartRunningHubUsable()
+    };
+}
+async function refreshComfyRuntimeAvailability(){
+    const token = ++comfyHealthRefreshToken;
+    try {
+        const response = await fetch('/api/comfyui/health');
+        if(!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if(token !== comfyHealthRefreshToken) return;
+        const nextAvailable = data?.available === true;
+        const changed = nextAvailable !== comfyRuntimeAvailable;
+        comfyRuntimeAvailable = nextAvailable;
+        if(changed && engineAvailabilityReady) syncEngineSelectUI();
+    } catch(_) {
+        if(token !== comfyHealthRefreshToken) return;
+        const changed = comfyRuntimeAvailable;
+        comfyRuntimeAvailable = false;
+        if(changed && engineAvailabilityReady) syncEngineSelectUI();
+    }
+}
 function volcengineProvider(){
     return (apiProviders || []).find(p => p.id === 'volcengine' && p.enabled !== false) || {
         id:'volcengine',
@@ -6121,8 +6201,11 @@ function syncEngineSelectUI(){
     };
     const labelEl = engineSelect.querySelector('.engine-select-label');
     if(labelEl) labelEl.textContent = engineLabels[settings.engine] || settings.engine;
+    const availability = engineAvailabilityReady ? smartEngineAvailability() : null;
     engineSelect.querySelectorAll('[data-engine-value]').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.engineValue === settings.engine);
+        const engine = btn.dataset.engineValue || '';
+        btn.classList.toggle('active', engine === settings.engine);
+        btn.hidden = Boolean(availability && availability[engine] !== true);
     });
 }
 function renderDynamicParams(){
@@ -7653,7 +7736,10 @@ async function loadConfig(options={}){
     try {
         const cfg = await fetch('/api/config').then(r => r.json());
         apiProviders = Array.isArray(cfg.api_providers) ? cfg.api_providers : [];
-        comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
+        const configuredComfyInstances = (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : [])
+            .filter(instance => String(instance || '').trim());
+        comfyInstanceCount = Math.max(1, configuredComfyInstances.length || 1);
+        refreshComfyRuntimeAvailability();
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
         if(options.waitForPointerIdle) await waitForSmartConfigPointerIdle();
@@ -7666,6 +7752,7 @@ async function loadConfig(options={}){
         await Promise.all(rhWorkflowIds.map(async workflowId => {
             try { await ensureRunningHubWorkflow(workflowId); } catch(_) {}
         }));
+        engineAvailabilityReady = true;
         lastConfigRefreshAt = Date.now();
         sanitizeSmartApiSelection(settings);
         if(options.waitForPointerIdle) await waitForSmartConfigPointerIdle();

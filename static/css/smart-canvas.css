@@ -945,7 +945,8 @@ body.smart-prompt-assistant-resize { cursor:ns-resize !important; user-select:no
 .engine-select-control > .engine-select-pill .pill-caret { opacity:.7; }
 .engine-select-control:hover > .engine-select-pill { border-color:var(--text); }
 .engine-select-control.pinned > .engine-select-pill { border-color:var(--strong); box-shadow:0 6px 16px rgba(15,23,42,.1); }
-.engine-select-control .smart-popover { bottom:auto; top:calc(100% + 8px); transform:translate(-50%, -4px); min-width:160px; }
+.engine-select-control .smart-popover { bottom:auto; top:calc(100% + 8px); transform:translate(-50%, -4px); min-width:140px; }
+.engine-select-control .direct-option[hidden] { display:none !important; }
 .engine-select-control:not(.closing):hover .smart-popover,
 .engine-select-control.pinned .smart-popover { opacity:1 !important; visibility:visible !important; pointer-events:auto !important; transform:translate(-50%, 0) !important; }
 .engine-select-control:not(.pinned):not(:hover) .smart-popover,
