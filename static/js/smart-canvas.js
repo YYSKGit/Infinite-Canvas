@@ -22254,6 +22254,7 @@ window.onmousemove = e => {
     if(promptResizeState){
         e.preventDefault();
         const dy = e.clientY - promptResizeState.startY;
+        if(Math.abs(dy) >= 2) promptResizeState.moved = true;
         settings.promptH = Math.max(60, Math.min(380, promptResizeState.startH + dy));
         promptInput.style.setProperty('--prompt-h', `${settings.promptH}px`);
         persistActiveSmartSettings();
@@ -22537,7 +22538,14 @@ window.onmouseup = e => {
         updateMagneticPort(e);
         return;
     }
-    if(promptResizeState){ promptResizeState = null; scheduleSave(); }
+    if(promptResizeState){
+        const resized = promptResizeState.moved;
+        promptResizeState = null;
+        document.body.classList.remove('smart-prompt-resize');
+        if(resized) holdPromptResizeGuard(e);
+        else clearPromptResizeGuard();
+        scheduleSave();
+    }
     if(selectionState) finishSelection(e);
     if(previewCompareDrag) previewCompareDrag = false;
     if(panoramaState.drag){
@@ -22964,14 +22972,43 @@ if(apiKindToggle){
     });
 }
 let promptResizeState = null;
+let promptResizeGuardMoveHandler = null;
 const promptResize = document.getElementById('promptResize');
+const promptParamRow = dynamicParams?.closest('.param-row') || null;
+function clearPromptResizeGuard(){
+    composer?.classList.remove('prompt-resize-guard');
+    if(promptResizeGuardMoveHandler){
+        window.removeEventListener('mousemove', promptResizeGuardMoveHandler, true);
+        promptResizeGuardMoveHandler = null;
+    }
+}
+function holdPromptResizeGuard(event){
+    const pointed = document.elementFromPoint(event.clientX, event.clientY);
+    if(!promptParamRow?.contains(pointed)){
+        clearPromptResizeGuard();
+        return;
+    }
+    composer?.classList.add('prompt-resize-guard');
+    promptResizeGuardMoveHandler = moveEvent => {
+        const hovered = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+        if(!promptParamRow.contains(hovered)) clearPromptResizeGuard();
+    };
+    window.addEventListener('mousemove', promptResizeGuardMoveHandler, true);
+}
+promptParamRow?.addEventListener('mousedown', clearPromptResizeGuard, true);
+promptParamRow?.addEventListener('focusin', clearPromptResizeGuard, true);
 if(promptResize){
     promptResize.addEventListener('mousedown', e => {
         if(e.button !== 0) return;
         e.preventDefault(); e.stopPropagation();
+        clearPromptResizeGuard();
+        closeAllSmartPopovers();
+        composer?.classList.add('prompt-resize-guard');
+        document.body.classList.add('smart-prompt-resize');
         promptResizeState = {
             startY: e.clientY,
-            startH: Number(settings.promptH) || promptInput.offsetHeight || 124
+            startH: Number(settings.promptH) || promptInput.offsetHeight || 124,
+            moved:false
         };
     });
 }
