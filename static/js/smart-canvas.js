@@ -1079,18 +1079,51 @@ const smartVideoUserPausedStates = new Map();
 const smartVideoSystemPausedKeys = new Set();
 let smartVideoPreviewHandoff = null;
 let smartVideoPreviewOpeningKey = '';
+function smartVideoPreviewHandoffSource(handoff=smartVideoPreviewHandoff){
+    if(!handoff) return null;
+    const direct = handoff.sourceVideo;
+    if(direct?.isConnected && (!handoff.sourcePlaybackKey || smartVideoPlaybackKey(direct) === handoff.sourcePlaybackKey)) return direct;
+    const current = smartCanvasVideoForPreview(handoff.nodeId, handoff.imageIndex, handoff.preferredContainerNodeId || '');
+    if(current && (!handoff.sourcePlaybackKey || smartVideoPlaybackKey(current) === handoff.sourcePlaybackKey)) return current;
+    return null;
+}
+function smartVideoIsPreviewHandoffSource(video){
+    const handoff = smartVideoPreviewHandoff;
+    if(!video || !handoff || handoff.phase === 'settled') return false;
+    if(handoff.sourceVideo === video) return true;
+    const playbackKey = smartVideoPlaybackKey(video);
+    return Boolean(playbackKey && handoff.sourcePlaybackKey && playbackKey === handoff.sourcePlaybackKey);
+}
+function preserveSmartVideoPreviewHandoffSource(video){
+    if(!smartVideoIsPreviewHandoffSource(video)) return false;
+    // This is a transient system pause at the inherited timeline position, not
+    // a user pause and not the durable post-preview first-frame hold.
+    const epoch = Number(video.dataset.smartPlaybackEpoch || 0) + 1;
+    video.dataset.smartPlaybackEpoch = String(epoch);
+    video.dataset.smartPlaybackWanted = '0';
+    delete video.dataset.smartWaiting;
+    video.pause?.();
+    const host = video.closest('.smart-canvas-video-host');
+    host?.classList.remove('is-playing', 'is-waiting', 'autoplay-blocked');
+    syncSmartVideoControls(host, video);
+    host?._smartSyncControlsPinned?.();
+    return true;
+}
 function handoffSmartCanvasVideoToPreview(video, nodeId, imageIndex){
     if(!video) return;
+    const wasPlaying = !video.paused || video.dataset.smartPlaybackWanted === '1';
     smartVideoPreviewHandoff = {
         nodeId,
         imageIndex:Number(imageIndex) || 0,
-        currentTime:Math.max(0, Number(video.currentTime) || 0)
+        currentTime:Math.max(0, Number(video.currentTime) || 0),
+        sourceVideo:video,
+        sourcePlaybackKey:smartVideoPlaybackKey(video),
+        wasPlaying,
+        phase:'loading'
     };
-    // The preview inherits the current position, while the covered canvas
-    // player enters a durable system pause at its first frame. Unlike a timed
-    // preview lock, this state survives selection/render synchronization while
-    // still allowing the custom controls to be shown.
-    holdSmartCanvasVideoAtFirstFrame(video);
+    // Freeze the canvas player at the exact handoff position. It is reset only
+    // after the prepared preview modal has reached a painted frame.
+    preserveSmartVideoPreviewHandoffSource(video);
 }
 function smartCanvasVideoForPreview(nodeId, imageIndex=0, preferredContainerNodeId=''){
     const targetNodeId = String(nodeId || '');
@@ -1118,21 +1151,57 @@ function openSmartCanvasVideoPreview(video, nodeId, imageIndex=0, preferredConta
     if(smartVideoPreviewOpeningKey === openingKey) return true;
     smartVideoPreviewOpeningKey = openingKey;
     const sourceVideo = video || smartCanvasVideoForPreview(nodeId, targetIndex, preferredContainerNodeId);
-    if(sourceVideo) handoffSmartCanvasVideoToPreview(sourceVideo, nodeId, targetIndex);
+    if(sourceVideo){
+        handoffSmartCanvasVideoToPreview(sourceVideo, nodeId, targetIndex);
+        if(smartVideoPreviewHandoff) smartVideoPreviewHandoff.preferredContainerNodeId = preferredContainerNodeId || '';
+    }
     openImagePreviewSmart(nodeId, targetIndex);
     return true;
 }
 async function applySmartVideoPreviewHandoff(video, nodeId, imageIndex){
     const handoff = smartVideoPreviewHandoff;
     if(!video || !handoff || handoff.nodeId !== nodeId || handoff.imageIndex !== Number(imageIndex)) return false;
-    smartVideoPreviewHandoff = null;
+    handoff.phase = 'seeking-preview';
     const duration = Number(video.duration);
     let targetTime = Math.max(0, Number(handoff.currentTime) || 0);
     if(Number.isFinite(duration) && duration > 0) targetTime = Math.min(targetTime, Math.max(0, duration - .001));
     try { await seekVideoForFrame(video, targetTime); } catch(e) {
         try { video.currentTime = targetTime; } catch(_) {}
     }
+    if(smartVideoPreviewHandoff === handoff) handoff.phase = 'preview-ready';
     return true;
+}
+function settleSmartVideoPreviewSourceAfterReveal(nodeId, imageIndex){
+    const handoff = smartVideoPreviewHandoff;
+    if(!handoff || handoff.nodeId !== nodeId || handoff.imageIndex !== Number(imageIndex)) return;
+    handoff.phase = 'awaiting-modal-paint';
+    // The first animation frame commits visibility/layout for the prepared
+    // modal. Reset on the following frame so the modal has actually painted
+    // before the covered canvas player moves back to frame zero.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if(smartVideoPreviewHandoff !== handoff || handoff.phase !== 'awaiting-modal-paint') return;
+        const sourceVideo = smartVideoPreviewHandoffSource(handoff);
+        handoff.phase = 'settled';
+        smartVideoPreviewHandoff = null;
+        if(sourceVideo) holdSmartCanvasVideoAtFirstFrame(sourceVideo);
+    }));
+}
+function cancelSmartVideoPreviewHandoff(){
+    const handoff = smartVideoPreviewHandoff;
+    if(!handoff) return null;
+    const sourceVideo = smartVideoPreviewHandoffSource(handoff);
+    handoff.phase = 'cancelled';
+    smartVideoPreviewHandoff = null;
+    return {...handoff, sourceVideo};
+}
+function restoreCancelledSmartVideoPreviewHandoff(handoff){
+    const video = handoff?.sourceVideo;
+    if(!video?.isConnected || !handoff.wasPlaying || smartCanvasVideoPlaybackBlockedByOverlay()) return;
+    try {
+        const targetTime = Math.max(0, Number(handoff.currentTime) || 0);
+        if(Math.abs((Number(video.currentTime) || 0) - targetTime) > .025) video.currentTime = targetTime;
+    } catch(e) {}
+    userPlaySmartCanvasVideo(video);
 }
 function smartVideoPlaybackKey(video){
     if(!video) return '';
@@ -1582,6 +1651,7 @@ function preserveSmartVideoUserPauseForBlockingOverlay(video){
     return true;
 }
 function settleSmartCanvasVideoForBlockingOverlay(video){
+    if(preserveSmartVideoPreviewHandoffSource(video)) return;
     if(smartVideoHasSystemPause(video)){
         holdSmartCanvasVideoAtFirstFrame(video);
         return;
@@ -14180,6 +14250,7 @@ function refreshComparePanel(){
         syncPreviewFrameSize();
         updatePreviewMetaHint();
         revealPreparedImageEditor();
+        if(isVideoPreview) settleSmartVideoPreviewSourceAfterReveal(editing.node?.id || '', editing.index ?? 0);
     };
     if(isVideoPreview){
         currentImg.onload = null;
@@ -15751,7 +15822,7 @@ function openImageEditor(nodeId, imageIndex=0){
     refreshIcons();
 }
 function closeImageEditor(){
-    smartVideoPreviewHandoff = null;
+    const cancelledVideoHandoff = cancelSmartVideoPreviewHandoff();
     smartVideoPreviewOpeningKey = '';
     cleanupSmartLogPreviewNode();
     previewCompareLoadToken++;
@@ -15799,6 +15870,7 @@ function closeImageEditor(){
     if(textCanvas){ textCanvas.style.left = ''; textCanvas.style.top = ''; }
     updatePreviewNavButtons();
     syncSmartCanvasVideoSelection();
+    restoreCancelledSmartVideoPreviewHandoff(cancelledVideoHandoff);
     scheduleReleaseInactiveSmartVideoSystemPauses();
 }
 function clampCrop(){
