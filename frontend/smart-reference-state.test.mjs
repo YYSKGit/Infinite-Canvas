@@ -89,6 +89,7 @@ test('buildPromptRequest preserves upstream provenance in the refs saved for rer
         promptReferenceKind:ref => ref.kind || 'image',
         promptMentionTokenLabel:(kind, index) => `${kind}${index}`,
         venicePromptReferenceLabel:(kind, index) => `@${kind}${index}`,
+        smartOriginalMediaUrl:ref => ref?.url || '',
         isSmartGroupNode:() => false,
         textForNode:() => '',
         inputPromptTextFor:() => '',
@@ -209,6 +210,8 @@ for(const priorRunFailed of [false, true]){
                 return refs.filter(ref => ref?.url && !seen.has(ref.url) && seen.add(ref.url));
             },
             isVeniceVideoProvider:() => false,
+            beginVeniceCreditsFastRefresh:() => null,
+            endVeniceCreditsFastRefresh:() => {},
             applyUploadedUrlsToSmartRefs:refs => refs,
             videoProviderPlatform:() => 'custom-api',
             imageRefsOnly:refs => refs.filter(ref => ref?.kind === 'image'),
@@ -249,6 +252,44 @@ for(const priorRunFailed of [false, true]){
         assert.equal(body.images.length, 1);
     });
 }
+
+test('Venice credit fast refresh is scoped to Venice providers only', () => {
+    const activeRequests = new Set();
+    const refreshes = [];
+    const context = {
+        veniceCreditsActiveRequests:activeRequests,
+        veniceCreditsFastRefreshUntil:0,
+        veniceCreditsNextAutoRetryAt:123,
+        VENICE_CREDITS_FAST_TAIL_MS:30000,
+        isVeniceProviderId:providerId => providerId === 'venice',
+        refreshVeniceCredits:options => refreshes.push(options)
+    };
+    const loaded = loadProductionFunctions([
+        'beginVeniceCreditsFastRefresh',
+        'endVeniceCreditsFastRefresh'
+    ], context);
+
+    const nonVeniceToken = loaded.beginVeniceCreditsFastRefresh('custom-api');
+    assert.equal(nonVeniceToken, null);
+    assert.equal(activeRequests.size, 0);
+    assert.deepEqual(refreshes, []);
+
+    loaded.endVeniceCreditsFastRefresh(nonVeniceToken);
+    assert.equal(activeRequests.size, 0);
+    assert.equal(loaded.sandbox.veniceCreditsFastRefreshUntil, 0);
+
+    const veniceToken = loaded.beginVeniceCreditsFastRefresh('venice');
+    assert.equal(typeof veniceToken, 'symbol');
+    assert.equal(activeRequests.size, 1);
+    assert.equal(refreshes.length, 1);
+    assert.equal(refreshes[0].providerId, 'venice');
+    assert.equal(refreshes[0].automatic, true);
+    assert.equal(refreshes[0].fast, true);
+
+    loaded.endVeniceCreditsFastRefresh(veniceToken);
+    assert.equal(activeRequests.size, 0);
+    assert.ok(loaded.sandbox.veniceCreditsFastRefreshUntil > Date.now());
+});
 
 test('legacy uploaded self-reference survives while removed manual and prompt refs do not', () => {
     const target = {

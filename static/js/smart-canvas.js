@@ -256,6 +256,10 @@ let veniceCreditsAutoRefreshTimer = null;
 let veniceCreditsCooldownTimer = null;
 let veniceCreditsAutoFailureCount = 0;
 let veniceCreditsNextAutoRetryAt = 0;
+let veniceCreditsObservedProviderId = '';
+let veniceCreditsObservedRemaining = null;
+let veniceCreditsFastRefreshUntil = 0;
+const veniceCreditsActiveRequests = new Set();
 let veniceVideoQuoteTimer = null;
 let veniceVideoQuoteController = null;
 let veniceVideoQuoteSignature = '';
@@ -268,6 +272,9 @@ let veniceImageQuoteCache = null;
 const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v2';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
+const VENICE_CREDITS_FAST_REFRESH_MS = 10 * 1000;
+const VENICE_CREDITS_AUTO_TICK_MS = 1000;
+const VENICE_CREDITS_FAST_TAIL_MS = 30 * 1000;
 const VENICE_CREDITS_AUTO_MAX_BACKOFF_MS = 30 * 60 * 1000;
 let veniceCreditsState = {
     providerId:'',
@@ -3883,6 +3890,37 @@ function playGenerationErrorSound(){
         else play();
     } catch(e) {}
 }
+let veniceCreditsChangeSoundAt = 0;
+function playVeniceCreditsChangeSound(){
+    const now = Date.now();
+    if(now - veniceCreditsChangeSoundAt < 1200) return;
+    veniceCreditsChangeSoundAt = now;
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if(!AudioCtx) return;
+        const ctx = playGenerationCompleteSound._ctx || (playGenerationCompleteSound._ctx = new AudioCtx());
+        const play = () => {
+            const start = ctx.currentTime + 0.015;
+            [
+                {freq:523.25, at:0, duration:0.11},
+                {freq:783.99, at:0.1, duration:0.2}
+            ].forEach(tone => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(tone.freq, start + tone.at);
+                gain.gain.setValueAtTime(0.0001, start + tone.at);
+                gain.gain.exponentialRampToValueAtTime(0.11, start + tone.at + 0.018);
+                gain.gain.exponentialRampToValueAtTime(0.0001, start + tone.at + tone.duration);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start(start + tone.at);
+                osc.stop(start + tone.at + tone.duration + 0.02);
+            });
+        };
+        if(ctx.state === 'suspended') ctx.resume().then(play).catch(() => {});
+        else play();
+    } catch(e) {}
+}
 function selectedNode(){ return nodes.find(n => n.id === selectedId) || null; }
 function clearSelection(){
     savePromptDraftForCurrent();
@@ -5483,6 +5521,28 @@ function resolveVeniceCreditsProviderId(preferredId=''){
     const primary = providers.find(item => item.primary);
     return String((primary || providers[0])?.id || '').trim();
 }
+function beginVeniceCreditsFastRefresh(providerId=''){
+    if(!isVeniceProviderId(providerId)) return null;
+    const token = Symbol('venice-credits-active-request');
+    veniceCreditsActiveRequests.add(token);
+    veniceCreditsNextAutoRetryAt = 0;
+    veniceCreditsFastRefreshUntil = Math.max(veniceCreditsFastRefreshUntil, Date.now() + VENICE_CREDITS_FAST_TAIL_MS);
+    refreshVeniceCredits({providerId, automatic:true, fast:true});
+    return token;
+}
+function endVeniceCreditsFastRefresh(token){
+    if(!token) return;
+    veniceCreditsActiveRequests.delete(token);
+    veniceCreditsFastRefreshUntil = Math.max(veniceCreditsFastRefreshUntil, Date.now() + VENICE_CREDITS_FAST_TAIL_MS);
+}
+function hasActiveVeniceCanvasTask(){
+    if(veniceCreditsActiveRequests.size) return true;
+    return (nodes || []).some(node => smartPendingTasks(node)
+        .some(task => isVeniceProviderId(task?.providerId || task?.provider_id || '')));
+}
+function isVeniceCreditsFastRefreshActive(){
+    return hasActiveVeniceCanvasTask() || Date.now() < veniceCreditsFastRefreshUntil;
+}
 function veniceCreditPercent(amount, total){
     const safeTotal = Number(total);
     const safeAmount = Number(amount);
@@ -5728,9 +5788,12 @@ async function refreshVeniceCredits(options={}){
     if(!veniceCreditsBadge) return null;
     const now = Date.now();
     const automatic = options?.automatic === true;
+    const fastRefresh = automatic && (options?.fast === true || isVeniceCreditsFastRefreshActive());
     if(automatic && now < veniceCreditsNextAutoRetryAt) return null;
+    if(veniceCreditsState.status === 'loading') return null;
     const elapsed = now - Number(veniceCreditsState.lastRequestAt || 0);
-    if(elapsed < VENICE_CREDITS_MIN_REFRESH_MS){
+    const minimumRefreshMs = fastRefresh ? VENICE_CREDITS_FAST_REFRESH_MS : VENICE_CREDITS_MIN_REFRESH_MS;
+    if(elapsed < minimumRefreshMs){
         renderVeniceCreditsPanel();
         return null;
     }
@@ -5756,6 +5819,12 @@ async function refreshVeniceCredits(options={}){
         const remainingLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(remaining)));
         const totalLabel = new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(total)));
         const percent = veniceCreditPercent(remaining, total);
+        const observedProviderId = String(data?.provider_id || providerId);
+        const balanceChanged = veniceCreditsObservedProviderId === observedProviderId
+            && Number.isFinite(Number(veniceCreditsObservedRemaining))
+            && remaining !== Number(veniceCreditsObservedRemaining);
+        veniceCreditsObservedProviderId = observedProviderId;
+        veniceCreditsObservedRemaining = remaining;
         setVeniceCreditsUi({
             remaining,
             total,
@@ -5764,10 +5833,11 @@ async function refreshVeniceCredits(options={}){
             tierCap:Number(data?.tier_cap),
             usedThisCycle:Number(data?.used_this_cycle),
             userType:String(data?.user_type || ''),
-            providerId:String(data?.provider_id || providerId),
+            providerId:observedProviderId,
             state:'ready',
             title:`Venice 剩余额度 ${remainingLabel} / ${totalLabel} (${percent.toFixed(1)}%)`,
         });
+        if(balanceChanged) playVeniceCreditsChangeSound();
         veniceCreditsAutoFailureCount = 0;
         veniceCreditsNextAutoRetryAt = 0;
         return data;
@@ -5775,10 +5845,12 @@ async function refreshVeniceCredits(options={}){
         if(token !== veniceCreditsRefreshToken) return null;
         if(automatic){
             veniceCreditsAutoFailureCount++;
-            const backoff = Math.min(
-                VENICE_CREDITS_AUTO_REFRESH_MS * (2 ** Math.min(veniceCreditsAutoFailureCount - 1, 4)),
-                VENICE_CREDITS_AUTO_MAX_BACKOFF_MS
-            );
+            const backoff = fastRefresh
+                ? VENICE_CREDITS_FAST_REFRESH_MS
+                : Math.min(
+                    VENICE_CREDITS_AUTO_REFRESH_MS * (2 ** Math.min(veniceCreditsAutoFailureCount - 1, 4)),
+                    VENICE_CREDITS_AUTO_MAX_BACKOFF_MS
+                );
             veniceCreditsNextAutoRetryAt = Date.now() + backoff;
         }
         setVeniceCreditsUi({state:'error', title:e?.message || 'Venice 额度刷新失败'});
@@ -5787,6 +5859,9 @@ async function refreshVeniceCredits(options={}){
 }
 function scheduleVeniceCreditsRefresh(providerId='', delay=0){
     if(!veniceCreditsBadge) return;
+    if(isVeniceProviderId(providerId)){
+        veniceCreditsFastRefreshUntil = Math.max(veniceCreditsFastRefreshUntil, Date.now() + VENICE_CREDITS_FAST_TAIL_MS);
+    }
     if(veniceCreditsRefreshTimer){
         clearTimeout(veniceCreditsRefreshTimer);
         veniceCreditsRefreshTimer = null;
@@ -5800,8 +5875,11 @@ function scheduleVeniceCreditsRefresh(providerId='', delay=0){
 function startVeniceCreditsAutoRefresh(){
     if(veniceCreditsAutoRefreshTimer) return;
     veniceCreditsAutoRefreshTimer = setInterval(() => {
-        refreshVeniceCredits({automatic:true});
-    }, VENICE_CREDITS_AUTO_REFRESH_MS);
+        const fastRefresh = isVeniceCreditsFastRefreshActive();
+        const refreshInterval = fastRefresh ? VENICE_CREDITS_FAST_REFRESH_MS : VENICE_CREDITS_AUTO_REFRESH_MS;
+        const elapsed = Date.now() - Number(veniceCreditsState.lastRequestAt || 0);
+        if(elapsed >= refreshInterval) refreshVeniceCredits({automatic:true, fast:fastRefresh});
+    }, VENICE_CREDITS_AUTO_TICK_MS);
 }
 function veniceQuoteRemainingCountText(quote){
     const remaining = Number(veniceCreditsState.remaining);
@@ -20908,6 +20986,7 @@ function smartLogActualGenerationRequest(label, {kind='image', endpoint='', prom
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
+    const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.provider_id);
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
@@ -20924,11 +21003,15 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
         counts:smartPayloadReferenceMediaCounts(payload),
         extra:{taskCount:count, size:payload.size, requestBodyJson}
     });
-    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
-        return r.json();
-    })));
-    return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    try {
+        const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson}).then(async r => {
+            if(!r.ok) throw new Error(await r.text());
+            return r.json();
+        })));
+        return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    } finally {
+        endVeniceCreditsFastRefresh(veniceCreditsToken);
+    }
 }
 function apiImageReferencePayload(ref, index){
     return {
@@ -21004,6 +21087,7 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
 async function runApiVideoGeneration(prompt, refs, runSettings=settings, requestMeta=null){
     if(!runSettings.videoModel) throw new Error(tr('smart.errNoVideoModel'));
     const veniceVideoProvider = isVeniceVideoProvider(runSettings.videoProvider || '');
+    const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.videoProvider || '');
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
         const trustedMode = Boolean(runSettings.videoTrustedAsset);
@@ -21078,6 +21162,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         if(result && result.jimeng_pending) throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
         return resultMediaUrls(result);
     } finally {
+        endVeniceCreditsFastRefresh(veniceCreditsToken);
         if(veniceVideoProvider) scheduleVeniceCreditsRefresh(runSettings.videoProvider || '', 120);
         transientSmartCloudLinks = [];
     }
