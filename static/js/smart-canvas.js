@@ -1563,14 +1563,34 @@ function holdSmartCanvasVideoAtFirstFrame(video){
 }
 function smartVideoNeedsBlockingOverlayHold(video){
     if(!video) return false;
-    if(smartVideoHasSystemPause(video) || smartVideoHasUserPause(video)) return true;
     if(!video.paused || video.dataset.smartPlaybackWanted === '1' || video.dataset.smartHasPlayed === '1') return true;
     if((Number(video.currentTime) || 0) > SMART_VIDEO_USER_PAUSE_MIN_TIME) return true;
     const nodeId = video.closest('.image-node')?.dataset?.id || '';
     const node = nodes.find(candidate => candidate.id === nodeId);
     return Boolean(nodeId && isNodeSelected(nodeId) && !smartVideoContainerIsGroup(node));
 }
+function preserveSmartVideoUserPauseForBlockingOverlay(video){
+    if(!video || !smartVideoHasUserPause(video)) return false;
+    video.dataset.smartPlaybackWanted = '0';
+    video.dataset.smartHasPlayed = '1';
+    delete video.dataset.smartWaiting;
+    video.pause?.();
+    const host = video.closest('.smart-canvas-video-host');
+    host?.classList.remove('is-playing', 'is-waiting', 'autoplay-blocked');
+    syncSmartVideoControls(host, video);
+    host?._smartSyncControlsPinned?.();
+    return true;
+}
 function settleSmartCanvasVideoForBlockingOverlay(video){
+    if(smartVideoHasSystemPause(video)){
+        holdSmartCanvasVideoAtFirstFrame(video);
+        return;
+    }
+    // Generic overlays only need to prevent playback. A deliberate user pause
+    // already satisfies that requirement, so preserve its exact timeline
+    // position. Video preview entry has already converted its source to a
+    // system first-frame hold before reaching this branch.
+    if(preserveSmartVideoUserPauseForBlockingOverlay(video)) return;
     if(smartVideoNeedsBlockingOverlayHold(video)) holdSmartCanvasVideoAtFirstFrame(video);
     else resetSmartCanvasVideo(video, {preserveUserPause:false});
 }
