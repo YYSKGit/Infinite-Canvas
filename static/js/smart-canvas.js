@@ -1003,7 +1003,7 @@ function smartCanvasVideoHtml(url, attrs=''){
         ? `${genericPreview}&frame=first`
         : genericPreview;
     const poster = preview && preview !== displayUrl
-        ? `<img class="smart-video-poster" src="${escapeHtml(preview)}" alt="" decoding="async" draggable="false" aria-hidden="true">`
+        ? `<img class="smart-video-poster" src="${escapeHtml(preview)}" data-original-src="${escapeAttr(original)}" data-smart-image-lod="1" data-smart-image-lod-base="768" data-smart-image-lod-frame="first" alt="" decoding="async" draggable="false" aria-hidden="true">`
         : '';
     return `<video class="smart-canvas-video" src="${safe}" data-url="${escapeAttr(original)}" preload="metadata" playsinline loop disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"${attrs ? ` ${attrs}` : ''}></video>
         ${poster}
@@ -1165,23 +1165,20 @@ function smartVideoResetFrameTargetSize(video){
     const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1));
     const sourceW = video.videoWidth;
     const sourceH = video.videoHeight;
-    // clientWidth/clientHeight are not affected by the world transform. They
-    // keep a reset frame sharp at the node's logical 1x size even when it was
-    // captured while the canvas was zoomed out or the tab was being restored.
-    const logicalW = Math.max(2, Number(host.clientWidth) || 0);
-    const logicalH = Math.max(2, Number(host.clientHeight) || 0);
-    const visibleW = document.visibilityState === 'visible' && rect.width > 1 ? rect.width : 0;
-    const visibleH = document.visibilityState === 'visible' && rect.height > 1 ? rect.height : 0;
-    const displayScale = Math.max(
-        Math.max(2, Math.max(logicalW, visibleW) * dpr) / sourceW,
-        Math.max(2, Math.max(logicalH, visibleH) * dpr) / sourceH
-    );
-    const memoryScale = 1280 / Math.max(sourceW, sourceH);
-    const minimumScale = 256 / Math.max(sourceW, sourceH);
-    const scale = Math.max(Math.min(1, minimumScale), Math.min(1, displayScale, memoryScale));
+    const sourceLongEdge = Math.max(sourceW, sourceH);
+    const visibleLongEdge = document.visibilityState === 'visible' && rect.width > 1 && rect.height > 1
+        ? Math.max(rect.width, rect.height) * dpr
+        : 0;
+    const baseTier = 768;
+    const targetTier = visibleLongEdge <= baseTier * 1.15
+        ? baseTier
+        : (SMART_IMAGE_LOD_TIERS.find(tier => tier >= visibleLongEdge * 1.05)
+            || SMART_IMAGE_LOD_TIERS[SMART_IMAGE_LOD_TIERS.length - 1]);
+    const scale = Math.min(1, targetTier / sourceLongEdge);
     return {
         width:Math.max(2, Math.round(sourceW * scale)),
-        height:Math.max(2, Math.round(sourceH * scale))
+        height:Math.max(2, Math.round(sourceH * scale)),
+        tier:targetTier
     };
 }
 function smartVideoResetFrameNeedsRefresh(video, force=false){
@@ -1195,6 +1192,11 @@ function smartVideoResetFrameNeedsRefresh(video, force=false){
     // boundary while still upgrading a visibly undersized backing store.
     return frame.width < target.width * .9 || frame.height < target.height * .9;
 }
+function smartVideoResetFrameIsOversized(video, target=smartVideoResetFrameTargetSize(video)){
+    const frame = video?.closest('.smart-canvas-video-host')?.querySelector('.smart-video-reset-frame');
+    if(!frame || !target || frame.width <= 1 || frame.height <= 1) return false;
+    return frame.width > target.width * 1.25 || frame.height > target.height * 1.25;
+}
 function paintSmartVideoResetFrame(video, expectedEpoch, options={}){
     if(!video?.isConnected) return false;
     if(String(video.dataset.smartPlaybackEpoch || 0) !== String(expectedEpoch)) return false;
@@ -1206,14 +1208,15 @@ function paintSmartVideoResetFrame(video, expectedEpoch, options={}){
     const target = smartVideoResetFrameTargetSize(video);
     if(!target) return false;
     const force = options.force === true || video.dataset.smartResetFrameDirty === '1';
-    if(!force && host.classList.contains('is-reset-frame-visible')
+    const allowDownsample = options.allowDownsample === true;
+    if(!force && !allowDownsample && host.classList.contains('is-reset-frame-visible')
         && frame.width >= target.width * .9 && frame.height >= target.height * .9) return true;
-    // Never downsample an already-good frame during the same DOM lifetime.
     // Resizing the canvas and drawing happen synchronously in one task, so the
-    // browser cannot paint an empty backing store between them.
+    // browser cannot paint an empty backing store between them. Downsampling is
+    // only allowed by the delayed LOD path; ordinary resets retain a good frame.
     const hasPaintedFrame = host.classList.contains('is-reset-frame-visible');
-    const width = Math.max(target.width, hasPaintedFrame && frame.width > 1 ? frame.width : 0);
-    const height = Math.max(target.height, hasPaintedFrame && frame.height > 1 ? frame.height : 0);
+    const width = allowDownsample ? target.width : Math.max(target.width, hasPaintedFrame && frame.width > 1 ? frame.width : 0);
+    const height = allowDownsample ? target.height : Math.max(target.height, hasPaintedFrame && frame.height > 1 ? frame.height : 0);
     try {
         if(frame.width !== width) frame.width = width;
         if(frame.height !== height) frame.height = height;
@@ -1221,6 +1224,7 @@ function paintSmartVideoResetFrame(video, expectedEpoch, options={}){
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = 'high';
         context.drawImage(video, 0, 0, width, height);
+        frame.dataset.smartVideoLodTier = String(target.tier || Math.max(width, height));
         delete video.dataset.smartResetFramePending;
         delete video.dataset.smartResetFrameDirty;
         host.classList.add('is-reset-frame-visible');
@@ -1237,13 +1241,15 @@ function scheduleSmartVideoResetFrame(video, expectedEpoch, options={}){
     const existingHost = video.closest('.smart-canvas-video-host');
     const existingFrame = existingHost?.querySelector('.smart-video-reset-frame');
     const force = options.force === true || video.dataset.smartResetFrameDirty === '1';
+    const allowDownsample = options.allowDownsample === true;
     if(document.visibilityState === 'hidden'){
         video.dataset.smartResetFrameDirty = '1';
         return;
     }
     if(existingHost?.classList.contains('is-reset-frame-visible')
         && existingFrame?.width > 1 && existingFrame?.height > 1
-        && !smartVideoResetFrameNeedsRefresh(video, force)) return;
+        && !smartVideoResetFrameNeedsRefresh(video, force)
+        && !(allowDownsample && smartVideoResetFrameIsOversized(video))) return;
     if(video.dataset.smartResetFramePending === epoch) return;
     video.dataset.smartResetFrameEpoch = epoch;
     video.dataset.smartResetFramePending = epoch;
@@ -1261,18 +1267,19 @@ function scheduleSmartVideoResetFrame(video, expectedEpoch, options={}){
         if(typeof video.requestVideoFrameCallback === 'function'){
             video.requestVideoFrameCallback((_, metadata) => {
                 if(!isCurrent()) return;
-                if(Number(metadata?.mediaTime || 0) <= .025) paintSmartVideoResetFrame(video, epoch, {force});
+                if(Number(metadata?.mediaTime || 0) <= .025) paintSmartVideoResetFrame(video, epoch, {force, allowDownsample});
             });
         }
         // drawImage after seeked is already reliable even when Chromium keeps
         // displaying an older video compositor surface. The next-frame retry
         // covers browsers without requestVideoFrameCallback.
-        paintSmartVideoResetFrame(video, epoch, {force});
-        requestAnimationFrame(() => paintSmartVideoResetFrame(video, epoch, {force}));
+        paintSmartVideoResetFrame(video, epoch, {force, allowDownsample});
+        requestAnimationFrame(() => paintSmartVideoResetFrame(video, epoch, {force, allowDownsample}));
     };
     present();
 }
 const SMART_VIDEO_RESET_REFRESH_BATCH = 3;
+const smartVideoResetDowngradeTimers = new WeakMap();
 let smartVideoResetRefreshRaf = 0;
 let smartVideoResetRefreshQueued = false;
 let smartVideoResetRefreshTimer = 0;
@@ -1289,18 +1296,53 @@ function markSmartVideoResetFramesDirty(){
         video.dataset.smartResetFrameDirty = '1';
     });
 }
+function cancelSmartVideoResetFrameDowngrade(video){
+    const timer = smartVideoResetDowngradeTimers.get(video);
+    if(timer) clearTimeout(timer);
+    smartVideoResetDowngradeTimers.delete(video);
+}
+function scheduleSmartVideoResetFrameDowngrade(video){
+    if(smartVideoResetDowngradeTimers.has(video)) return;
+    const timer = setTimeout(() => {
+        smartVideoResetDowngradeTimers.delete(video);
+        const host = video?.closest('.smart-canvas-video-host');
+        if(!video?.isConnected
+            || document.visibilityState !== 'visible'
+            || !host?.classList.contains('is-reset-frame-visible')
+            || !video.paused
+            || video.dataset.smartPlaybackWanted === '1'
+            || (Number(video.currentTime) || 0) > .025
+            || !smartVideoResetFrameIsInViewport(video)
+            || !smartVideoResetFrameIsOversized(video)) return;
+        scheduleSmartVideoResetFrame(video, video.dataset.smartPlaybackEpoch || 0, {
+            allowDownsample:true
+        });
+    }, 4000);
+    smartVideoResetDowngradeTimers.set(video, timer);
+}
 function refreshVisibleSmartVideoResetFrames(){
     if(document.visibilityState !== 'visible') return;
-    const videos = [...(world?.querySelectorAll?.('.smart-canvas-video') || [])]
-        .filter(video => {
-            const host = video.closest('.smart-canvas-video-host');
-            return (host?.classList.contains('is-reset-frame-visible') || video.dataset.smartResetFrameDirty === '1')
-                && video.paused
-                && video.dataset.smartPlaybackWanted !== '1'
-                && (Number(video.currentTime) || 0) <= .025
-                && smartVideoResetFrameIsInViewport(video)
-                && smartVideoResetFrameNeedsRefresh(video);
-        });
+    const videos = [];
+    [...(world?.querySelectorAll?.('.smart-canvas-video') || [])].forEach(video => {
+        const host = video.closest('.smart-canvas-video-host');
+        const eligible = (host?.classList.contains('is-reset-frame-visible') || video.dataset.smartResetFrameDirty === '1')
+            && video.paused
+            && video.dataset.smartPlaybackWanted !== '1'
+            && (Number(video.currentTime) || 0) <= .025
+            && smartVideoResetFrameIsInViewport(video);
+        if(!eligible){
+            cancelSmartVideoResetFrameDowngrade(video);
+            return;
+        }
+        if(smartVideoResetFrameNeedsRefresh(video)){
+            cancelSmartVideoResetFrameDowngrade(video);
+            videos.push(video);
+        } else if(host.classList.contains('is-reset-frame-visible') && smartVideoResetFrameIsOversized(video)){
+            scheduleSmartVideoResetFrameDowngrade(video);
+        } else {
+            cancelSmartVideoResetFrameDowngrade(video);
+        }
+    });
     let index = 0;
     const paintBatch = () => {
         if(document.visibilityState !== 'visible') return;
@@ -2155,12 +2197,17 @@ function smartImageLodState(img){
     let state = smartImageLodStates.get(img);
     if(!state){
         const baseTier = Math.max(64, Number(img?.dataset?.smartImageLodBase) || 768);
-        state = {baseTier, currentTier:baseTier, requestedTier:baseTier, token:0, downgradeTimer:0, loader:null};
+        state = {baseTier, currentTier:baseTier, requestedTier:baseTier, currentPixelEdge:0, nativeLongEdge:0, token:0, downgradeTimer:0, loader:null};
         smartImageLodStates.set(img, state);
     }
     return state;
 }
 function smartImageLodTargetTier(img, state){
+    const naturalLongEdge = Math.max(Number(img.naturalWidth) || 0, Number(img.naturalHeight) || 0);
+    if(naturalLongEdge > 0){
+        state.currentPixelEdge = naturalLongEdge;
+        if(naturalLongEdge < state.currentTier * .98) state.nativeLongEdge = naturalLongEdge;
+    }
     const rect = img.getBoundingClientRect();
     if(rect.right <= 0 || rect.bottom <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return state.baseTier;
     const dpr = Math.max(1, Math.min(2, Number(window.devicePixelRatio) || 1));
@@ -2168,31 +2215,59 @@ function smartImageLodTargetTier(img, state){
     // Keep the normal preview until it is visibly undersized. This hysteresis
     // keeps small wheel movements around a tier boundary from causing churn.
     if(required <= state.baseTier * 1.15) return state.baseTier;
-    return SMART_IMAGE_LOD_TIERS.find(tier => tier >= required * 1.05) || SMART_IMAGE_LOD_TIERS[SMART_IMAGE_LOD_TIERS.length - 1];
+    const desiredTier = SMART_IMAGE_LOD_TIERS.find(tier => tier >= required * 1.05)
+        || SMART_IMAGE_LOD_TIERS[SMART_IMAGE_LOD_TIERS.length - 1];
+    // A response smaller than its requested tier has reached the source's
+    // native resolution. Keep that decoded native preview instead of fetching
+    // identical 1536/2048 variants under different URLs.
+    if(desiredTier > state.currentTier
+        && state.nativeLongEdge > 0
+        && state.currentPixelEdge >= state.nativeLongEdge * .98) return state.currentTier;
+    return desiredTier;
+}
+function smartImageLodUrl(img, tier){
+    const preview = smartMediaPreviewUrl(img?.dataset?.originalSrc || '', tier);
+    return img?.dataset?.smartImageLodFrame === 'first' && preview.includes('/api/media-preview?')
+        ? `${preview}&frame=first`
+        : preview;
+}
+function smartImageLodCandidateActive(img){
+    if(img?.dataset?.smartImageLodFrame !== 'first') return true;
+    const host = img.closest('.smart-canvas-video-host');
+    const video = host?.querySelector('.smart-canvas-video');
+    return Boolean(host && video
+        && video.dataset.smartFramePresented !== '1'
+        && !host.classList.contains('is-reset-frame-visible')
+        && !host.classList.contains('is-video-poster-unavailable'));
 }
 function drainSmartImageLodQueue(){
     while(smartImageLodActiveLoads < SMART_IMAGE_LOD_MAX_CONCURRENT && smartImageLodQueue.length){
         const job = smartImageLodQueue.shift();
         const {img, state, tier, token} = job;
-        if(!img?.isConnected || state.token !== token || state.requestedTier !== tier) continue;
+        if(!img?.isConnected || !smartImageLodCandidateActive(img) || state.token !== token || state.requestedTier !== tier) continue;
         smartImageLodActiveLoads++;
         const loader = new Image();
         state.loader = loader;
         loader.decoding = 'async';
-        const url = smartMediaPreviewUrl(img.dataset.originalSrc || '', tier);
+        const url = smartImageLodUrl(img, tier);
         const loaded = new Promise((resolve, reject) => {
             loader.onload = resolve;
             loader.onerror = reject;
         });
         loader.src = url;
         loaded.then(() => loader.decode?.()).catch(() => {}).then(() => {
-            if(!img.isConnected || state.token !== token || state.requestedTier !== tier || !loader.naturalWidth) return;
+            if(!img.isConnected || !smartImageLodCandidateActive(img)
+                || state.token !== token || state.requestedTier !== tier || !loader.naturalWidth) return;
             // The replacement is already decoded, so assigning src preserves the
             // old pixels until the browser can paint the new resource.
             img.src = url;
             img.dataset.previewSrc = url;
             img.dataset.smartImageLodTier = String(tier);
             state.currentTier = tier;
+            state.currentPixelEdge = Math.max(loader.naturalWidth || 0, loader.naturalHeight || 0);
+            if(state.currentPixelEdge > 0 && state.currentPixelEdge < tier * .98){
+                state.nativeLongEdge = state.currentPixelEdge;
+            }
         }).finally(() => {
             if(state.token === token && state.currentTier !== tier) state.requestedTier = state.currentTier;
             if(state.loader === loader) state.loader = null;
@@ -2212,8 +2287,16 @@ function refreshSmartImageLod(){
     if(document.visibilityState !== 'visible') return;
     world.querySelectorAll('img[data-smart-image-lod="1"]').forEach(img => {
         const original = img.dataset.originalSrc || '';
-        if(!original || !smartMediaPreviewUrl(original, 768).includes('/api/media-preview?')) return;
+        if(!original || !smartImageLodUrl(img, 768).includes('/api/media-preview?')) return;
         const state = smartImageLodState(img);
+        if(!smartImageLodCandidateActive(img)){
+            if(state.requestedTier !== state.currentTier){
+                state.requestedTier = state.currentTier;
+                state.token++;
+            }
+            if(state.downgradeTimer){ clearTimeout(state.downgradeTimer); state.downgradeTimer = 0; }
+            return;
+        }
         const targetTier = smartImageLodTargetTier(img, state);
         if(targetTier > state.currentTier){
             if(state.downgradeTimer){ clearTimeout(state.downgradeTimer); state.downgradeTimer = 0; }
@@ -8510,7 +8593,7 @@ function assetThumbHtml(item){
     const thumb = item.thumbnail || item.thumb || item.preview || item.url || '';
     const kind = assetMediaKind(item);
     if(kind === 'video'){
-        return `<div class="asset-thumb-wrap">${smartVideoPreviewHtml(item, 256, 'class="asset-thumb" loading="lazy" decoding="async" alt=""')}<span class="asset-video-badge"><i data-lucide="film"></i>VID</span></div>`;
+        return `<div class="asset-thumb-wrap">${smartVideoPreviewHtml(item, 512, 'class="asset-thumb" loading="lazy" decoding="async" alt=""')}<span class="asset-video-badge"><i data-lucide="film"></i>VID</span></div>`;
     }
     if(kind === 'audio'){
         return `<div class="asset-thumb-wrap media-thumb audio-thumb asset-thumb"><i data-lucide="file-audio"></i><span>${escapeHtml(item.name || 'Audio')}</span></div>`;
@@ -8518,8 +8601,8 @@ function assetThumbHtml(item){
     if(kind === 'workflow'){
         return `<div class="asset-thumb-wrap media-thumb workflow-thumb asset-thumb"><i data-lucide="workflow"></i><span>${escapeHtml(item.name || 'Workflow')}</span></div>`;
     }
-    // 网格缩略图用较小尺寸 + 懒加载/异步解码：素材多时滚动不再一次性加载解码全部图片。
-    return smartPreviewImgHtml({...item, url:thumb}, 256, 'class="asset-thumb" loading="lazy" decoding="async" alt=""');
+    // 网格缩略图使用适配高 DPI 卡片的 512px，并继续懒加载/异步解码。
+    return smartPreviewImgHtml({...item, url:thumb}, 512, 'class="asset-thumb" loading="lazy" decoding="async" alt=""');
 }
 function renderAssetLibrary(){
     if(!assetPanel || !assetGrid || !assetCategorySelect) return;

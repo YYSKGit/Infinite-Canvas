@@ -536,9 +536,9 @@ function renderAssetKindBadge(item, title=''){
     const meta = assetKindBadgeMeta(item, title);
     return `<span class="asset-kind-badge ${escapeAttr(meta.kind)}" title="${escapeAttr(meta.title)}"><i data-lucide="${meta.icon}"></i><em>${escapeHtml(meta.label)}</em></span>`;
 }
-// 缩略图走服务端缩放代理（/api/media-preview），把大原图降到 ~256px 再传给浏览器。素材多时滚动只解码小图，
+// 缩略图走服务端缩放代理（/api/media-preview），主要资产卡片使用 512px，
 // 不再因为加载/解码整张原图而卡。仅对本地 /output、/assets 的图片/视频生效，其它地址原样返回。
-function assetPreviewUrl(url, w=256){
+function assetPreviewUrl(url, w=512){
     const raw = String(url || '');
     if(!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
     let path = raw;
@@ -547,16 +547,16 @@ function assetPreviewUrl(url, w=256){
     }
     if(!(path.startsWith('/output/') || path.startsWith('/assets/'))) return raw;
     if(!/\.(png|jpe?g|webp|gif|bmp|avif|tiff?|mp4|webm|mov|m4v|mkv)(\?|#|$)/i.test(path)) return raw;
-    const width = Math.max(64, Math.min(2048, Math.round(Number(w) || 256)));
+    const width = Math.max(64, Math.min(2048, Math.round(Number(w) || 512)));
     return `/api/media-preview?w=${width}&url=${encodeURIComponent(path)}`;
 }
 function assetThumb(item){
     const kind = assetKind(item);
     // 视频用 poster（服务端生成的一帧）+ preload=none：不再为每个视频加载元数据，素材多时滚动顺畅。
-    if(kind === 'video') return `<video src="${escapeAttr(item.url)}" poster="${escapeAttr(assetPreviewUrl(item.url, 256))}" muted preload="none" playsinline></video>`;
+    if(kind === 'video') return `<video src="${escapeAttr(item.url)}" poster="${escapeAttr(assetPreviewUrl(item.url, 512))}" muted preload="none" playsinline></video>`;
     if(kind === 'audio') return `<div class="asset-file-icon"><i data-lucide="file-audio"></i><span>音频</span></div>`;
     if(kind === 'text') return `<div class="asset-file-icon"><i data-lucide="file-text"></i><span>文本</span></div>`;
-    return `<img src="${escapeAttr(assetPreviewUrl(item.url, 256))}" alt="${escapeAttr(item.name || 'asset')}" loading="lazy" decoding="async">`;
+    return `<img src="${escapeAttr(assetPreviewUrl(item.url, 512))}" alt="${escapeAttr(item.name || 'asset')}" loading="lazy" decoding="async">`;
 }
 function renderDetailMedia(item, options={}){
     const kind = assetKind(item);

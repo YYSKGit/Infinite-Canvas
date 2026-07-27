@@ -6016,7 +6016,7 @@ def media_preview_cache_paths(path: str, width: int, variant: str = "default"):
     stat = os.stat(path)
     variant_key = "" if variant == "default" else f"|{variant}"
     key = hashlib.sha1(
-        f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|{width}{variant_key}|srgb-v1".encode("utf-8", "ignore")
+        f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|{width}{variant_key}|srgb-v2-hq".encode("utf-8", "ignore")
     ).hexdigest()
     return (
         os.path.join(MEDIA_PREVIEW_DIR, f"{key}.webp"),
@@ -6061,11 +6061,58 @@ def media_preview_file_response(path: str, media_type: str, request: Request):
 def is_video_preview_file(path: str) -> bool:
     return os.path.splitext(str(path or "").split("?", 1)[0])[1].lower() in {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}
 
+@functools.lru_cache(maxsize=2048)
+def media_preview_native_long_edge(path: str, mtime_ns: int, file_size: int, is_video: bool) -> int:
+    # mtime/size are part of the cache signature so replacing a file at the
+    # same path invalidates its dimensions without a separate cache purge.
+    del mtime_ns, file_size
+    try:
+        if not is_video:
+            with Image.open(path) as source:
+                return max(1, int(max(source.size)))
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return 0
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0:s=x",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if proc.returncode != 0:
+            return 0
+        match = re.search(r"(\d+)\s*x\s*(\d+)", str(proc.stdout or ""))
+        return max(int(match.group(1)), int(match.group(2))) if match else 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+def media_preview_effective_width(path: str, requested_width: int, is_video: bool) -> int:
+    try:
+        stat = os.stat(path)
+        native_long_edge = media_preview_native_long_edge(
+            os.path.abspath(path),
+            int(stat.st_mtime_ns),
+            int(stat.st_size),
+            bool(is_video),
+        )
+    except OSError:
+        native_long_edge = 0
+    return min(requested_width, native_long_edge) if native_long_edge > 0 else requested_width
+
 def generate_video_preview_image(path: str, width: int, seek_seconds: float = 0.5) -> Image.Image:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("未找到 ffmpeg，无法生成视频预览图")
-    fd, frame_path = tempfile.mkstemp(prefix="media_preview_frame_", suffix=".jpg")
+    # Keep extraction lossless. The old JPEG intermediate followed by WebP
+    # encoding softened low-resolution video frames noticeably when enlarged.
+    fd, frame_path = tempfile.mkstemp(prefix="media_preview_frame_", suffix=".png")
     os.close(fd)
     try:
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
@@ -6096,10 +6143,11 @@ async def media_preview(request: Request, url: str, w: int = 512, frame: str = "
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="媒体文件不存在")
 
-    width = max(64, min(2048, int(w or 512)))
+    requested_width = max(64, min(2048, int(w or 512)))
     is_video = is_video_preview_file(path)
+    width = await asyncio.to_thread(media_preview_effective_width, path, requested_width, is_video)
     exact_first_frame = is_video and str(frame or "").strip().lower() == "first"
-    cache_variant = "video-first-frame-v1" if exact_first_frame else "default"
+    cache_variant = "video-first-frame-v2" if exact_first_frame else "default"
     webp_path, png_path = media_preview_cache_paths(path, width, cache_variant)
 
     if os.path.exists(webp_path):
@@ -6120,7 +6168,8 @@ async def media_preview(request: Request, url: str, w: int = 512, frame: str = "
                 img = normalize_image_to_srgb(img, icc_profile)
         srgb_profile = srgb_icc_profile_bytes()
         try:
-            img.save(webp_path, format="WEBP", quality=80, method=1, icc_profile=srgb_profile)   # method=1 生成更快（缩略图不追求极致压缩）
+            preview_quality = 95 if exact_first_frame else 92
+            img.save(webp_path, format="WEBP", quality=preview_quality, method=2, icc_profile=srgb_profile)
             return webp_path, "image/webp"
         except Exception:
             img.save(png_path, format="PNG", icc_profile=srgb_profile)
