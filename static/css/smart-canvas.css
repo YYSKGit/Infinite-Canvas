@@ -466,8 +466,10 @@ body.smart-prompt-split-resize .prompt-node-llm .prompt-node-select-control { po
 .empty-node .node-delete:hover { color:#dc2626; background:#fee2e2; }
 .node-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
 .node-actions { display:flex; align-items:center; gap:6px; }
-.floating-node-actions { position:absolute; right:7px; top:7px; z-index:8; opacity:0; pointer-events:none; transition:opacity .14s ease; }
+.floating-node-actions { position:absolute; right:7px; top:7px; z-index:8; display:flex; align-items:center; gap:6px; opacity:0; pointer-events:none; transition:opacity .14s ease; }
 .image-node:hover .floating-node-actions { opacity:1; pointer-events:auto; }
+.image-node.cascade-pinned .floating-node-actions { opacity:1; pointer-events:auto; }
+.image-node.cascade-pinned:not(:hover) .floating-node-actions .node-delete { opacity:0; pointer-events:none; }
 .image-node.dragging .floating-node-actions { opacity:0 !important; pointer-events:none !important; }
 /* Keep hover-only node chrome hidden for the whole live generation state.
    Re-generating keeps the old media mounted, so its normal :hover rules would
@@ -520,8 +522,16 @@ body.smart-node-resize .smart-node-floating-menu,
 /* floating-node-actions delete button: override the transparent .node-delete rule with higher specificity placed after it */
 .image-node .floating-node-actions .mini-x.node-delete { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
 .image-node .floating-node-actions .mini-x.node-delete:hover { background:#fee2e2; color:#dc2626; border-color:#fecaca; }
+.image-node .floating-node-actions .mini-x.cascade-pin-btn { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
+.image-node .floating-node-actions .mini-x.cascade-pin-btn:hover,
+.image-node .floating-node-actions .mini-x.cascade-pin-btn.active { background:#fef3c7; color:#b45309; border-color:#f59e0b; }
+.image-node .floating-node-actions .mini-x.cascade-pin-btn.active svg { fill:currentColor; }
+.image-node .floating-node-actions .mini-x.cascade-pin-btn:disabled { cursor:not-allowed; opacity:.55; transform:none; }
 .theme-dark .image-node .floating-node-actions .mini-x.node-delete { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .theme-dark .image-node .floating-node-actions .mini-x.node-delete:hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
+.theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
+.theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn:hover,
+.theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn.active { background:rgba(146,64,14,.9); color:#fef3c7; border-color:#f59e0b; }
 .image-wrap { position:relative; width:100%; border-radius:13px; overflow:visible; }
 .image-wrap .mini-x, .thumb-item .mini-x { position:absolute; right:7px; top:7px; z-index:6; opacity:0; pointer-events:none; }
 .theme-dark .image-wrap .mini-x, .theme-dark .thumb-item .mini-x { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
@@ -1214,6 +1224,7 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .run-btn i,.run-btn svg { width:11px !important; height:11px !important; stroke-width:2.2; flex:0 0 auto; }
 .run-btn:disabled { opacity:.55; cursor:default; }
 .cascade-run-btn { background:transparent; color:var(--muted); border:1px solid transparent; box-shadow:none; }
+.cascade-run-btn .lucide-loader-circle { animation:spin .85s linear infinite; }
 .cascade-run-btn:hover:not(:disabled) { border-color:var(--text); }
 .param-row { grid-area:params; min-width:0; margin-top:0; padding-top:0; align-self:center; display:flex; align-items:flex-start; gap:6px; overflow:visible; flex-wrap:wrap; row-gap:2px; }
 .param-row > select { flex:0 0 auto; width:auto; max-width:96px; }

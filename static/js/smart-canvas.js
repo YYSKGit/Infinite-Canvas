@@ -246,6 +246,7 @@ let smartCascadeStopRequested = false;
 let smartCascadeSilentSelection = false;
 let smartCascadeRunPath = null;
 const smartCascadeRuns = new Map();
+let smartAncestorCascadeRun = null;
 let smartLoopContext = null;
 let transientSmartCloudLinks = [];
 let runBtnCooldownToken = 0;
@@ -344,6 +345,8 @@ function syncSmartCascadeLegacyState(preferredLoopId=''){
 }
 function smartCascadeAnyRunning(){ return smartCascadeRunning || activeSmartCascadeCount() > 0; }
 function smartCascadeEdgeState(edgeKey){
+    const ancestorState = smartAncestorCascadeRun?.runPath?.states?.[edgeKey];
+    if(ancestorState) return ancestorState;
     for(const run of smartCascadeRuns.values()){
         const state = run?.runPath?.states?.[edgeKey];
         if(state) return state;
@@ -8865,7 +8868,8 @@ function syncRunButtonState(node=selectedNode()){
     runBtn.setAttribute('aria-label', runLabel);
     // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
-    runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id);
+    const queuedInAncestorRun = Boolean(node?.id && smartAncestorCascadeRun?.plan?.stepIds?.includes(node.id));
+    runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id) || queuedInAncestorRun;
 }
 function mergeSmartNode(local, remote){
     const images = mergeSmartImageLists(local.images, remote.images);
@@ -10973,10 +10977,21 @@ function restorePromptNodeTextareaScrollStates(states){
         });
     });
 }
+function runningHubLogDescriptor(sourceSettings=settings){
+    sourceSettings = sourceSettings || settings;
+    const parsed = parseRunningHubEntryKey(sourceSettings.rhConfigKey || '');
+    const selected = selectedRunningHubRef(sourceSettings);
+    const kind = selected?.kind || parsed?.kind || 'app';
+    const id = selected?.id || parsed?.id || '';
+    const label = selected
+        ? runningHubEntryLabel(selected.entry, selected.kind)
+        : id
+        ? (kind === 'workflow' ? `Workflow ${id}` : `AI App ${id}`)
+        : 'RunningHub';
+    return {kind, id, label};
+}
 function smartRunTaskLabel(run){
     const s = run?.settings || {};
-    if(run?.kind === 'text') return modelDisplayName(s.provider_id || '', s.model || '') || 'LLM';
-    if(run?.kind === 'video') return modelDisplayName(s.videoProvider || '', s.videoModel || '') || 'Video';
     if(s.engine === 'comfy'){
         if(s.comfyMode === 'custom') return s.comfyWorkflow || 'ComfyUI';
         const labels = {text:tr('canvas.comfyModeText') || '文生图', enhance:tr('canvas.comfyModeEnhance') || '图片增强', edit:tr('canvas.comfyModeEdit') || '图片编辑'};
@@ -10985,6 +11000,9 @@ function smartRunTaskLabel(run){
     if(s.engine === 'modelscope'){
         return s.msgenModel === 'custom' ? (s.msCustomModel || 'Modelscope') : (MS_GEN_MODELS[s.msgenModel]?.label || s.msgenModel || 'Modelscope');
     }
+    if(s.engine === 'runninghub') return (run?.runningHub || runningHubLogDescriptor(s)).label || 'RunningHub';
+    if(run?.kind === 'text') return modelDisplayName(s.provider_id || '', s.model || '') || 'LLM';
+    if(run?.kind === 'video') return modelDisplayName(s.videoProvider || '', s.videoModel || '') || 'Video';
     return modelDisplayName(s.provider_id || '', s.model || '') || 'API Image';
 }
 function outputUrlLooksVideo(url){
@@ -11141,6 +11159,22 @@ function smartRunRequestMeta(run){
     const s = run?.settings || {};
     if(s.engine === 'comfy') return {workflow_json:s.comfyWorkflow || '', mode:s.comfyMode || 'text'};
     if(s.engine === 'modelscope') return {backend:'Modelscope', model:s.msgenModel || '', custom_model:s.msCustomModel || ''};
+    if(s.engine === 'runninghub'){
+        const rh = run?.runningHub || runningHubLogDescriptor(s);
+        const meta = {
+            provider_id:'runninghub',
+            model:rh.label || 'RunningHub',
+            mode:rh.kind || 'app',
+            config_id:rh.id || '',
+            useWallet:s.rhPayment === 'wallet'
+        };
+        if(rh.kind === 'workflow') meta.workflowId = rh.id || '';
+        else {
+            meta.webappId = rh.id || '';
+            meta.instanceType = s.rhInstanceType || '';
+        }
+        return meta;
+    }
     if(run?.kind === 'text') return {provider_id:s.provider_id || '', model:s.model || '', mode:'llm'};
     if(run?.kind === 'video') return {provider_id:s.videoProvider || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
     return {provider_id:s.provider_id || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
@@ -11166,6 +11200,7 @@ function smartRunSnapshot(node, prompt, refs=[], kind='image', requestMeta=null,
         nodeType:node?.type || 'smart-image',
         kind,
         settings:settingsSnapshot,
+        runningHub:settingsSnapshot.engine === 'runninghub' ? runningHubLogDescriptor(settingsSnapshot) : undefined,
         prompt:prompt || '',
         requestPrompt:smartRequestPromptForRun(prompt, settingsSnapshot, kind, requestMeta),
         refs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || 'image', kind:ref.kind || ''})).filter(ref => ref.url),
@@ -11239,6 +11274,11 @@ function smartLogSizeSummary(log, outputs=[]){
         return `请求 ${requestLabel} / 实际 ${actualLabel}`;
     }
     return `实际 ${actualLabel}`;
+}
+function smartLogHasLegacyRunningHubMetadata(log){
+    if(String(log?.platform || '').trim().toLowerCase() !== 'runninghub') return false;
+    const providerId = String(log?.request?.provider_id || log?.request?.providerId || '').trim().toLowerCase();
+    return providerId !== 'runninghub';
 }
 // 移除临时预览节点并还原选中态。供 closeImageEditor 调用。
 function cleanupSmartLogPreviewNode(){
@@ -11350,7 +11390,9 @@ function renderSmartCanvasLog(){
         const date = new Date(log.createdAt || Date.now()).toLocaleString(window.StudioI18n?.lang() === 'en' ? 'en-US' : 'zh-CN');
         const req = log.request || {};
         const taskId = req.task_id || req.taskId || req.prompt_id || req.promptId || '';
-        const backend = req.workflow_json || req.workflow || req.provider_id || req.providerId || req.backend || '';
+        const legacyRunningHubMetadata = smartLogHasLegacyRunningHubMetadata(log);
+        const modelLabel = legacyRunningHubMetadata ? '' : (log.model || '');
+        const backend = legacyRunningHubMetadata ? '' : (req.workflow_json || req.workflow || req.provider_id || req.providerId || req.backend || '');
         const sizeSummary = smartLogSizeSummary(log, outputs);
         const subParts = [
             date,
@@ -11364,7 +11406,7 @@ function renderSmartCanvasLog(){
                 <div class="log-meta">
                     <span class="log-chip ${log.status === 'failed' ? 'status-failed' : 'status-ok'}">${escapeHtml(log.status === 'failed' ? tr('canvas.failed') : tr('canvas.success'))}</span>
                     <span class="log-chip">${escapeHtml(log.platform || '-')}</span>
-                    ${log.model ? `<span class="log-chip">${escapeHtml(log.model)}</span>` : ''}
+                    ${modelLabel ? `<span class="log-chip">${escapeHtml(modelLabel)}</span>` : ''}
                     <span class="log-chip">${escapeHtml(formatRunDuration(log.runMs || 0))}</span>
                 </div>
                 <div class="log-subline">${subParts.map(part => `<span title="${escapeAttr(part)}">${escapeHtml(part)}</span>`).join('')}</div>
@@ -11971,10 +12013,13 @@ function render(){
         const pendingSpinDelay = continuousAnimationDelay(1000, node.runStartedAt);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
+        const floatingPinBtn = smartAncestorPinButtonHtml(node);
+        const floatingDeleteBtn = !isEmpty && !isGroup && !isPending ? `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>` : '';
+        const floatingActions = `${floatingPinBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
-            ${!isEmpty && !isGroup && !isPending ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
+            ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
@@ -12842,6 +12887,17 @@ function bindNodeEvents(){
             btn.addEventListener('click', e => {
                 e.preventDefault(); e.stopPropagation();
                 deleteNodeFromButton(id);
+            });
+        });
+        el.querySelectorAll('[data-cascade-pin]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleSmartAncestorPin(btn.dataset.cascadePin || id);
             });
         });
         el.querySelectorAll('[data-smart-node-action]').forEach(btn => {
@@ -18072,18 +18128,28 @@ function refreshPromptReferenceContext(){
     const references = target ? visibleReferenceImagesFor(target) : [];
     promptEditor?.setReferenceContext(references.map(withPromptReferencePreview));
 }
-function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
-    const promptSnapshot = promptEditor?.snapshot?.() || {doc:null, references:[], text:''};
+function snapshotRunMeta(sourceNode, prompt, displayPrompt='', refs=[], runSettings=settings){
+    const sourceId = sourceNode?.id || '';
+    const activeSnapshot = activeComposerNode()?.id === sourceId ? promptEditor?.snapshot?.() : null;
+    const nodeReferences = Array.isArray(sourceNode?.promptReferences) ? sourceNode.promptReferences.map(ref => ({...ref})) : [];
+    const nodeDoc = sourceNode?.promptDoc ? JSON.parse(JSON.stringify(sourceNode.promptDoc)) : null;
+    const promptSnapshot = activeSnapshot || {
+        doc:nodeDoc,
+        references:nodeReferences,
+        text:window.SmartPromptEditor?.exchangeText?.(nodeDoc, nodeReferences, visibleReferenceImagesFor(sourceNode))
+            || displayPrompt
+            || prompt
+    };
     return {
         prompt,
-        displayPrompt:displayPrompt || promptPlainText() || prompt,
+        displayPrompt:displayPrompt || promptSnapshot.text || prompt,
         promptDoc:promptSnapshot.doc,
         promptReferences:promptSnapshot.references,
         promptText:promptSnapshot.text || promptPlainText(),
         promptRefs:(refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
         inputRefs:(refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
         sourceNodeId:sourceId,
-        settings:JSON.parse(JSON.stringify(settings)),
+        settings:JSON.parse(JSON.stringify(runSettings || {})),
         createdAt:Date.now()
     };
 }
@@ -19109,7 +19175,7 @@ function originalPromptTextFromParts(parts){
     });
     return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
-function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext){
+function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext, requestSettings=settings){
     const parts = collectPromptParts(node);
     const originalPrompt = originalPromptTextFromParts(parts);
     const blockedRefs = blockedInputRefKeys(node);
@@ -19170,7 +19236,7 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         body = [groupPrompt, inputPrompt, body].filter(Boolean).join('\n\n');
         veniceBody = [groupPrompt, inputPrompt, veniceBody].filter(Boolean).join('\n\n');
     }
-    if(!body && settings.engine === 'runninghub'){
+    if(!body && requestSettings?.engine === 'runninghub'){
         body = rhDefaultPromptSuggestion();
         if(!veniceBody) veniceBody = body;
     }
@@ -19579,6 +19645,189 @@ function upstreamNodesForId(nodeId, kinds=['input']){
     walk(nodeId);
     return result;
 }
+function smartAncestorRunnableKind(node){
+    if(!node || isHistoryGroupNode(node) || node.type === 'smart-loop') return '';
+    if(node.type === 'smart-prompt') return node.llmEnabled ? 'llm' : '';
+    if(!isSmartImageNode(node)) return '';
+    const hasGeneratedMedia = (node.images || []).some(img => img?.generatedResult || img?._genPrompt);
+    const hasCompletedRun = Boolean(node.runAt || node.runFinishedAt || node.runPrompt || node.runModelPrompt || node.sourceNodeId || hasGeneratedMedia);
+    const hasUnprovenMedia = (node.images || []).some(img => img?.url) && !hasCompletedRun;
+    const hasRecipe = Boolean(
+        node.runPrompt
+        || node.runModelPrompt
+        || node.promptDoc
+        || (!node.originalMediaSource && node.runSettings && Object.keys(node.runSettings).length)
+    );
+    // Selecting an uploaded/library node stores composer settings on it. That UI
+    // side effect must not turn passive source media into an executable step.
+    if((node.originalMediaSource && !hasCompletedRun) || hasUnprovenMedia) return '';
+    return hasCompletedRun || hasRecipe ? 'generation' : '';
+}
+function smartAncestorPinHasOutput(node){
+    if(!node) return false;
+    if(node.type === 'smart-prompt') return Boolean(String(node.text || '').trim());
+    return Boolean(isSmartImageNode(node) && smartNodeHasDisplayResult(node));
+}
+function smartAncestorPinEligible(node){
+    return Boolean(smartAncestorRunnableKind(node) && smartAncestorPinHasOutput(node) && !smartNodeInFlight(node));
+}
+function smartAncestorNodeSort(a, b){
+    const ax = Number(a?.x) || 0;
+    const bx = Number(b?.x) || 0;
+    if(ax !== bx) return ax - bx;
+    const ay = Number(a?.y) || 0;
+    const by = Number(b?.y) || 0;
+    if(ay !== by) return ay - by;
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+function buildSmartAncestorRunPlan(targetId){
+    const nodeById = new Map((nodes || []).filter(node => node?.id).map(node => [node.id, node]));
+    const target = nodeById.get(targetId) || null;
+    const connections = (canvas?.connections || [])
+        .filter(conn => conn?.from && conn?.to && ['input','flow'].includes(conn.kind || 'flow'))
+        .filter(conn => nodeById.has(conn.from) && nodeById.has(conn.to));
+    const parents = new Map();
+    connections.forEach(conn => {
+        if(!parents.has(conn.to)) parents.set(conn.to, []);
+        parents.get(conn.to).push(conn.from);
+    });
+    parents.forEach((ids, id) => {
+        parents.set(id, [...new Set(ids)].sort((a, b) => smartAncestorNodeSort(nodeById.get(a), nodeById.get(b))));
+    });
+    if(!target) return {target:null, targetId, layers:[], stepIds:[], invalid:'missing-target'};
+
+    const unpinTarget = Boolean(target.cascadePinned);
+    const isPinnedBoundary = id => id !== targetId && Boolean(nodeById.get(id)?.cascadePinned);
+    const allReachable = new Set();
+    const collectAll = id => {
+        if(allReachable.has(id)) return;
+        allReachable.add(id);
+        (parents.get(id) || []).forEach(collectAll);
+    };
+    collectAll(targetId);
+
+    const activeIds = new Set();
+    const pinnedBoundaryIds = new Set();
+    const unsupportedLoopIds = new Set();
+    const colors = new Map();
+    let cycleIds = [];
+    const visit = (id, path=[]) => {
+        if(cycleIds.length) return;
+        const color = colors.get(id) || 0;
+        if(color === 1){
+            const start = path.indexOf(id);
+            cycleIds = [...(start >= 0 ? path.slice(start) : path), id];
+            return;
+        }
+        if(color === 2) return;
+        colors.set(id, 1);
+        activeIds.add(id);
+        const node = nodeById.get(id);
+        if(node?.type === 'smart-loop') unsupportedLoopIds.add(id);
+        if(isPinnedBoundary(id)){
+            pinnedBoundaryIds.add(id);
+            colors.set(id, 2);
+            return;
+        }
+        (parents.get(id) || []).forEach(parentId => visit(parentId, [...path, id]));
+        colors.set(id, 2);
+    };
+    visit(targetId);
+
+    const invalidPinnedIds = [...pinnedBoundaryIds].filter(id => !smartAncestorPinHasOutput(nodeById.get(id)));
+    const runnableIds = [...activeIds]
+        .filter(id => !isPinnedBoundary(id))
+        .filter(id => Boolean(smartAncestorRunnableKind(nodeById.get(id))));
+    const runnableSet = new Set(runnableIds);
+    const dependencies = new Map(runnableIds.map(id => [id, new Set()]));
+    const nearestRunnableParents = (nodeId, seen=new Set()) => {
+        const found = new Set();
+        for(const parentId of parents.get(nodeId) || []){
+            if(seen.has(parentId) || isPinnedBoundary(parentId)) continue;
+            const nextSeen = new Set(seen);
+            nextSeen.add(parentId);
+            if(runnableSet.has(parentId)){
+                found.add(parentId);
+            } else {
+                nearestRunnableParents(parentId, nextSeen).forEach(id => found.add(id));
+            }
+        }
+        return found;
+    };
+    runnableIds.forEach(id => {
+        nearestRunnableParents(id, new Set([id])).forEach(depId => dependencies.get(id).add(depId));
+    });
+
+    const remaining = new Set(runnableIds);
+    const completed = new Set();
+    const layers = [];
+    while(remaining.size){
+        const ready = [...remaining]
+            .filter(id => [...(dependencies.get(id) || [])].every(depId => completed.has(depId)))
+            .sort((a, b) => smartAncestorNodeSort(nodeById.get(a), nodeById.get(b)));
+        if(!ready.length){
+            if(!cycleIds.length) cycleIds = [...remaining];
+            break;
+        }
+        layers.push(ready);
+        ready.forEach(id => {
+            remaining.delete(id);
+            completed.add(id);
+        });
+    }
+    const skippedIds = [...allReachable].filter(id => !activeIds.has(id) || pinnedBoundaryIds.has(id));
+    const runConnections = connections.filter(conn => activeIds.has(conn.from) && activeIds.has(conn.to));
+    const targetRunnable = Boolean(smartAncestorRunnableKind(target));
+    let invalid = '';
+    if(cycleIds.length) invalid = 'cycle';
+    else if(unsupportedLoopIds.size) invalid = 'loop';
+    else if(invalidPinnedIds.length) invalid = 'pinned-output';
+    else if(!targetRunnable) invalid = 'target-not-runnable';
+    else if(!layers.length) invalid = 'no-steps';
+    return {
+        target,
+        targetId,
+        targetRunnable,
+        unpinTarget,
+        hasUpstream:allReachable.size > 1,
+        layers,
+        stepIds:layers.flat(),
+        dependencies,
+        activeIds:[...activeIds],
+        pinnedBoundaryIds:[...pinnedBoundaryIds],
+        skippedIds,
+        unsupportedLoopIds:[...unsupportedLoopIds],
+        invalidPinnedIds,
+        cycleIds,
+        connections:runConnections,
+        invalid
+    };
+}
+function smartAncestorPinButtonHtml(node){
+    const pinned = Boolean(node?.cascadePinned);
+    if(!pinned && !smartAncestorPinEligible(node)) return '';
+    const disabled = Boolean(smartNodeInFlight(node) || (smartAncestorCascadeRun?.plan?.activeIds || []).includes(node.id));
+    const title = pinned ? '取消固定' : '固定结果并跳过上游';
+    return `<button class="mini-x cascade-pin-btn ${pinned ? 'active' : ''}" type="button" data-cascade-pin="${escapeAttr(node.id)}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}" ${disabled ? 'disabled' : ''}><i data-lucide="pin"></i></button>`;
+}
+function toggleSmartAncestorPin(nodeId){
+    const node = nodes.find(candidate => candidate.id === nodeId);
+    if(!node) return;
+    if(smartNodeInFlight(node) || (smartAncestorCascadeRun?.plan?.activeIds || []).includes(node.id)){
+        toast('运行期间不能修改固定状态');
+        return;
+    }
+    if(!node.cascadePinned && !smartAncestorPinEligible(node)){
+        toast('节点生成成功后才能固定');
+        return;
+    }
+    if(activeComposerNode()?.id === node.id) savePromptDraftForCurrent();
+    pushUndo();
+    if(node.cascadePinned) delete node.cascadePinned;
+    else node.cascadePinned = true;
+    render();
+    scheduleSave();
+}
 function resolveSmartCascadeLoop(nodeId){
     const loops = upstreamNodesForId(nodeId, ['input', 'flow']).filter(n => n.type === 'smart-loop');
     if(!loops.length) return null;
@@ -19937,20 +20186,129 @@ function appendLoopOutputsToNode(node, additions, kind='image', ctx=smartLoopCon
 }
 function syncCascadeRunButton(node=selectedNode()){
     if(!cascadeRunBtn) return;
-    const visible = canRunSmartCascade(node);
+    const plan = node?.id ? buildSmartAncestorRunPlan(node.id) : null;
+    const runningForNode = Boolean(smartAncestorCascadeRun && smartAncestorCascadeRun.targetId === node?.id);
+    const visible = Boolean(node && (runningForNode || (plan?.hasUpstream && plan?.targetRunnable)));
     cascadeRunBtn.style.display = visible ? 'inline-flex' : 'none';
-    const nodeLoopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
-    const loopRunState = smartCascadeRunForLoop(nodeLoopId);
-    const runningForNode = Boolean(loopRunState);
-    const label = runningForNode ? smartCascadeStopText(Boolean(loopRunState?.stopRequested)) : tr('smart.loopRunAll');
-    cascadeRunBtn.disabled = !visible || (!runningForNode && Boolean(node?.running)) || Boolean(loopRunState?.stopRequested);
-    cascadeRunBtn.classList.toggle('is-stop', runningForNode);
-    cascadeRunBtn.title = label;
-    cascadeRunBtn.setAttribute('aria-label', label);
+    const completed = smartAncestorCascadeRun?.completedIds?.size || 0;
+    const total = smartAncestorCascadeRun?.plan?.stepIds?.length || 0;
+    const label = runningForNode ? `运行中 ${completed}/${total}` : tr('smart.loopRunAll');
+    let summary = label;
+    if(!runningForNode && plan){
+        if(plan.invalid === 'cycle') summary = '无法运行：存在循环连线';
+        else if(plan.invalid === 'loop') summary = '该链路包含循环节点，暂未接入新运行模式';
+        else if(plan.invalid === 'pinned-output') summary = '无法运行：固定节点没有结果';
+        else {
+            const skipped = plan.skippedIds.length;
+            summary = `运行 ${plan.stepIds.length} 个${skipped ? ` · 固定跳过 ${skipped} 个` : ''}${plan.unpinTarget ? ' · 取消当前固定' : ''}`;
+        }
+    }
+    cascadeRunBtn.disabled = !visible || Boolean(smartAncestorCascadeRun) || Boolean(node?.running);
+    cascadeRunBtn.classList.remove('is-stop');
+    cascadeRunBtn.title = summary;
+    cascadeRunBtn.setAttribute('aria-label', summary);
     cascadeRunBtn.innerHTML = runningForNode
-        ? `<i data-lucide="square"></i><span>${escapeHtml(label)}</span>`
+        ? `<i data-lucide="loader-circle"></i><span>${escapeHtml(label)}</span>`
         : `<i data-lucide="workflow"></i><span>${escapeHtml(label)}</span>`;
     refreshIcons();
+}
+function smartAncestorRunErrorMessage(plan){
+    if(plan?.invalid === 'cycle') return '无法运行：存在循环连线';
+    if(plan?.invalid === 'loop') return '该链路包含循环节点，暂未接入新运行模式';
+    if(plan?.invalid === 'pinned-output') return '无法运行：固定节点没有结果';
+    if(plan?.invalid === 'target-not-runnable') return '当前节点不是画布生成节点';
+    return '没有可运行的上游节点';
+}
+function setSmartAncestorStepEdgeState(runState, nodeId, state){
+    if(!runState?.runPath?.states) return;
+    (runState.plan?.connections || [])
+        .filter(conn => conn.to === nodeId)
+        .forEach(conn => { runState.runPath.states[`${conn.from}->${conn.to}`] = state; });
+    scheduleConnectionLayerRefresh();
+}
+async function executeSmartAncestorPlanNode(nodeId){
+    const node = nodes.find(candidate => candidate.id === nodeId);
+    const kind = smartAncestorRunnableKind(node);
+    if(kind === 'llm'){
+        const result = await runPromptLLMNode(nodeId, {throwOnError:true, silent:true});
+        if(result?.status !== 'completed') throw new Error('提示词节点未完成');
+        return result;
+    }
+    if(kind === 'generation'){
+        const result = await runGeneration(null, {
+            nodeId,
+            runSettings:smartAncestorCascadeRun?.settingsByNode?.get(nodeId),
+            skipUndo:true,
+            preserveComposer:true,
+            throwOnError:true,
+            silent:true
+        });
+        if(result?.status !== 'completed') throw new Error(result?.status === 'pending' ? '节点任务仍在排队，已停止后续运行' : '节点未完成');
+        return result;
+    }
+    throw new Error('节点不可运行');
+}
+async function runSmartAncestorCascade(targetNode=selectedNode()){
+    if(smartAncestorCascadeRun){
+        toast('已有一键运行任务正在执行');
+        return;
+    }
+    if(smartCascadeAnyRunning()){
+        toast('循环任务运行期间不能启动新的链路运行');
+        return;
+    }
+    if(!targetNode?.id) return;
+    if(activeComposerNode()?.id === targetNode.id) savePromptDraftForCurrent();
+    const plan = buildSmartAncestorRunPlan(targetNode.id);
+    if(plan.invalid){
+        toast(smartAncestorRunErrorMessage(plan));
+        return;
+    }
+    pushUndo();
+    if(plan.unpinTarget) delete targetNode.cascadePinned;
+    const runPath = {states:{}};
+    (plan.connections || []).forEach(conn => { runPath.states[`${conn.from}->${conn.to}`] = 'wait'; });
+    const runState = {
+        id:`ancestor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        targetId:targetNode.id,
+        plan,
+        runPath,
+        settingsByNode:new Map(plan.stepIds
+            .map(nodeId => nodes.find(candidate => candidate.id === nodeId))
+            .filter(node => smartAncestorRunnableKind(node) === 'generation')
+            .map(node => [node.id, cloneSmartSettings(smartSettingsForNode(node))])),
+        completedIds:new Set(),
+        failedIds:new Set()
+    };
+    smartAncestorCascadeRun = runState;
+    render();
+    try {
+        for(const layer of plan.layers){
+            layer.forEach(nodeId => setSmartAncestorStepEdgeState(runState, nodeId, 'active'));
+            const results = await Promise.allSettled(layer.map(nodeId => executeSmartAncestorPlanNode(nodeId)));
+            results.forEach((result, index) => {
+                const nodeId = layer[index];
+                if(result.status === 'fulfilled'){
+                    runState.completedIds.add(nodeId);
+                    setSmartAncestorStepEdgeState(runState, nodeId, 'done');
+                } else {
+                    runState.failedIds.add(nodeId);
+                    setSmartAncestorStepEdgeState(runState, nodeId, 'failed');
+                }
+            });
+            syncCascadeRunButton();
+            if(runState.failedIds.size) break;
+        }
+        if(runState.failedIds.size){
+            toast(`运行中断：${runState.completedIds.size} 成功 · ${runState.failedIds.size} 失败`);
+        } else {
+            toast(`一键运行完成：${runState.completedIds.size} 个节点`);
+        }
+    } finally {
+        smartAncestorCascadeRun = null;
+        scheduleSave();
+        render();
+    }
 }
 function loadNodePromptDraftToInput(node){
     loadPromptDraft(node);
@@ -20382,6 +20740,10 @@ async function runSmartCascadeRoundsWithLimit(roundIndexes, limit, runner, runSt
     await Promise.all(workers);
 }
 async function runSmartCascade(targetNode=null){
+    if(smartAncestorCascadeRun){
+        toast('新的链路运行期间不能启动循环任务');
+        return;
+    }
     const tail = targetNode || selectedNode();
     if(!canRunSmartCascade(tail)){ toast('请选择链路结尾图片节点'); return; }
     savePromptDraftForCurrent();
@@ -20602,30 +20964,32 @@ function runSmartCascadeFromLoop(loopId){
     selectedImage = {nodeId:'', index:-1};
     runSmartCascade(tail);
 }
-async function runGeneration(){
-    const node = selectedNode();
-    if(!node) return;
+async function runGeneration(event=null, options={}){
+    const node = options.nodeId ? nodes.find(candidate => candidate.id === options.nodeId) : selectedNode();
+    if(!node){
+        const error = new Error('没有找到可运行节点');
+        if(options.throwOnError) throw error;
+        return {status:'skipped', error};
+    }
     const wasEmptyFirstRun = isSmartImageNode(node) && !(node.images || []).length && !node.pending && !node.queued && !node.jimengPending;
     const emptyNodeEl = wasEmptyFirstRun ? world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`) : null;
     const emptyNodeRect = emptyNodeEl?.getBoundingClientRect();
-    const request = buildPromptRequest(node, generationReferenceImagesForRun(node, true, smartLoopContext), true, smartLoopContext);
-    const prompt = request.prompt.trim();
-    if(smartNodeInFlight(node)) return;
-    const refs = request.refs;
-    const previousSettings = cloneSmartSettings(settings);
-    const runSettings = smartSettingsForNode(node);
-    settings = {...settings, ...cloneSmartSettings(runSettings || {})};
-    if(!prompt && smartRunNeedsPrompt(settings)){
-        settings = previousSettings;
-        toast(tr('smart.toastNeedPrompt'));
-        return;
+    if(smartNodeInFlight(node)){
+        const error = new Error('节点正在运行');
+        if(options.throwOnError) throw error;
+        return {status:'busy', error};
     }
+    if(activeComposerNode()?.id === node.id) savePromptDraftForCurrent();
+    const runSettings = options.runSettings
+        ? cloneSmartSettings(options.runSettings)
+        : smartSettingsForNode(node);
+    let activeSettings = cloneSmartSettings(runSettings || {});
     const outpaintSize = node?.outpaintSize && Number(node.outpaintSize.width) > 0 && Number(node.outpaintSize.height) > 0
         ? {width:Math.round(Number(node.outpaintSize.width)), height:Math.round(Number(node.outpaintSize.height))}
         : null;
-    if(outpaintSize && isApiLikeEngine(settings.engine) && settings.apiKind !== 'video'){
-        settings = {
-            ...settings,
+    if(outpaintSize && isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind !== 'video'){
+        activeSettings = {
+            ...activeSettings,
             resolution:'custom',
             ratio:'',
             customWidth:outpaintSize.width,
@@ -20633,10 +20997,24 @@ async function runGeneration(){
             customSize:`${outpaintSize.width}x${outpaintSize.height}`
         };
     }
-    // Freeze all task decisions before the first await. Async completion must not restore
-    // shared UI settings: users normally continue working on another node while it runs.
-    const activeSettings = cloneSmartSettings(settings);
-    const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
+    // Execution owns an immutable settings snapshot. The composer-level `settings`
+    // object is UI state and must never be mutated by background or concurrent runs.
+    const request = buildPromptRequest(
+        node,
+        generationReferenceImagesForRun(node, true, smartLoopContext),
+        true,
+        smartLoopContext,
+        activeSettings
+    );
+    const prompt = request.prompt.trim();
+    const refs = request.refs;
+    if(!prompt && smartRunNeedsPrompt(activeSettings)){
+        const error = new Error(tr('smart.toastNeedPrompt'));
+        if(options.throwOnError) throw error;
+        toast(error.message);
+        return {status:'failed', error};
+    }
+    const meta = snapshotRunMeta(node, prompt, request.displayPrompt, refs, activeSettings);
     const logKind = isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video' ? 'video' : 'image';
     const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, activeSettings);
     rememberRecentSmartSettings(activeSettings, node);
@@ -20649,7 +21027,11 @@ async function runGeneration(){
         ? (activeSettings.comfyMode === 'text' || activeSettings.comfyMode === 'enhance' || activeSettings.comfyMode === 'edit' || activeSettings.comfyMode === 'custom' ? 1 : 1)
         : Math.max(1, Math.min(8, Number(activeSettings.count || 1)));
     const apiConcurrentRun = isApiLikeEngine(activeSettings.engine) || activeSettings.engine === 'runninghub' || activeSettings.engine === 'modelscope' || activeSettings.engine === 'comfy';
-    pushUndo();
+    if(!options.skipUndo) pushUndo();
+    if(node.cascadePinned){
+        delete node.cascadePinned;
+        scheduleSave();
+    }
     let extracted = null;
     let branchNode = null;
     const groupRun = isSmartGroupNode(node);
@@ -20694,9 +21076,9 @@ async function runGeneration(){
     }
     try {
         if(activeSettings.engine === 'comfy'){
-            await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta);
+            await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta, activeSettings, options);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
-            return;
+            return {status:'completed', nodeId:node.id, outputs:pendingNode.images || []};
         }
         if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video'){
             const outVideos = await runApiVideoGeneration(prompt, refs, activeSettings, request);
@@ -20704,9 +21086,9 @@ async function runGeneration(){
             if(request?.actualApiPrompt) runLog.requestPrompt = String(request.actualApiPrompt || '');
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
             addSmartGenerationLog({run:runLog, outputs:outVideos, runMs:nowMs() - runLogStart});
-            clearPromptInput({preserveDraft:true});
+            if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
             scheduleSave();
-            return;
+            return {status:'completed', nodeId:node.id, outputs:outVideos};
         }
         if(activeSettings.engine === 'runninghub'){
             const settled = await Promise.all(Array.from({length:expectedCount}, async (_, index) => {
@@ -20741,9 +21123,9 @@ async function runGeneration(){
             }
             if(outpaintSize) delete node.outpaintSize;
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
-            clearPromptInput({preserveDraft:true});
+            if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
             scheduleSave();
-            return;
+            return {status:'completed', nodeId:node.id, outputs:pendingNode.images || []};
         }
         const outImages = activeSettings.engine === 'modelscope'
                 ? await runModelscopeGeneration(prompt, refs, activeSettings, request)
@@ -20765,29 +21147,30 @@ async function runGeneration(){
             await saveCanvas();
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart});
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
-                clearPromptInput({preserveDraft:true});
+                if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
                 scheduleSave();
-                return;
+                return {status:'pending', nodeId:node.id};
             }
             if(!(pendingNode.images || []).length) throw new Error(tr('smart.errNoOutImages'));
             if(outpaintSize) delete node.outpaintSize;
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
-            clearPromptInput({preserveDraft:true});
+            if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
             scheduleSave();
-            return;
+            return {status:'completed', nodeId:node.id, outputs:pendingNode.images || []};
         }
         if(!outImages.length) throw new Error(tr('smart.errNoOutImages'));
         if(outpaintSize) delete node.outpaintSize;
         finalizePendingNode(pendingNode, outImages, pendingMeta);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
-        clearPromptInput({preserveDraft:true});
+        if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
         scheduleSave();
+        return {status:'completed', nodeId:node.id, outputs:pendingNode.images || outImages || []};
     } catch(e) {
         if(request?.actualApiPrompt && logKind === 'video') runLog.requestPrompt = String(request.actualApiPrompt || '');
         if(handleJimengPendingSignal(pendingNode, e)){
             delete pendingNode._runMetaTargetId;
-            clearPromptInput({preserveDraft:true});
-            return;
+            if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
+            return {status:'pending', nodeId:node.id, error:e};
         }
         pendingNode.pending = 0;
         if(branchNode){
@@ -20805,8 +21188,10 @@ async function runGeneration(){
         if(extracted) restoreFromExtraction(node, extracted);
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
-        if(!e?.smartGenerationLogged) notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
-        if(!e?.smartGenerationLogged) toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
+        if(!e?.smartGenerationLogged && !options.silent) notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
+        if(!e?.smartGenerationLogged && !options.silent) toast((e.message || tr('smart.errRunFailed')).slice(0, 160));
+        if(options.throwOnError) throw e;
+        return {status:'failed', nodeId:node.id, error:e};
     } finally {
         if(!apiConcurrentRun){
             clearNodeRunningState(pendingNode);
@@ -20815,12 +21200,28 @@ async function runGeneration(){
         render();
     }
 }
-async function runPromptLLMNode(nodeId){
+async function runPromptLLMNode(nodeId, options={}){
     const node = nodes.find(n => n.id === nodeId);
-    if(!node || node.type !== 'smart-prompt') return;
-    if(activePromptNodeStreamState(nodeId)) return;
+    if(!node || node.type !== 'smart-prompt'){
+        if(options.throwOnError) throw new Error('没有找到可运行的提示词节点');
+        return {status:'skipped'};
+    }
+    if(activePromptNodeStreamState(nodeId)){
+        if(options.throwOnError) throw new Error('提示词节点正在运行');
+        return {status:'busy'};
+    }
     const message = promptNodeLLMInputText(node).trim();
-    if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
+    if(!message){
+        const error = new Error(tr('smart.promptLlmNeedText'));
+        if(options.throwOnError) throw error;
+        toast(error.message);
+        return {status:'failed', error};
+    }
+    if(node.cascadePinned){
+        if(!options.skipUndo) pushUndo();
+        delete node.cascadePinned;
+        scheduleSave();
+    }
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     const provider = resolveChatProviderId(node.llmProvider || '');
     const model = resolveChatModel(node.llmModel || '', provider);
@@ -20906,6 +21307,7 @@ async function runPromptLLMNode(nodeId){
         }
         node.llmModel = finalModel;
         scheduleSave();
+        return {status:'completed', nodeId:node.id, text:node.text || ''};
     } catch(e) {
         const aborted = controller.signal.aborted || e?.name === 'AbortError' || e?.promptNodeAborted || streamState.stopping;
         queuePromptNodeStreamFlush(streamState, {immediate:true, autoScroll:!aborted});
@@ -20918,9 +21320,13 @@ async function runPromptLLMNode(nodeId){
         } else {
             if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:Math.max(0, nowMs() - runLogStart), error:e.message || tr('smart.promptLlmFailed')});
             if(e && typeof e === 'object') e.smartGenerationLogged = true;
-            notifySmartTaskFailure(e.message || tr('smart.promptLlmFailed'));
-            toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
+            if(!options.silent){
+                notifySmartTaskFailure(e.message || tr('smart.promptLlmFailed'));
+                toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
+            }
         }
+        if(options.throwOnError) throw e;
+        return {status:aborted ? 'stopped' : 'failed', nodeId:node.id, error:e};
     } finally {
         cleanupPromptNodeStream(node.id);
         node.running = false;
@@ -21378,14 +21784,14 @@ function notifySmartTaskSuccess(kind='image', count=1){
 function notifySmartTaskFailure(message=''){
     smartBackgroundNotify('任务失败', String(message || tr('smart.errRunFailed')), 'failure');
 }
-async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
+async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSettings=settings, options={}){
     const allRefs = refs || [];
     refs = imageRefsOnly(allRefs);
-    const mode = settings.comfyMode || 'text';
-    if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta);
-    if(mode === 'enhance') return runComfyEnhance(node, refs, pendingNode, meta);
-    if(mode === 'edit') return runComfyEdit(node, prompt, refs, pendingNode, meta);
-    const workflowName = settings.comfyWorkflow || comfyWorkflows[0]?.name || '';
+    const mode = runSettings.comfyMode || 'text';
+    if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta, runSettings, options);
+    if(mode === 'enhance') return runComfyEnhance(node, refs, pendingNode, meta, runSettings, options);
+    if(mode === 'edit') return runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings, options);
+    const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
     if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
     const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
         if(!r.ok) throw new Error(await r.text());
@@ -21405,10 +21811,10 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'video'), videoRefsOnly(allRefs));
     await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'audio'), audioRefsOnly(allRefs));
     fields.filter(f => comfyFieldKind(f) === 'setting').forEach(field => {
-        if(comfyRandomEnabledField(field) && smartComfyRandomActive(field.id)){
+        if(comfyRandomEnabledField(field) && smartComfyRandomActiveFor(runSettings, field.id)){
             values[field.id] = smartComfyRandomValue(field);
         } else {
-            values[field.id] = settings.comfyParams?.[field.id] ?? field.default;
+            values[field.id] = runSettings.comfyParams?.[field.id] ?? field.default;
         }
     });
     const result = await runQueuedSmartComfyGenerate({prompt, workflow_json:workflowName, params:comfyParamsFromWorkflowValues(wf.config || {fields:[]}, values), type:'workflow-custom', client_id:smartClientId});
@@ -21427,11 +21833,11 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
         created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
-    clearPromptInput({preserveDraft:true});
+    if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
     scheduleSave();
 }
-async function runComfyText(node, prompt, pendingNode, meta){
-    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(settings.width || 1024), height:Number(settings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
+async function runComfyText(node, prompt, pendingNode, meta, runSettings=settings, options={}){
+    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(runSettings.width || 1024), height:Number(runSettings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -21442,13 +21848,13 @@ async function runComfyText(node, prompt, pendingNode, meta){
         created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
-    clearPromptInput({preserveDraft:true});
+    if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
     scheduleSave();
 }
-async function runComfyEnhance(node, refs, pendingNode, meta){
+async function runComfyEnhance(node, refs, pendingNode, meta, runSettings=settings, options={}){
     if(!refs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
     const inputName = await comfyNameForRef(refs[0]);
-    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(settings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -21461,7 +21867,7 @@ async function runComfyEnhance(node, refs, pendingNode, meta){
     }
     scheduleSave();
 }
-async function runComfyEdit(node, prompt, refs, pendingNode, meta){
+async function runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings=settings, options={}){
     if(!refs.length) throw new Error(tr('smart.errEditNeedRefs'));
     const names = [];
     for(const ref of refs.slice(0, 3)) names.push(await comfyNameForRef(ref));
@@ -21476,7 +21882,7 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta){
         created.images = embedGenPromptIntoImages(created.images, created);
         addConnection(node.id, created.id);
     }
-    clearPromptInput({preserveDraft:true});
+    if(!options.preserveComposer) clearPromptInput({preserveDraft:true});
     scheduleSave();
 }
 async function comfyNameForRef(ref){
@@ -23150,14 +23556,7 @@ runBtn.onclick = event => {
     return result;
 };
 cascadeRunBtn.onclick = () => {
-    const node = selectedNode();
-    const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
-    if(loopId && smartCascadeIsLoopRunning(loopId)) {
-        requestSmartCascadeStop(loopId);
-        if(composerExpanded) setComposerExpanded(false);
-        return;
-    }
-    runSmartCascade();
+    runSmartAncestorCascade();
     if(composerExpanded) setComposerExpanded(false);
 };
 fileInput.onchange = () => {

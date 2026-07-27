@@ -376,3 +376,98 @@ test('saved metadata keeps provenance but API image payload strips internal stat
     assert.equal('nodeId' in payload, false);
     assert.equal('manualAdded' in payload, false);
 });
+
+test('RunningHub logs use the selected RH config instead of stale API model settings', () => {
+    const selectedRef = {
+        kind:'workflow',
+        id:'wf-42',
+        entry:{title:'RH Video Workflow'}
+    };
+    const loaded = loadProductionFunctions([
+        'runningHubLogDescriptor',
+        'smartRunTaskLabel',
+        'smartRunRequestMeta',
+        'smartRunSnapshot',
+        'smartLogHasLegacyRunningHubMetadata'
+    ], {
+        settings:{},
+        parseRunningHubEntryKey:value => {
+            const match = String(value || '').match(/^(app|workflow):(.+)$/);
+            return match ? {kind:match[1], id:match[2]} : null;
+        },
+        selectedRunningHubRef:source => source?.rhConfigKey === 'workflow:wf-42' ? selectedRef : null,
+        runningHubEntryLabel:entry => entry?.title || '',
+        cloneSmartSettings:source => JSON.parse(JSON.stringify(source || {})),
+        smartRequestPromptForRun:prompt => prompt,
+        isApiLikeEngine:engine => ['api','volcengine'].includes(engine),
+        sizeForRun:() => '',
+        modelDisplayName:() => 'Seedream V5 Lite',
+        tr:key => key,
+        MS_GEN_MODELS:{}
+    });
+    const run = loaded.smartRunSnapshot(
+        {id:'rh-node', type:'smart-image'},
+        'prompt',
+        [],
+        'image',
+        null,
+        {
+            engine:'runninghub',
+            rhConfigKey:'workflow:wf-42',
+            rhPayment:'wallet',
+            provider_id:'custom-api',
+            model:'seedream-v5-lite',
+            videoProvider:'custom-api',
+            videoModel:'seedream-v5-lite'
+        }
+    );
+
+    assert.deepEqual({...run.runningHub}, {kind:'workflow', id:'wf-42', label:'RH Video Workflow'});
+    assert.equal(loaded.smartRunTaskLabel(run), 'RH Video Workflow');
+    assert.deepEqual(
+        {...loaded.smartRunRequestMeta(run)},
+        {
+            provider_id:'runninghub',
+            model:'RH Video Workflow',
+            mode:'workflow',
+            config_id:'wf-42',
+            useWallet:true,
+            workflowId:'wf-42'
+        }
+    );
+    assert.equal(loaded.smartLogHasLegacyRunningHubMetadata({
+        platform:'RunningHub',
+        model:'Seedream V5 Lite',
+        request:{provider_id:'custom-api'}
+    }), true);
+    assert.equal(loaded.smartLogHasLegacyRunningHubMetadata({
+        platform:'RunningHub',
+        model:'RH Video Workflow',
+        request:{provider_id:'runninghub'}
+    }), false);
+});
+
+test('engine-specific log metadata wins over output media kind', () => {
+    const loaded = loadProductionFunctions(['smartRunTaskLabel', 'smartRunRequestMeta'], {
+        runningHubLogDescriptor:() => ({kind:'app', id:'', label:'RunningHub'}),
+        modelDisplayName:() => 'stale API model',
+        tr:key => key,
+        MS_GEN_MODELS:{}
+    });
+    const comfyVideoRun = {
+        kind:'video',
+        settings:{
+            engine:'comfy',
+            comfyMode:'custom',
+            comfyWorkflow:'video-workflow.json',
+            videoProvider:'custom-api',
+            videoModel:'stale-video-model'
+        }
+    };
+
+    assert.equal(loaded.smartRunTaskLabel(comfyVideoRun), 'video-workflow.json');
+    assert.deepEqual(
+        {...loaded.smartRunRequestMeta(comfyVideoRun)},
+        {workflow_json:'video-workflow.json', mode:'custom'}
+    );
+});
