@@ -1077,6 +1077,7 @@ function syncSmartVideoControls(host, video){
 const SMART_VIDEO_USER_PAUSE_MIN_TIME = .01;
 const smartVideoUserPausedStates = new Map();
 const smartVideoSystemPausedKeys = new Set();
+const SMART_VIDEO_PREVIEW_SOURCE_RESET_GRACE_MS = 120;
 let smartVideoPreviewHandoff = null;
 let smartVideoPreviewOpeningKey = '';
 function smartVideoPreviewHandoffSource(handoff=smartVideoPreviewHandoff){
@@ -1176,14 +1177,17 @@ function settleSmartVideoPreviewSourceAfterReveal(nodeId, imageIndex){
     if(!handoff || handoff.nodeId !== nodeId || handoff.imageIndex !== Number(imageIndex)) return;
     handoff.phase = 'awaiting-modal-paint';
     // The first animation frame commits visibility/layout for the prepared
-    // modal. Reset on the following frame so the modal has actually painted
-    // before the covered canvas player moves back to frame zero.
+    // modal. The following frame guarantees one paint, then a short grace
+    // period lets Chromium finish compositing the translucent backdrop before
+    // the covered canvas player moves back to frame zero.
     requestAnimationFrame(() => requestAnimationFrame(() => {
-        if(smartVideoPreviewHandoff !== handoff || handoff.phase !== 'awaiting-modal-paint') return;
-        const sourceVideo = smartVideoPreviewHandoffSource(handoff);
-        handoff.phase = 'settled';
-        smartVideoPreviewHandoff = null;
-        if(sourceVideo) holdSmartCanvasVideoAtFirstFrame(sourceVideo);
+        setTimeout(() => {
+            if(smartVideoPreviewHandoff !== handoff || handoff.phase !== 'awaiting-modal-paint') return;
+            const sourceVideo = smartVideoPreviewHandoffSource(handoff);
+            handoff.phase = 'settled';
+            smartVideoPreviewHandoff = null;
+            if(sourceVideo) holdSmartCanvasVideoAtFirstFrame(sourceVideo);
+        }, SMART_VIDEO_PREVIEW_SOURCE_RESET_GRACE_MS);
     }));
 }
 function cancelSmartVideoPreviewHandoff(){
