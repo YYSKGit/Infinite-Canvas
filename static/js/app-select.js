@@ -72,7 +72,9 @@
         const selectStyle = getComputedStyle(controller.select);
         const menuFontSize = selectStyle.getPropertyValue('--app-select-menu-font-size').trim();
         const configuredMaxHeight = Number.parseFloat(selectStyle.getPropertyValue('--app-select-menu-max-height'));
+        const configuredMinWidth = Number.parseFloat(selectStyle.getPropertyValue('--app-select-menu-min-width'));
         const menuHeightLimit = Number.isFinite(configuredMaxHeight) ? Math.max(96, configuredMaxHeight) : 360;
+        const menuMinWidth = Number.isFinite(configuredMinWidth) ? Math.max(0, configuredMinWidth) : 120;
         menu.style.fontFamily = triggerStyle.fontFamily;
         menu.style.fontSize = menuFontSize || triggerStyle.fontSize;
         const bodyRect = document.body.getBoundingClientRect();
@@ -96,7 +98,7 @@
         const above = localRect.top - gap - 8;
         const openAbove = below < 180 && above > below;
         const maxHeight = Math.max(96, Math.min(menuHeightLimit, openAbove ? above : below));
-        const menuWidth = Math.min(520, Math.max(120, viewportWidth - 16), Math.max(120, localRect.width));
+        const menuWidth = Math.min(520, Math.max(menuMinWidth, viewportWidth - 16), Math.max(menuMinWidth, localRect.width));
         menu.style.width = `${menuWidth}px`;
         menu.style.minWidth = `${menuWidth}px`;
         menu.style.maxHeight = `${maxHeight}px`;

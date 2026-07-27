@@ -6,6 +6,7 @@ const uploadInput = document.getElementById('assetUploadInput');
 const LOCAL_CAPTION_SETTINGS_KEY = 'asset_manager_local_caption_settings_v1';
 const PREVIEW_SETTINGS_KEY = 'asset_manager_preview_settings_v1';
 const CANVAS_ASSET_SORT_KEY = 'asset_manager_canvas_asset_sort_v1';
+const CANVAS_ASSET_KIND_FILTER_KEY = 'asset_manager_canvas_asset_kind_filter_v1';
 const ACTIVE_TAB_KEY = 'asset_manager_active_tab_v1';
 const ACTIVE_TAB_VALUES = new Set(['assets', 'workflows', 'prompts', 'canvas-assets', 'local']);
 function readActiveTab(){
@@ -31,6 +32,18 @@ function readCanvasAssetSort(){
 }
 function writeCanvasAssetSort(value){
     try { localStorage.setItem(CANVAS_ASSET_SORT_KEY, value); } catch(_) {}
+}
+const CANVAS_ASSET_KIND_FILTER_VALUES = new Set(['all', 'image', 'video', 'audio']);
+function readCanvasAssetKindFilter(){
+    try {
+        const value = localStorage.getItem(CANVAS_ASSET_KIND_FILTER_KEY) || '';
+        return CANVAS_ASSET_KIND_FILTER_VALUES.has(value) ? value : 'all';
+    } catch(_) {
+        return 'all';
+    }
+}
+function writeCanvasAssetKindFilter(value){
+    try { localStorage.setItem(CANVAS_ASSET_KIND_FILTER_KEY, value); } catch(_) {}
 }
 function readLocalCaptionSettings(){
     try {
@@ -155,6 +168,7 @@ let selectedCanvasAssetId = '';
 let selectedCanvasAssetIds = new Set();
 let canvasAssetQuery = '';
 let canvasAssetSort = readCanvasAssetSort();
+let canvasAssetKindFilter = readCanvasAssetKindFilter();
 let canvasAssetManageMode = false;
 let canvasAssetDetailSwapToken = 0;
 let previewMuted = savedPreviewSettings.muted !== false;
@@ -922,6 +936,7 @@ function currentCanvasAssetItems(){
     let list = uniqueCanvasAssets(canvasAssetsData.items || []).filter(item => {
         if((item.canvas_kind || 'classic') !== activeCanvasAssetCategory) return false;
         if(activeCanvasAssetCanvasId && item.canvas_id !== activeCanvasAssetCanvasId) return false;
+        if(canvasAssetKindFilter !== 'all' && assetKind(item) !== canvasAssetKindFilter) return false;
         if(!q) return true;
         return [
             item.name,
@@ -1438,6 +1453,12 @@ function renderCanvasAssetsManager(){
                 </div>
                 <div class="asset-tools">
                     <label class="asset-search-wrap"><i data-lucide="search"></i><input id="canvasAssetSearch" class="asset-search" type="search" value="${escapeAttr(canvasAssetQuery)}" placeholder="搜索画布资产"></label>
+                    <select id="canvasAssetKindFilter" class="manage-select canvas-kind-select" title="筛选媒体类型" aria-label="筛选媒体类型">
+                        <option value="all" ${canvasAssetKindFilter === 'all' ? 'selected' : ''}>全部类型</option>
+                        <option value="image" ${canvasAssetKindFilter === 'image' ? 'selected' : ''}>图片</option>
+                        <option value="video" ${canvasAssetKindFilter === 'video' ? 'selected' : ''}>视频</option>
+                        <option value="audio" ${canvasAssetKindFilter === 'audio' ? 'selected' : ''}>音频</option>
+                    </select>
                     <select id="canvasAssetSort" class="manage-select canvas-sort-select" title="排序方法">
                         <option value="canvas_asc" ${canvasAssetSort === 'canvas_asc' ? 'selected' : ''}>画布名称</option>
                         <option value="updated_desc" ${canvasAssetSort === 'updated_desc' ? 'selected' : ''}>最近创建</option>
@@ -5011,7 +5032,17 @@ root.addEventListener('change', event => {
         canvasAssetSort = event.target.value || 'canvas_asc';
         writeCanvasAssetSort(canvasAssetSort);
         selectedCanvasAssetId = '';
-        render();
+        renderCanvasAssetViewPreservingDetail();
+        return;
+    }
+    if(event.target?.id === 'canvasAssetKindFilter'){
+        const value = event.target.value || 'all';
+        canvasAssetKindFilter = CANVAS_ASSET_KIND_FILTER_VALUES.has(value) ? value : 'all';
+        writeCanvasAssetKindFilter(canvasAssetKindFilter);
+        selectedCanvasAssetId = '';
+        selectedCanvasAssetIds.clear();
+        renderCanvasAssetViewPreservingDetail();
+        return;
     }
     if(event.target?.id === 'assetMoveTarget'){
         assetMoveTarget = event.target.value || '';
