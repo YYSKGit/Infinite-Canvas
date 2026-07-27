@@ -21231,6 +21231,11 @@ async function urlToBase64(url){
 }
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 const smartBackgroundNotifications = new Set();
+const SMART_NOTIFICATION_DURATION_MS = 4000;
+const SMART_NOTIFICATION_ICONS = {
+    success:'/static/images/notification-success.png',
+    failure:'/static/images/notification-failure.png'
+};
 let smartNotificationServiceWorkerPromise = null;
 function prepareSmartNotificationServiceWorker(){
     if(smartNotificationServiceWorkerPromise) return smartNotificationServiceWorkerPromise;
@@ -21263,21 +21268,31 @@ function focusSmartCanvasFromNotification(){
         focusSmartCanvasKeyboardTarget();
     });
 }
-function smartBackgroundNotify(title, body=''){
+function smartBackgroundNotify(title, body='', type='success'){
     if(typeof window === 'undefined' || typeof document === 'undefined') return;
     if(document.visibilityState === 'visible') return;
     if(!('Notification' in window)) return;
     const notificationTitle = String(title || '任务通知');
     const notificationBody = String(body || '').slice(0, 200);
+    const notificationIcon = SMART_NOTIFICATION_ICONS[type] || SMART_NOTIFICATION_ICONS.success;
     const showPageNotification = () => {
         if(document.visibilityState === 'visible'){
             closeSmartBackgroundNotifications();
             return;
         }
         try {
-            const notification = new Notification(notificationTitle, {body:notificationBody});
+            const notification = new Notification(notificationTitle, {
+                body:notificationBody,
+                icon:notificationIcon,
+                silent:true,
+                requireInteraction:false
+            });
             smartBackgroundNotifications.add(notification);
             const forget = () => smartBackgroundNotifications.delete(notification);
+            window.setTimeout(() => {
+                try { notification.close(); } catch(_err) {}
+                forget();
+            }, SMART_NOTIFICATION_DURATION_MS);
             notification.onclick = event => {
                 event?.preventDefault?.();
                 focusSmartCanvasFromNotification();
@@ -21303,12 +21318,21 @@ function smartBackgroundNotify(title, body=''){
                 return;
             }
             try {
+                const notificationTag = `smart-canvas-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
                 await registration.showNotification(notificationTitle, {
                     body:notificationBody,
-                    icon:'/static/images/logo.png',
+                    icon:notificationIcon,
+                    silent:true,
+                    requireInteraction:false,
                     data:{url:location.href},
-                    tag:`smart-canvas-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+                    tag:notificationTag
                 });
+                window.setTimeout(async () => {
+                    try {
+                        const notifications = await registration.getNotifications({tag:notificationTag});
+                        notifications.forEach(notification => notification.close());
+                    } catch(_err) {}
+                }, SMART_NOTIFICATION_DURATION_MS);
                 if(document.visibilityState === 'visible') closeSmartBackgroundNotifications();
             } catch(_err) {
                 showPageNotification();
@@ -21349,10 +21373,10 @@ function smartTaskKindText(kind='image'){
 function notifySmartTaskSuccess(kind='image', count=1){
     const amount = Math.max(1, Number(count) || 1);
     toast(`已生成 ${amount} 个${smartTaskKindText(kind)}结果`);
-    smartBackgroundNotify('任务完成', `已生成 ${amount} 个${smartTaskKindText(kind)}结果`);
+    smartBackgroundNotify('任务完成', `已生成 ${amount} 个${smartTaskKindText(kind)}结果`, 'success');
 }
 function notifySmartTaskFailure(message=''){
-    smartBackgroundNotify('任务失败', String(message || tr('smart.errRunFailed')));
+    smartBackgroundNotify('任务失败', String(message || tr('smart.errRunFailed')), 'failure');
 }
 async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     const allRefs = refs || [];

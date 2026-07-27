@@ -469,8 +469,19 @@ body.smart-prompt-split-resize .prompt-node-llm .prompt-node-select-control { po
 .floating-node-actions { position:absolute; right:7px; top:7px; z-index:8; opacity:0; pointer-events:none; transition:opacity .14s ease; }
 .image-node:hover .floating-node-actions { opacity:1; pointer-events:auto; }
 .image-node.dragging .floating-node-actions { opacity:0 !important; pointer-events:none !important; }
-/* Bug fix: hide floating delete button whenever the loading overlay is present (node running with existing image) */
-.image-node:has(.node-loading-overlay):hover .floating-node-actions { opacity:0 !important; pointer-events:none !important; }
+/* Keep hover-only node chrome hidden for the whole live generation state.
+   Re-generating keeps the old media mounted, so its normal :hover rules would
+   otherwise reveal delete badges, resolution badges, ports, and resize handles
+   above the loading overlay. */
+.image-node.node-generating .floating-node-actions,
+.image-node.node-generating .mini-x,
+.image-node.node-generating .image-resolution-badge,
+.image-node.node-generating .node-port,
+.image-node.node-generating .node-resize-handle {
+    opacity:0 !important;
+    pointer-events:none !important;
+}
+.image-node.node-generating .image-resolution-badge { transform:translateY(-2px) !important; }
 /* Bug fix: when the done timer is visible, fade it out on hover so the delete button can appear at the same position without overlap */
 .image-node:has(.run-time-pill.done):hover .run-time-pill.done,
 .image-node:has(.run-time-pill.failed):hover .run-time-pill.failed { opacity:0; transition:opacity .14s ease; }
