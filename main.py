@@ -27,6 +27,7 @@ import shlex
 import functools
 import html
 import inspect
+import websockets
 from email.utils import parsedate_to_datetime
 from contextlib import asynccontextmanager
 import xml.etree.ElementTree as ET
@@ -12478,6 +12479,149 @@ async def runninghub_app_info(webappId: str = ""):
     data = raw.get("data") if isinstance(raw, dict) else {}
     return {"success": True, "data": data or {}}
 
+def runninghub_submit_public_data(raw):
+    data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else {}
+    return {
+        "taskId": str(data.get("taskId") or ""),
+        "taskStatus": str(data.get("taskStatus") or "").upper(),
+        "promptTips": data.get("promptTips") or "",
+        "progressAvailable": bool(data.get("netWssUrl")),
+    }
+
+def runninghub_progress_socket_url(raw):
+    data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else {}
+    value = str(data.get("netWssUrl") or "").strip()
+    if not value:
+        return ""
+    parsed = urllib.parse.urlparse(value)
+    hostname = str(parsed.hostname or "").lower()
+    allowed_host = (
+        hostname == "runninghub.cn"
+        or hostname.endswith(".runninghub.cn")
+        or hostname == "runninghub.ai"
+        or hostname.endswith(".runninghub.ai")
+    )
+    return value if parsed.scheme == "wss" and allowed_host else ""
+
+def runninghub_progress_workflow_id(upstream_url):
+    try:
+        parsed = urllib.parse.urlparse(str(upstream_url or ""))
+        values = urllib.parse.parse_qs(parsed.query).get("workflowId") or []
+        workflow_id = str(values[0] if values else "").strip()
+    except Exception:
+        return ""
+    if not workflow_id or len(workflow_id) > 128 or not re.fullmatch(r"[0-9A-Za-z_-]+", workflow_id):
+        return ""
+    return workflow_id
+
+RUNNINGHUB_PROGRESS_NODE_MAP_CACHE = {}
+RUNNINGHUB_PROGRESS_NODE_MAP_LOCK = Lock()
+
+async def runninghub_progress_node_map(provider, api_key, upstream_url, use_wallet=False):
+    workflow_id = runninghub_progress_workflow_id(upstream_url)
+    if not workflow_id:
+        return {}
+    url = runninghub_endpoint_url(provider, "/api/openapi/getJsonApiFormat")
+    cache_key = (url, workflow_id)
+    with RUNNINGHUB_PROGRESS_NODE_MAP_LOCK:
+        cached = RUNNINGHUB_PROGRESS_NODE_MAP_CACHE.get(cache_key)
+        if cached and cached["expires_at"] > time.monotonic():
+            return dict(cached["nodes"])
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=8.0, read=12.0, write=8.0, pool=8.0)) as client:
+            response = await client.post(
+                url,
+                headers=runninghub_app_headers(True, use_wallet),
+                json={"apiKey": api_key, "workflowId": workflow_id},
+            )
+            if response.status_code >= 400:
+                return {}
+            raw = response.json()
+    except Exception as exc:
+        SERVER_LOGGER.info("RunningHub node map unavailable for workflow %s: %s", workflow_id, exc)
+        return {}
+    if not isinstance(raw, dict) or raw.get("code") not in (0, "0"):
+        return {}
+    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    prompt = data.get("prompt")
+    if isinstance(prompt, str) and prompt.strip():
+        try:
+            workflow = json.loads(prompt)
+        except Exception:
+            return {}
+    elif isinstance(prompt, dict):
+        workflow = prompt
+    else:
+        return {}
+    if not isinstance(workflow, dict):
+        return {}
+    result = {}
+    for node_id, node in list(workflow.items())[:2000]:
+        if not isinstance(node, dict):
+            continue
+        meta = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
+        name = str(meta.get("title") or node.get("class_type") or "").strip()
+        if name:
+            result[str(node_id)[:128]] = name[:160]
+    if result:
+        with RUNNINGHUB_PROGRESS_NODE_MAP_LOCK:
+            RUNNINGHUB_PROGRESS_NODE_MAP_CACHE[cache_key] = {
+                "expires_at": time.monotonic() + 3600,
+                "nodes": dict(result),
+            }
+    return result
+
+def runninghub_progress_state(raw):
+    code = raw.get("code") if isinstance(raw, dict) else None
+    data = raw.get("data") if isinstance(raw, dict) else None
+    task_status = str(data.get("taskStatus") or "") if isinstance(data, dict) else ""
+    if isinstance(data, list):
+        return "SUCCESS"
+    if task_status:
+        return task_status.upper()
+    if code in (804, "804"):
+        return "RUNNING"
+    if code in (813, "813"):
+        return "QUEUED"
+    if code in (805, "805"):
+        return "FAILED"
+    if code in (806, "806", 807, "807"):
+        return "CANCELED"
+    return "PENDING"
+
+def normalize_runninghub_progress_message(raw):
+    if not isinstance(raw, dict):
+        return None
+    event_type = str(raw.get("type") or "").strip()
+    if event_type not in {
+        "execution_start",
+        "execution_cached",
+        "executing",
+        "progress",
+        "execution_success",
+        "execution_error",
+        "execution_interrupted",
+    }:
+        return None
+    source = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    data = {}
+    if event_type in {"executing", "progress"}:
+        node_id = source.get("display_node")
+        if node_id is None:
+            node_id = source.get("node")
+        if node_id is not None:
+            data["node"] = str(node_id)
+    if event_type == "progress":
+        value = source.get("value")
+        maximum = source.get("max")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            data["value"] = value
+        if isinstance(maximum, (int, float)) and not isinstance(maximum, bool):
+            data["max"] = maximum
+    if event_type == "execution_cached":
+        data["nodes"] = [str(node) for node in (source.get("nodes") or []) if node is not None][:2000]
+    return {"type": event_type, "data": data}
+
 @app.post("/api/runninghub/submit")
 async def runninghub_submit(payload: RunningHubSubmitRequest):
     webapp_id = str(payload.webappId or "").strip()
@@ -12503,10 +12647,11 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=json.dumps(raw, ensure_ascii=False)[:800])
     if isinstance(raw, dict) and raw.get("code") in (0, "0"):
-        task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
+        public_data = runninghub_submit_public_data(raw)
+        task_id = public_data["taskId"]
         if not task_id:
-            raise HTTPException(status_code=502, detail=f"RunningHub 未返回 taskId：{raw}")
-        return {"success": True, "data": {"taskId": task_id, "raw": raw}}
+            raise HTTPException(status_code=502, detail="RunningHub 未返回 taskId")
+        return {"success": True, "data": public_data}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
 
 @app.post("/api/runninghub/workflow-submit")
@@ -12539,10 +12684,11 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=json.dumps(raw, ensure_ascii=False)[:800])
     if isinstance(raw, dict) and raw.get("code") in (0, "0"):
-        task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
+        public_data = runninghub_submit_public_data(raw)
+        task_id = public_data["taskId"]
         if not task_id:
-            raise HTTPException(status_code=502, detail=f"RunningHub 工作流未返回 taskId：{raw}")
-        return {"success": True, "data": {"taskId": task_id, "raw": raw}}
+            raise HTTPException(status_code=502, detail="RunningHub 工作流未返回 taskId")
+        return {"success": True, "data": public_data}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 工作流提交失败：{raw}")
 
 @app.get("/api/runninghub/workflow-info")
@@ -12694,12 +12840,12 @@ def delete_runninghub_workflow(workflow_id: str):
     return {"success": True}
 
 @app.get("/api/runninghub/query")
-async def runninghub_query(taskId: str = ""):
+async def runninghub_query(taskId: str = "", useWallet: bool = False):
     task_id = str(taskId or "").strip()
     if not task_id:
         raise HTTPException(status_code=400, detail="taskId 必填")
     provider = runninghub_provider()
-    api_key = runninghub_api_key(provider)
+    api_key = runninghub_api_key(provider, use_wallet=useWallet)
     url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=240.0, write=30.0, pool=20.0)) as client:
         try:
@@ -12734,7 +12880,122 @@ async def runninghub_query(taskId: str = ""):
         else:
             fail_reason = str(runninghub_fail_reason(raw) or "").lower()
             status = "CANCELED" if "cancel" in fail_reason or "取消" in fail_reason else "UNKNOWN"
-        return {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
+        return {"success": True, "data": {
+            "status": status,
+            "urls": urls,
+            "image_items": image_items,
+            "failReason": runninghub_fail_reason(raw),
+            "code": code,
+        }}
+
+@app.websocket("/ws/runninghub-progress")
+async def runninghub_progress_websocket(
+    websocket: WebSocket,
+    taskId: str = "",
+    useWallet: bool = False,
+):
+    task_id = str(taskId or "").strip()
+    await websocket.accept()
+    if not task_id:
+        await websocket.send_json({"type": "monitor_error", "data": {"reason": "missing_task_id"}})
+        await websocket.close(code=1008)
+        return
+
+    provider = runninghub_provider()
+    try:
+        api_key = runninghub_api_key(provider, use_wallet=useWallet)
+    except HTTPException:
+        await websocket.send_json({"type": "monitor_error", "data": {"reason": "missing_api_key"}})
+        await websocket.close(code=1008)
+        return
+
+    outputs_url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
+    headers = runninghub_app_headers(True, useWallet)
+    deadline = time.monotonic() + 1800
+    last_state = ""
+    upstream_url = ""
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=60.0, write=30.0, pool=20.0)) as client:
+            while time.monotonic() < deadline and not upstream_url:
+                response = await client.post(
+                    outputs_url,
+                    headers=headers,
+                    json={"apiKey": api_key, "taskId": task_id},
+                )
+                response.raise_for_status()
+                raw = response.json()
+                state = runninghub_progress_state(raw)
+                if state != last_state:
+                    last_state = state
+                    await websocket.send_json({"type": "task_state", "data": {"status": state}})
+                if state in {"SUCCESS", "FAILED", "CANCELED", "CANCELLED"}:
+                    await websocket.close(code=1000)
+                    return
+                upstream_url = runninghub_progress_socket_url(raw)
+                if not upstream_url:
+                    await asyncio.sleep(2.5)
+
+        if not upstream_url:
+            await websocket.send_json({"type": "monitor_unavailable", "data": {}})
+            await websocket.close(code=1000)
+            return
+
+        await websocket.send_json({"type": "task_state", "data": {"status": "RUNNING"}})
+        async with websockets.connect(
+            upstream_url,
+            open_timeout=20,
+            close_timeout=5,
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=2 * 1024 * 1024,
+        ) as upstream:
+            progress_send_lock = asyncio.Lock()
+
+            async def send_progress_message(payload):
+                async with progress_send_lock:
+                    await websocket.send_json(payload)
+
+            async def load_and_send_node_map():
+                node_map = await runninghub_progress_node_map(
+                    provider,
+                    api_key,
+                    upstream_url,
+                    use_wallet=useWallet,
+                )
+                if node_map:
+                    await send_progress_message({"type": "node_map", "data": {"nodes": node_map}})
+
+            node_map_task = asyncio.create_task(load_and_send_node_map())
+            try:
+                async for message in upstream:
+                    try:
+                        raw_message = json.loads(message)
+                    except Exception:
+                        continue
+                    normalized = normalize_runninghub_progress_message(raw_message)
+                    if normalized:
+                        await send_progress_message(normalized)
+                    if normalized and normalized["type"] in {
+                        "execution_success",
+                        "execution_error",
+                        "execution_interrupted",
+                    }:
+                        break
+            finally:
+                if not node_map_task.done():
+                    node_map_task.cancel()
+                await asyncio.gather(node_map_task, return_exceptions=True)
+        await websocket.close(code=1000)
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        SERVER_LOGGER.warning("RunningHub progress proxy failed for task %s: %s", task_id, exc)
+        try:
+            await websocket.send_json({"type": "monitor_unavailable", "data": {}})
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 @app.post("/api/runninghub/cancel")
 async def runninghub_cancel(payload: RunningHubCancelRequest):

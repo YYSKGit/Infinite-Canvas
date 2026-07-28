@@ -118,3 +118,66 @@ test('RunningHub cancellation is proxied through the server without exposing the
     assert.match(backendSource, /body\s*=\s*\{"apiKey":\s*api_key,\s*"taskId":\s*task_id\}/);
     assert.match(jsSource, /JSON\.stringify\(\{taskId,\s*useWallet:Boolean\(useWallet\)\}\)/);
 });
+
+test('RunningHub realtime progress is proxied and signed upstream URLs stay server-side', () => {
+    assert.match(backendSource, /@app\.websocket\("\/ws\/runninghub-progress"\)/);
+    assert.match(backendSource, /runninghub_progress_socket_url\(raw\)/);
+    assert.match(backendSource, /websockets\.connect\(\s*upstream_url/);
+    assert.match(backendSource, /runninghub_progress_workflow_id\(upstream_url\)/);
+    assert.match(backendSource, /"\/api\/openapi\/getJsonApiFormat"/);
+    assert.match(backendSource, /\{"type":\s*"node_map",\s*"data":\s*\{"nodes":\s*node_map\}\}/);
+    assert.match(backendSource, /event_type not in \{[\s\S]*?"execution_start"[\s\S]*?"executing"[\s\S]*?"progress"[\s\S]*?"execution_success"/);
+    const submitStart = backendSource.indexOf('async def runninghub_submit(');
+    const submitEnd = backendSource.indexOf('@app.post("/api/runninghub/workflow-submit")', submitStart);
+    const workflowStart = submitEnd;
+    const workflowEnd = backendSource.indexOf('@app.get("/api/runninghub/workflow-info")', workflowStart);
+    assert.doesNotMatch(backendSource.slice(submitStart, submitEnd), /"raw":\s*raw/);
+    assert.doesNotMatch(backendSource.slice(workflowStart, workflowEnd), /"raw":\s*raw/);
+    assert.match(jsSource, /\/ws\/runninghub-progress\?taskId=/);
+    assert.match(jsSource, /\/api\/runninghub\/query\?taskId=.*?useWallet=/);
+});
+
+test('RunningHub progress uses a smooth inset border and a persistent resolution-style node badge', () => {
+    assert.match(jsSource, /\$\{runningHubProgressBorderHtml\(node,\s*layout\)\}/);
+    assert.match(cssSource, /\.rh-progress-border-host\s*\{[^}]*position:absolute;[^}]*pointer-events:none;/);
+    assert.match(cssSource, /\.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
+    assert.match(cssSource, /@keyframes rh-progress-orbit/);
+    assert.match(cssSource, /\.rh-progress-stroke\.is-segment-active/);
+    assert.match(cssSource, /animation-delay:var\(--rh-progress-delay,\s*0ms\)/);
+    assert.match(cssSource, /stroke-dasharray \.32s cubic-bezier/);
+    assert.match(jsSource, /patchRunningHubProgressHost\(currentHost,\s*fresh\)/);
+
+    const sandbox = vm.createContext({
+        Date:{now:() => 5000},
+        nodeRect:() => ({width:260, height:180}),
+        escapeHtml:value => String(value)
+    });
+    vm.runInContext(`
+        ${extractFunction('runningHubProgressTasks')}
+        ${extractFunction('runningHubTaskFraction')}
+        ${extractFunction('runningHubProgressLabel')}
+        ${extractFunction('runningHubProgressBorderHtml')}
+        globalThis.single = runningHubProgressBorderHtml({
+            runningHubProgress:{tasks:[{index:0,status:'running',nodeName:'KSampler',value:15,max:30}]}
+        });
+        globalThis.multi = runningHubProgressBorderHtml({
+            runningHubProgress:{tasks:[
+                {index:0,status:'succeeded',value:1,max:1},
+                {index:1,status:'running',nodeName:'VAEDecode',value:null,max:null,startedAt:1000},
+                {index:2,status:'queued',value:null,max:null}
+            ]}
+        });
+        globalThis.unnamed = runningHubProgressBorderHtml({
+            runningHubProgress:{tasks:[{index:0,status:'running',nodeId:'10',nodeName:'',value:null,max:null,startedAt:1000}]}
+        });
+    `, sandbox);
+    assert.match(sandbox.single, /is-determinate/);
+    assert.match(sandbox.single, /stroke-dasharray="50 50"/);
+    assert.match(sandbox.single, /x="1" y="1"[\s\S]*rx="11"/);
+    assert.match(sandbox.single, /image-resolution-badge rh-progress-node-badge/);
+    assert.match(sandbox.single, /KSampler · 50%/);
+    assert.equal((sandbox.multi.match(/class="rh-progress-stroke/g) || []).length, 3);
+    assert.match(sandbox.multi, /1\/3 · VAEDecode/);
+    assert.match(sandbox.multi, /--rh-progress-delay:-1300ms/);
+    assert.doesNotMatch(sandbox.unnamed, />10<\/span>/);
+});

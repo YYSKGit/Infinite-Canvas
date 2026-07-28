@@ -154,6 +154,44 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .smart-log-toggle.active,.smart-shortcut-toggle.active,.smart-workflow-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
 .smart-log-toggle i,.smart-log-toggle svg,.smart-shortcut-toggle i,.smart-shortcut-toggle svg,.smart-workflow-toggle i,.smart-workflow-toggle svg { width:16px; height:16px; }
 .image-node { position:absolute; width:260px; min-height:178px; border-radius:16px; background:transparent; border:0; box-shadow:none; overflow:visible; user-select:none; cursor:move; }
+.rh-progress-border-host { position:absolute; inset:0; z-index:8; border-radius:inherit; pointer-events:none; }
+.rh-progress-border { display:block; width:100%; height:100%; overflow:visible; }
+.rh-progress-track,
+.rh-progress-stroke { fill:none; vector-effect:non-scaling-stroke; }
+.rh-progress-track { stroke:color-mix(in srgb, var(--strong) 18%, transparent); stroke-width:1; }
+.rh-progress-stroke {
+    stroke:color-mix(in srgb, var(--strong) 82%, #8b5cf6 18%);
+    stroke-width:2;
+    stroke-linecap:round;
+    filter:drop-shadow(0 0 3px color-mix(in srgb, var(--strong) 22%, transparent));
+    transition:stroke-dasharray .32s cubic-bezier(.22,1,.36,1),stroke-dashoffset .32s cubic-bezier(.22,1,.36,1),opacity .2s ease;
+}
+.theme-dark .rh-progress-track { stroke:rgba(255,255,255,.14); }
+.theme-dark .rh-progress-stroke {
+    stroke:rgba(255,255,255,.92);
+    filter:drop-shadow(0 0 4px rgba(255,255,255,.26));
+}
+.rh-progress-stroke.is-indeterminate { animation:rh-progress-orbit 1.7s linear infinite; animation-delay:var(--rh-progress-delay, 0ms); }
+.rh-progress-stroke.is-indeterminate.is-queued { opacity:.66; animation-duration:2.8s; }
+.rh-progress-stroke.is-segment-active { animation:rh-progress-segment-breathe 1.35s ease-in-out infinite; animation-delay:var(--rh-progress-delay, 0ms); }
+.rh-progress-stroke.is-segment-active.is-queued { opacity:.48; animation-duration:2.2s; }
+.rh-progress-stroke.is-complete { animation:rh-progress-complete .46s ease-out both; }
+.rh-progress-node-badge.image-resolution-badge { z-index:9; max-width:calc(100% - 102px); opacity:1 !important; pointer-events:none !important; }
+.image-node.node-generating .rh-progress-node-badge.image-resolution-badge,
+.image-node.dragging .rh-progress-node-badge.image-resolution-badge { opacity:1 !important; pointer-events:none !important; }
+@keyframes rh-progress-orbit {
+    from { stroke-dashoffset:0; }
+    to { stroke-dashoffset:-100; }
+}
+@keyframes rh-progress-segment-breathe {
+    0%,100% { opacity:.42; }
+    50% { opacity:1; }
+}
+@keyframes rh-progress-complete {
+    0% { opacity:.72; }
+    55% { opacity:1; filter:drop-shadow(0 0 6px color-mix(in srgb, var(--strong) 34%, transparent)); }
+    100% { opacity:.92; }
+}
 .image-node.first-pending-transition { transform-origin:top left; will-change:transform,opacity; pointer-events:none; }
 .image-node.first-pending-transition .node-body,
 .image-node.first-pending-transition .node-head,
@@ -166,7 +204,8 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     .image-node.first-pending-transition,
     .image-node.first-pending-transition .node-body,
     .image-node.first-pending-transition .node-head,
-    .image-node.first-pending-transition .node-hint { animation:none !important; transition:none !important; }
+    .image-node.first-pending-transition .node-hint,
+    .rh-progress-stroke { animation:none !important; transition:none !important; }
 }
 body.smart-node-drag * { user-select:none !important; }
 body.smart-node-drag .image-node textarea,
