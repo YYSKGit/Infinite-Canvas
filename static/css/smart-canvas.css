@@ -187,6 +187,14 @@ body.smart-node-resize .thumb-item,
 body.smart-node-resize .image-wrap,
 body.smart-node-resize .image-wrap > img,
 body.smart-node-resize .image-wrap > .media-video-card { transition:none !important; }
+body.smart-node-chrome-settling .floating-node-actions,
+body.smart-node-chrome-settling .mini-x,
+body.smart-node-chrome-settling .image-resolution-badge,
+body.smart-node-chrome-settling .node-resize-handle,
+body.smart-node-chrome-settling .node-port,
+body.smart-node-chrome-settling .image-wrap,
+body.smart-node-chrome-settling .image-wrap > img,
+body.smart-node-chrome-settling .image-wrap > .media-video-card { transition:none !important; }
 body.smart-node-drag .image-node:hover .floating-node-actions,
 body.smart-node-drag .thumb-item:hover .mini-x,
 body.smart-node-drag .image-wrap:hover .mini-x,
@@ -586,7 +594,7 @@ body.smart-node-resize .smart-node-floating-menu,
 .image-name-badge > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .thumb-item .image-name-badge { left:6px; top:5px; max-width:calc(100% - 12px); }
 .thumb-item.has-outside-image-name { overflow:visible; }
-.image-name-badge.image-name-badge-outside { left:4px; top:-24px; max-width:calc(100% - 8px); color:rgba(100,116,139,.78); }
+.image-name-badge.image-name-badge-outside { left:4px; top:-26px; max-width:calc(100% - 8px); color:rgba(100,116,139,.78); }
 .image-name-badge:hover { color:rgba(51,65,85,.95); }
 .theme-dark .image-name-badge { color:rgba(203,213,225,.74); }
 .theme-dark .image-name-badge.image-name-badge-outside { color:rgba(203,213,225,.68); }
@@ -841,7 +849,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-node.selected .node-resize-handle, .image-node:hover .node-resize-handle { opacity:1; }
 .image-node.dragging .node-resize-handle { opacity:0 !important; pointer-events:none !important; }
 .image-node:has(.smart-canvas-video-host.is-controls-visible,.smart-canvas-video-host.is-controls-pinned,.smart-canvas-video-host.is-controls-interacting) .node-resize-handle,.image-node.selected:has(.smart-canvas-video[data-smart-has-played="1"]) .node-resize-handle { opacity:0 !important; pointer-events:none !important; }
-.node-port { --port-x:0px; --port-y:0px; position:absolute; top:50%; width:16px; height:16px; border-radius:50%; background:var(--card); border:1.6px solid color-mix(in srgb, var(--strong) 78%, var(--card)); transform:translate(var(--port-x), calc(-50% + var(--port-y))); z-index:6; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .24s ease, background .2s ease, transform .36s cubic-bezier(.22,.72,.2,1), box-shadow .24s ease; box-shadow:0 4px 10px rgba(15,23,42,.2); transform-origin:center; }
+.node-port { --port-x:0px; --port-y:0px; position:absolute; top:50%; width:16px; height:16px; border-radius:50%; background:var(--card); border:1.6px solid color-mix(in srgb, var(--strong) 78%, var(--card)); transform:translate(var(--port-x), calc(-50% + var(--port-y))); z-index:9; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .24s ease, background .2s ease, transform .36s cubic-bezier(.22,.72,.2,1), box-shadow .24s ease; box-shadow:0 4px 10px rgba(15,23,42,.2); transform-origin:center; }
 .node-port::before,.node-port::after { content:""; position:absolute; left:50%; top:50%; width:7px; height:1.3px; border-radius:2px; background:currentColor; transform:translate(-50%,-50%); pointer-events:none; }
 .node-port::after { transform:translate(-50%,-50%) rotate(90deg); }
 .node-port.port-in { left:-8px; }
@@ -853,12 +861,13 @@ video.node-img { object-fit:cover; background:#0f172a; }
 /* A port remains a child of its node while it follows the pointer outside.
    Suppress the node's incidental :hover controls until the pointer truly
    enters the card; the magnetic port itself stays visible. */
-.image-node:has(.node-port.is-magnetic) .floating-node-actions,
-.image-node:has(.node-port.is-magnetic) .mini-x,
-.image-node:has(.node-port.is-magnetic) .image-resolution-badge,
-.image-node:has(.node-port.is-magnetic) .node-resize-handle,
-.empty-node:has(.node-port.is-magnetic) .node-delete { opacity:0 !important; pointer-events:none !important; }
-.image-node:has(.node-port.is-magnetic) .node-port:not(.is-magnetic) { opacity:0 !important; pointer-events:none !important; }
+.image-node:not(.node-generating):has(.node-port:is(:hover,.is-magnetic)) .floating-node-actions,
+.image-node:not(.node-generating):has(.node-port:is(:hover,.is-magnetic)) .mini-x,
+.image-node:not(.node-generating):has(.node-port:is(:hover,.is-magnetic)) .image-resolution-badge,
+.image-node:not(.node-generating):has(.node-port:is(:hover,.is-magnetic)) .node-resize-handle,
+.empty-node:not(.node-generating):has(.node-port:is(:hover,.is-magnetic)) .node-delete { opacity:0 !important; pointer-events:none !important; }
+.image-node:not(.node-generating):has(.node-port:hover) .node-port:not(:hover),
+.image-node:not(.node-generating):has(.node-port.is-magnetic) .node-port:not(.is-magnetic) { opacity:0 !important; pointer-events:none !important; }
 .image-node.dragging .node-port { opacity:0 !important; pointer-events:none !important; }
 .shell.port-dragging { cursor:crosshair !important; }
 .shell.port-magnetic-ready,.shell.port-magnetic-ready * { cursor:crosshair !important; }

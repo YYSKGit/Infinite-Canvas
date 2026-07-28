@@ -381,12 +381,48 @@ test('single-media nodes never stack image and node delete shadows', () => {
 test('magnetic ports hide all other node chrome and resize hover extends video presence', () => {
     assert.match(
         cssSource,
-        /\.image-node:has\(\.node-port\.is-magnetic\) \.floating-node-actions,[\s\S]*?\.mini-x,[\s\S]*?\.image-resolution-badge,[\s\S]*?\.node-resize-handle,[\s\S]*?\{[^}]*opacity:0 !important;[^}]*pointer-events:none !important;/
+        /\.image-node:not\(\.node-generating\):has\(\.node-port:is\(:hover,\.is-magnetic\)\) \.floating-node-actions,[\s\S]*?\.mini-x,[\s\S]*?\.image-resolution-badge,[\s\S]*?\.node-resize-handle,[\s\S]*?\{[^}]*opacity:0 !important;[^}]*pointer-events:none !important;/
     );
+    assert.match(cssSource, /\.image-node:not\(\.node-generating\):has\(\.node-port:hover\) \.node-port:not\(:hover\),/);
     const bindVideoSource = extractFunction('bindSmartCanvasVideo');
     assert.match(bindVideoSource, /\.floating-node-actions,\.image-resolution-badge,\.node-resize-handle/);
     const bindNodeSource = extractFunction('bindNodeEvents');
     assert.match(bindNodeSource, /resizeHandle\.addEventListener\('mouseleave'[\s\S]*videoHost\.contains\(event\.relatedTarget\)[\s\S]*resetSmartCanvasVideo\(video\)/);
+});
+
+test('ports stay above state borders and live nodes cannot magnetize hidden ports', () => {
+    assert.match(cssSource, /\.node-port\s*\{[^}]*z-index:9;/);
+    assert.match(
+        cssSource,
+        /\.image-node\.cascade-pinned::before,[\s\S]*?z-index:7;/
+    );
+    assert.match(extractFunction('updateMagneticPort'), /for\(const node of nodes\)\{[\s\S]*if\(nodeHasLiveRunState\(node\)\) continue;/);
+});
+
+test('resize completion suppresses chrome transitions across rerender', () => {
+    const stableRenderSource = extractFunction('renderWithStableNodeChrome');
+    assert.match(stableRenderSource, /classList\.add\('smart-node-chrome-settling'\)/);
+    assert.match(stableRenderSource, /requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame\(\(\) => \{[\s\S]*classList\.remove\('smart-node-chrome-settling'\)/);
+    assert.match(extractFunction('finishNodeBoxResize'), /if\(changed\) renderWithStableNodeChrome\(\)/);
+    assert.match(
+        cssSource,
+        /body\.smart-node-chrome-settling \.floating-node-actions,[\s\S]*?\.image-resolution-badge,[\s\S]*?\.node-resize-handle,[\s\S]*?\.node-port,[\s\S]*?\{ transition:none !important; \}/
+    );
+});
+
+test('pin toggles update in place so the pointer keeps the button cursor', () => {
+    const togglePinSource = extractFunction('toggleSmartAncestorPin');
+    assert.doesNotMatch(togglePinSource, /\brender(?:WithStableNodeChrome)?\s*\(/);
+    assert.match(togglePinSource, /classList\.toggle\('cascade-pinned', pinned\)/);
+    assert.match(togglePinSource, /pinButton\.classList\.toggle\('active', pinned\)/);
+    assert.match(togglePinSource, /pinButton\.setAttribute\('aria-label', title\)/);
+});
+
+test('outside media labels leave space above the bordered node', () => {
+    assert.match(
+        cssSource,
+        /\.image-name-badge\.image-name-badge-outside\s*\{[^}]*top:-26px;/
+    );
 });
 
 test('hover preview marks the complete ancestor chain before execution', () => {

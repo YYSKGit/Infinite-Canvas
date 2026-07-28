@@ -166,6 +166,7 @@ let selectionState = null;
 let isRKeyDown = false;
 let selectionJustFinished = false;
 let resizeState = null;
+let nodeChromeSettleRaf = 0;
 let llmInstructionResizeState = null;
 let llmSystemResizeState = null;
 let promptSplitResizeState = null;
@@ -10598,9 +10599,26 @@ function finishNodeBoxResize(){
     const changed = Boolean(rect && (Math.abs(rect.width - state.startW) > 1 || Math.abs(rect.height - state.startH) > 1));
     if(changed) commitPendingUndo();
     else discardPendingUndo();
-    if(changed) render();
+    if(changed) renderWithStableNodeChrome();
     scheduleSave();
     return true;
+}
+function renderWithStableNodeChrome(){
+    document.body.classList.add('smart-node-chrome-settling');
+    if(nodeChromeSettleRaf){
+        cancelAnimationFrame(nodeChromeSettleRaf);
+        nodeChromeSettleRaf = 0;
+    }
+    render();
+    // Keep transition suppression through one complete paint. Removing it in
+    // the second frame leaves every newly rendered control at its already
+    // resolved hover/selection opacity instead of replaying its entrance.
+    nodeChromeSettleRaf = requestAnimationFrame(() => {
+        nodeChromeSettleRaf = requestAnimationFrame(() => {
+            document.body.classList.remove('smart-node-chrome-settling');
+            nodeChromeSettleRaf = 0;
+        });
+    });
 }
 function syncSmartGroupMemberElements(group){
     if(!isSmartGroupNode(group)) return;
@@ -12810,6 +12828,9 @@ function updateMagneticPort(e){
     const magneticRadius = MAGNETIC_PORT_RADIUS_WORLD * viewport.scale;
     let best = null;
     for(const node of nodes){
+        // Live nodes intentionally expose only their cancel action. Their
+        // hidden ports must not enter magnetic state and suppress that action.
+        if(nodeHasLiveRunState(node)) continue;
         const rect = nodeConnectionRect(node);
         const left = shellRect.left + viewport.x + rect.x * viewport.scale;
         const right = left + rect.width * viewport.scale;
@@ -20086,7 +20107,19 @@ function toggleSmartAncestorPin(nodeId){
     pushUndo();
     if(node.cascadePinned) delete node.cascadePinned;
     else node.cascadePinned = true;
-    render();
+    // Keep the button element under the stationary pointer. Rebuilding the
+    // whole node here temporarily leaves the node's move cursor as the last
+    // hit-tested cursor until the next mousemove.
+    const pinned = Boolean(node.cascadePinned);
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+    nodeEl?.classList.toggle('cascade-pinned', pinned);
+    const pinButton = nodeEl?.querySelector('[data-cascade-pin]');
+    if(pinButton){
+        const title = pinned ? '取消固定' : '固定结果并跳过上游';
+        pinButton.classList.toggle('active', pinned);
+        pinButton.title = title;
+        pinButton.setAttribute('aria-label', title);
+    }
     scheduleSave();
 }
 function resolveSmartCascadeLoop(nodeId){
