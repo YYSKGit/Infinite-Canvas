@@ -2568,6 +2568,10 @@ class RunningHubWorkflowSubmitRequest(BaseModel):
     workflow: Any = None
     useWallet: bool = False
 
+class RunningHubCancelRequest(BaseModel):
+    taskId: str = ""
+    useWallet: bool = False
+
 class RunningHubUploadAssetRequest(BaseModel):
     url: str = ""
     useWallet: bool = False
@@ -12731,6 +12735,34 @@ async def runninghub_query(taskId: str = ""):
             fail_reason = str(runninghub_fail_reason(raw) or "").lower()
             status = "CANCELED" if "cancel" in fail_reason or "取消" in fail_reason else "UNKNOWN"
         return {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
+
+@app.post("/api/runninghub/cancel")
+async def runninghub_cancel(payload: RunningHubCancelRequest):
+    task_id = str(payload.taskId or "").strip()
+    if not task_id:
+        raise HTTPException(status_code=400, detail="taskId 必填")
+    provider = runninghub_provider()
+    api_key = runninghub_api_key(provider, use_wallet=payload.useWallet)
+    url = runninghub_endpoint_url(provider, "/task/openapi/cancel")
+    body = {"apiKey": api_key, "taskId": task_id}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=60.0, write=30.0, pool=20.0)) as client:
+        try:
+            response = await client.post(
+                url,
+                headers=runninghub_app_headers(True, payload.useWallet),
+                json=body,
+            )
+            raw = response.json()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"取消 RunningHub 任务失败：{exc}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=json.dumps(raw, ensure_ascii=False)[:800])
+    if isinstance(raw, dict) and raw.get("code") in (0, "0"):
+        return {"success": True, "data": {"taskId": task_id, "raw": raw}}
+    raise HTTPException(
+        status_code=400,
+        detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"取消 RunningHub 任务失败：{raw}",
+    )
 
 @app.post("/api/runninghub/upload-asset")
 async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
