@@ -60,14 +60,17 @@ test('generation nodes expose a dedicated cancel control and cancelled log style
     assert.match(jsSource, /cancelSmartNodeGeneration\(btn\.dataset\.smartTaskCancel/);
     assert.doesNotMatch(jsSource, /class="smart-task-cancel"[^>]*>[\s\S]*?<span>取消<\/span>/);
     assert.match(cssSource, /\.smart-task-cancel\s*\{/);
-    assert.match(cssSource, /\.smart-task-cancel\s*\{[^}]*width:30px;[^}]*padding:0;/);
+    assert.match(cssSource, /\.smart-task-cancel\s*\{[^}]*width:26px;[^}]*padding:0;/);
     assert.match(cssSource, /\.log-chip\.status-cancelled\s*\{/);
     assert.match(jsSource, /status:'cancelled'/);
     assert.match(jsSource, /log\.error && !logCancelled/);
 });
 
 test('timer and cancel corner controls do not overlap, and the composer run button becomes stop', () => {
-    assert.match(cssSource, /\.image-node\.node-generating \.run-time-pill\s*\{\s*right:46px;\s*\}/);
+    assert.match(cssSource, /\.image-node\.node-generating \.run-time-pill\s*\{[^}]*right:39px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
+    assert.match(cssSource, /\.smart-task-cancel\s*\{[^}]*width:26px;[^}]*height:26px;[^}]*border-radius:10px;/);
+    assert.match(cssSource, /\.run-time-pill\s*\{[^}]*right:7px;[^}]*top:7px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
+    assert.match(cssSource, /\.run-time-pill\.done\s*\{[^}]*background:rgba\(6,95,70,\.86\);/);
     assert.match(cssSource, /\.run-btn\.is-stop\s*\{/);
     const syncButton = extractFunction('syncRunButtonState');
     assert.match(syncButton, /smartRunButtonCancelTarget\(node\)/);

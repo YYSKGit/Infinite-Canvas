@@ -520,13 +520,14 @@ body.smart-prompt-split-resize .prompt-node-llm .prompt-node-select-control { po
 }
 .image-node.node-generating .floating-node-actions { opacity:1 !important; pointer-events:auto !important; }
 .image-node.node-generating .floating-node-actions > :not(.smart-task-cancel) { display:none; }
-.image-node.node-generating .run-time-pill { right:46px; }
-.smart-task-cancel { width:30px; height:30px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(239,68,68,.34); border-radius:10px; background:rgba(255,255,255,.94); color:#dc2626; box-shadow:0 8px 22px rgba(15,23,42,.14); backdrop-filter:blur(12px); cursor:pointer; transition:transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease; }
-.smart-task-cancel:hover { transform:translateY(-1px); background:#fee2e2; border-color:#fca5a5; box-shadow:0 10px 24px rgba(220,38,38,.18); }
+.image-node.node-generating .run-time-pill { right:39px; top:7px; min-width:26px; height:26px; padding:0 5px; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(15,23,42,.82); color:#f8fafc; box-shadow:0 8px 22px rgba(15,23,42,.18); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
+.smart-task-cancel { width:26px; height:26px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(248,113,113,.48); border-radius:10px; background:rgba(127,29,29,.88); color:#fecaca; box-shadow:0 8px 22px rgba(15,23,42,.18); backdrop-filter:blur(12px); cursor:pointer; transition:transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease; }
+.smart-task-cancel:hover { transform:translateY(-1px); background:rgba(153,27,27,.94); color:#fee2e2; border-color:rgba(252,165,165,.72); box-shadow:0 10px 24px rgba(220,38,38,.18); }
 .smart-task-cancel:active { transform:translateY(0) scale(.97); }
 .smart-task-cancel i,.smart-task-cancel svg { width:12px; height:12px; fill:currentColor; stroke-width:2.2; }
-.theme-dark .smart-task-cancel { background:rgba(69,10,10,.9); color:#fecaca; border-color:rgba(248,113,113,.48); box-shadow:0 10px 24px rgba(0,0,0,.34); }
-.theme-dark .smart-task-cancel:hover { background:rgba(127,29,29,.94); color:#fff; border-color:#f87171; }
+.theme-dark .smart-task-cancel { background:rgba(127,29,29,.88); color:#fecaca; border-color:rgba(248,113,113,.48); box-shadow:0 10px 24px rgba(0,0,0,.34); }
+.theme-dark .smart-task-cancel:hover { background:rgba(153,27,27,.94); color:#fee2e2; border-color:rgba(252,165,165,.72); }
+.theme-dark .image-node.node-generating .run-time-pill { border-color:rgba(148,163,184,.3); background:rgba(15,23,42,.86); color:#e2e8f0; box-shadow:0 10px 24px rgba(0,0,0,.34); }
 .image-node.node-generating .image-resolution-badge { transform:translateY(-2px) !important; }
 /* Bug fix: when the done timer is visible, fade it out on hover so the delete button can appear at the same position without overlap */
 .image-node:has(.run-time-pill.done):hover .run-time-pill.done,
@@ -878,11 +879,11 @@ body.smart-node-box-resize .shell * { cursor:nwse-resize !important; }
 body.smart-node-box-resize .node-port { pointer-events:none !important; }
 .image-node.drop-target { outline:2px dashed var(--strong); outline-offset:4px; border-radius:18px; }
 .image-node.drag-out { opacity:.5; }
-.run-time-pill { position:absolute; right:8px; top:8px; z-index:7; height:24px; padding:0 9px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(37,99,235,.92); color:#fff; font-size:10.5px; font-weight:800; font-variant-numeric:tabular-nums; box-shadow:0 8px 18px rgba(15,23,42,.18); pointer-events:none; }
-.run-time-pill.done { background:#10b981; color:#fff; }
-.run-time-pill.failed { background:#ef4444; color:#fff; }
-.run-time-pill.cancelled { background:#f97316; color:#fff; }
-.theme-dark .run-time-pill { box-shadow:0 8px 18px rgba(0,0,0,.32); }
+.run-time-pill { position:absolute; right:7px; top:7px; z-index:7; min-width:26px; height:26px; padding:0 5px; box-sizing:border-box; border:1px solid rgba(148,163,184,.3); border-radius:10px; display:inline-flex; align-items:center; justify-content:center; background:rgba(15,23,42,.82); color:#f8fafc; font-size:10px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; box-shadow:0 8px 22px rgba(15,23,42,.18); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); pointer-events:none; transition:opacity .14s ease, background .14s ease, border-color .14s ease; }
+.run-time-pill.done { border-color:rgba(52,211,153,.46); background:rgba(6,95,70,.86); color:#d1fae5; }
+.run-time-pill.failed { border-color:rgba(248,113,113,.48); background:rgba(127,29,29,.88); color:#fee2e2; }
+.run-time-pill.cancelled { border-color:rgba(251,191,36,.48); background:rgba(120,53,15,.88); color:#fef3c7; }
+.theme-dark .run-time-pill { box-shadow:0 10px 24px rgba(0,0,0,.34); }
 .loading-skeleton { display:grid; gap:8px; }
 .loading-cell { border-radius:12px; background:linear-gradient(90deg, var(--soft) 0%, var(--card) 50%, var(--soft) 100%); background-size:200% 100%; animation:shimmer 1.5s infinite linear; animation-delay:var(--loading-shimmer-delay, 0ms); border:1px solid var(--line); }
 .loading-cell.single { width:260px; height:180px; }
