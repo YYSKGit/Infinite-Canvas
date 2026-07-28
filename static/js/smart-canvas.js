@@ -5376,6 +5376,24 @@ function syncJimengVideoModelPillForRefs(){
     _jimengModelRefreshing = true;
     try { renderDynamicParams(); } finally { _jimengModelRefreshing = false; }
 }
+let _lastVideoSettingsReferenceSignature = '';
+function syncVideoSettingsPanelForRefs(){
+    if(!isApiLikeEngine(settings.engine) || settings.apiKind !== 'video'){
+        _lastVideoSettingsReferenceSignature = '';
+        return;
+    }
+    const refs = activeVideoReferenceContext();
+    const signature = [
+        settings.videoProvider || '',
+        settings.videoModel || '',
+        refs.images.length,
+        refs.videos.length,
+        refs.audios.length
+    ].join(':');
+    if(signature === _lastVideoSettingsReferenceSignature) return;
+    _lastVideoSettingsReferenceSignature = signature;
+    renderDynamicParams();
+}
 function sanitizeSmartApiSelection(target=settings){
     if(!target || typeof target !== 'object') return target;
     if(target.engine === 'volcengine'){
@@ -5461,7 +5479,7 @@ function renderVideoModelControl(models){
     </div>`;
 }
 function renderVideoDurationControl(){
-    const v = Math.max(1, Math.min(60, Number(settings.videoDuration) || 5));
+    const v = Math.max(1, Math.min(15, Number(settings.videoDuration) || 5));
     const quick = [3, 4, 5, 6, 8, 10, 12, 15];
     return `<div class="smart-control duration-control" title="${escapeHtml(tr('smart.videoDurationTip'))}">
         <button class="smart-pill" type="button"><i data-lucide="timer"></i><span>${v}s</span></button>
@@ -5472,7 +5490,7 @@ function renderVideoDurationControl(){
             </div>
             <label class="duration-custom">
                 <span>${escapeHtml(tr('smart.custom'))}</span>
-                <input type="number" min="1" max="60" step="1" data-param="videoDuration" value="${v}">
+                <input type="number" min="1" max="15" step="1" data-param="videoDuration" value="${v}">
             </label>
         </div>
     </div>`;
@@ -5511,6 +5529,216 @@ function renderVideoResolutionControl(){
 function renderVideoToggleControl(key, label){
     const on = !!settings[key];
     return `<button type="button" class="setting-check ${on ? 'active' : ''}" data-toggle-param="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
+}
+function videoProviderDescriptor(source=settings){
+    const providerId = String(source?.videoProvider || '').trim();
+    const provider = providerId === 'volcengine'
+        ? volcengineProvider()
+        : ((apiProviders || []).find(item => String(item?.id || '').trim() === providerId) || videoProviderById(providerId));
+    return {
+        id:providerId,
+        protocol:String(provider?.protocol || '').trim().toLowerCase(),
+        baseUrl:String(provider?.base_url || '').trim().toLowerCase(),
+        model:String(source?.videoModel || '').trim().toLowerCase()
+    };
+}
+function videoCapabilitiesFor(source=settings){
+    const descriptor = videoProviderDescriptor(source);
+    const base = {
+        aspects:['16:9','9:16','1:1','4:3','3:4','21:9'],
+        resolutions:['480p','720p','1080p'],
+        duration:{min:1,max:15},
+        generateAudio:false,
+        enhancePrompt:false,
+        enableUpsample:false,
+        watermark:false,
+        cameraFixed:false,
+        multimodal:false,
+        frameRoles:false,
+        trustedAsset:false
+    };
+    const isApimart = descriptor.protocol === 'apimart' || descriptor.baseUrl.includes('apimart.ai');
+    const isYuli = descriptor.baseUrl.includes('yuli.host');
+    const isAgnes = descriptor.baseUrl.includes('agnes-ai.com') || descriptor.model.startsWith('agnes-video-');
+    if(descriptor.protocol === 'venice'){
+        return {...base, generateAudio:true};
+    }
+    if(descriptor.protocol === 'jimeng'){
+        const seedanceVip = descriptor.model.includes('seedance2.0_vip') || descriptor.model.includes('seedance2.0fast_vip');
+        const duration = descriptor.model.includes('3.5') ? {min:4,max:12}
+            : (descriptor.model.includes('3.0') ? {min:3,max:10} : {min:4,max:15});
+        return {...base, resolutions:seedanceVip ? ['720p','1080p'] : ['720p'], duration, multimodal:true, frameRoles:true};
+    }
+    if(descriptor.protocol === 'volcengine' || descriptor.id === 'volcengine'){
+        return {...base, generateAudio:true, watermark:true, cameraFixed:true, multimodal:true, frameRoles:true, trustedAsset:true};
+    }
+    if(isApimart){
+        const veo31 = descriptor.model.startsWith('veo3.1');
+        return {
+            ...base,
+            aspects:veo31 ? ['16:9','9:16'] : base.aspects,
+            resolutions:veo31 ? ['720p','1080p','4k'] : base.resolutions,
+            duration:veo31 ? {min:4,max:8} : {min:1,max:15},
+            generateAudio:!veo31,
+            multimodal:!veo31,
+            frameRoles:!veo31,
+            trustedAsset:true
+        };
+    }
+    if(descriptor.protocol === 'runninghub' || descriptor.id === 'runninghub'){
+        // RunningHub silently ignores fields absent from the selected model schema.
+        // Keep only its common, schema-gated options in the UI.
+        return {...base, generateAudio:true, watermark:true};
+    }
+    if(isYuli){
+        return {...base, aspects:['16:9','9:16'], resolutions:[], duration:{min:1,max:15}, enableUpsample:true};
+    }
+    if(isAgnes){
+        return {...base};
+    }
+    // Generic compatible video endpoints receive these fields directly.
+    return {...base, generateAudio:true, enhancePrompt:true, enableUpsample:true, watermark:true, cameraFixed:true};
+}
+function normalizeVideoSettingsForCapabilities(target=settings){
+    const caps = videoCapabilitiesFor(target);
+    const fallbackAspect = caps.aspects.includes('16:9') ? '16:9' : (caps.aspects[0] || '16:9');
+    if(!caps.aspects.includes(String(target.videoAspect || ''))) target.videoAspect = fallbackAspect;
+    const resolution = String(target.videoResolution || '').trim().toLowerCase();
+    if(resolution && !caps.resolutions.includes(resolution)) target.videoResolution = '';
+    const minDuration = Math.max(1, Number(caps.duration?.min) || 1);
+    const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
+    target.videoDuration = Math.max(minDuration, Math.min(maxDuration, Number(target.videoDuration) || 5));
+    if(!caps.frameRoles) target.videoUseFrameRoles = false;
+    if(!caps.multimodal) target.videoMultimodal = false;
+    return target;
+}
+function activeVideoReferenceContext(){
+    const node = activeComposerNode() || selectedNode();
+    const refs = node ? visibleReferenceImagesFor(node) : [];
+    return {
+        refs,
+        images:imageRefsOnly(refs),
+        videos:videoRefsOnly(refs),
+        audios:audioRefsOnly(refs)
+    };
+}
+function canUseVideoFrameRoles(caps, imageCount){
+    const count = Number(imageCount) || 0;
+    return Boolean(caps?.frameRoles && count >= 1 && count <= 2);
+}
+function renderVideoSettingSection(title, content, className=''){
+    if(!content) return '';
+    return `<section class="video-settings-section ${escapeHtml(className)}">
+        ${title ? `<div class="video-settings-section-title">${escapeHtml(title)}</div>` : ''}
+        ${content}
+    </section>`;
+}
+function renderVideoBooleanChoice(key, label, onLabel='开启', offLabel='关闭'){
+    const on = Boolean(settings[key]);
+    return `<div class="video-boolean-row">
+        <span class="video-boolean-label">${escapeHtml(label)}</span>
+        <div class="video-segmented">
+            <button type="button" class="${on ? 'active' : ''}" data-video-bool-param="${escapeHtml(key)}" data-video-bool-value="true">${escapeHtml(onLabel)}</button>
+            <button type="button" class="${!on ? 'active' : ''}" data-video-bool-param="${escapeHtml(key)}" data-video-bool-value="false">${escapeHtml(offLabel)}</button>
+        </div>
+    </div>`;
+}
+function videoResolutionLabel(value){
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized ? normalized.toUpperCase() : tr('smart.videoResAuto');
+}
+function syncVideoSettingsSelection(ctrl){
+    if(!ctrl) return;
+    ctrl.querySelectorAll('[data-video-setting-param]').forEach(button => {
+        const key = button.dataset.videoSettingParam;
+        const currentValue = String(settings[key] ?? '');
+        button.classList.toggle('active', button.dataset.videoSettingValue === currentValue);
+    });
+    ctrl.querySelectorAll('[data-video-bool-param]').forEach(button => {
+        const currentValue = Boolean(settings[button.dataset.videoBoolParam]);
+        button.classList.toggle('active', (button.dataset.videoBoolValue === 'true') === currentValue);
+    });
+    const caps = videoCapabilitiesFor(settings);
+    const summaryParts = [String(settings.videoAspect || '16:9')];
+    if(caps.resolutions.length) summaryParts.push(videoResolutionLabel(settings.videoResolution));
+    summaryParts.push(`${Math.max(1, Number(settings.videoDuration) || 5)}s`);
+    const summary = ctrl.querySelector('.video-settings-summary');
+    if(summary) summary.textContent = summaryParts.join(' · ');
+    const audioIcon = ctrl.querySelector('.video-settings-audio-icon');
+    if(audioIcon) audioIcon.toggleAttribute('hidden', !(caps.generateAudio && settings.videoGenerateAudio));
+}
+function renderVideoSettingsControl(){
+    const caps = videoCapabilitiesFor(settings);
+    const refs = activeVideoReferenceContext();
+    const imageCount = refs.images.length;
+    const hasMedia = imageCount > 0 || refs.videos.length > 0 || refs.audios.length > 0;
+    const aspect = String(settings.videoAspect || '16:9');
+    const resolution = String(settings.videoResolution || '');
+    const minDuration = Math.max(1, Number(caps.duration?.min) || 1);
+    const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
+    const duration = Math.max(minDuration, Math.min(maxDuration, Number(settings.videoDuration) || 5));
+    const summaryParts = [aspect];
+    if(caps.resolutions.length) summaryParts.push(videoResolutionLabel(resolution));
+    summaryParts.push(`${duration}s`);
+    const audioSummary = caps.generateAudio
+        ? `<i data-lucide="volume-2" class="video-settings-audio-icon" aria-label="${escapeHtml(tr('smart.videoGenerateAudio'))}" ${settings.videoGenerateAudio ? '' : 'hidden'}></i>`
+        : '';
+    const aspectHtml = `<div class="video-aspect-grid">
+        ${caps.aspects.map(value => `<button type="button" class="video-aspect-option ${value === aspect ? 'active' : ''}" data-video-setting-param="videoAspect" data-video-setting-value="${escapeHtml(value)}"><span class="ratio-icon ${videoAspectIconClass(value)}"></span><span>${escapeHtml(value)}</span></button>`).join('')}
+    </div>`;
+    const resolutionOptions = caps.resolutions.length ? ['', ...caps.resolutions] : [];
+    const resolutionHtml = resolutionOptions.length ? `<div class="video-resolution-grid">
+        ${resolutionOptions.map(value => `<button type="button" class="${value === resolution.toLowerCase() ? 'active' : ''}" data-video-setting-param="videoResolution" data-video-setting-value="${escapeHtml(value)}">${escapeHtml(value ? value.toUpperCase() : tr('smart.videoResAuto'))}</button>`).join('')}
+    </div>` : '';
+    const durationHtml = `<div class="video-duration-editor">
+        <input type="range" min="${minDuration}" max="${maxDuration}" step="1" value="${duration}" data-video-duration-slider aria-label="${escapeHtml(tr('smart.videoDuration'))}">
+        <output class="video-duration-value">${duration}</output><span class="video-duration-unit">s</span>
+    </div>`;
+    const generalHtml = caps.generateAudio
+        ? renderVideoBooleanChoice('videoGenerateAudio', tr('smart.videoGenerateAudio'))
+        : '';
+    const advancedRows = [
+        ['enhancePrompt','videoEnhancePrompt',tr('smart.videoEnhancePrompt')],
+        ['enableUpsample','videoEnableUpsample',tr('smart.videoUpsample')],
+        ['cameraFixed','videoCameraFixed',tr('smart.videoCameraFixed')],
+        ['watermark','videoWatermark',tr('smart.videoWatermark')]
+    ].filter(([capability]) => caps[capability])
+        .map(([,key,label]) => renderVideoBooleanChoice(key, label));
+    let referenceHtml = '';
+    const canChooseFrames = canUseVideoFrameRoles(caps, imageCount);
+    const canChooseMultimodal = caps.multimodal && hasMedia;
+    if(canChooseFrames || canChooseMultimodal){
+        const frameMode = canChooseFrames && Boolean(settings.videoUseFrameRoles);
+        referenceHtml = `<div class="video-reference-note">${imageCount === 1 ? '当前 1 张图片，尾帧可选' : `当前 ${imageCount} 张图片`}</div>
+            <div class="video-reference-modes">
+                ${canChooseMultimodal ? `<button type="button" class="${!frameMode ? 'active' : ''}" data-video-reference-mode="multimodal"><i data-lucide="sparkles"></i><span>智能参考</span></button>` : ''}
+                ${canChooseFrames ? `<button type="button" class="${frameMode ? 'active' : ''}" data-video-reference-mode="frames"><i data-lucide="gallery-horizontal-end"></i><span>首尾帧</span></button>` : ''}
+            </div>`;
+    }
+    const trustedHtml = caps.trustedAsset ? `<div class="video-trusted-settings">${renderVideoTrustedAssetControl()}</div>` : '';
+    const generalSettingsHtml = generalHtml
+        ? renderVideoSettingSection('', generalHtml, 'video-settings-parameter-section')
+        : '';
+    const advancedSettingsHtml = [...advancedRows, trustedHtml]
+        .filter(Boolean)
+        .map(content => renderVideoSettingSection('', content, 'video-settings-parameter-section'))
+        .join('');
+    return `<div class="smart-control video-settings-control">
+        <button class="smart-pill video-settings-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <i data-lucide="sliders-horizontal"></i>
+            <span class="video-settings-summary">${escapeHtml(summaryParts.join(' · '))}</span>
+            ${audioSummary}
+            <i data-lucide="chevron-up" class="pill-caret"></i>
+        </button>
+        <div class="smart-popover video-settings-popover" role="dialog" aria-label="视频参数">
+            ${renderVideoSettingSection(tr('smart.videoAspect'), aspectHtml)}
+            ${renderVideoSettingSection(tr('smart.videoResolution'), resolutionHtml)}
+            ${renderVideoSettingSection(tr('smart.videoDuration'), durationHtml)}
+            ${generalSettingsHtml}
+            ${renderVideoSettingSection('素材用途', referenceHtml)}
+            ${advancedSettingsHtml}
+        </div>
+    </div>`;
 }
 function renderVideoToggleGroup(content){
     return `<div class="video-toggle-group">${content}</div>`;
@@ -6077,7 +6305,7 @@ function isVeniceVideoProvider(providerId=''){
     const provider = videoProviderById(idText);
     return String(provider?.protocol || '').trim().toLowerCase() === 'venice';
 }
-function hideVeniceVideoQuote(){
+function invalidateVeniceVideoQuoteRequest(){
     if(veniceVideoQuoteTimer){
         clearTimeout(veniceVideoQuoteTimer);
         veniceVideoQuoteTimer = null;
@@ -6088,6 +6316,9 @@ function hideVeniceVideoQuote(){
     }
     veniceVideoQuoteRequestToken++;
     veniceVideoQuoteSignature = '';
+}
+function hideVeniceVideoQuote(){
+    invalidateVeniceVideoQuoteRequest();
     if(veniceVideoQuote){
         veniceVideoQuote.hidden = true;
         veniceVideoQuote.className = 'venice-video-quote';
@@ -6114,7 +6345,7 @@ function syncVeniceVideoQuote(){
     const payload = {
         provider_id:String(settings.videoProvider || 'venice'),
         model:String(settings.videoModel || ''),
-        duration:Math.max(1, Math.min(60, Number(settings.videoDuration) || 5)),
+        duration:Math.max(1, Math.min(15, Number(settings.videoDuration) || 5)),
         resolution:String(settings.videoResolution || '480p'),
         generate_audio:Boolean(settings.videoGenerateAudio),
         has_media_input:Array.isArray(request.refs) && request.refs.some(ref => ['image','video','audio'].includes(mediaKindForItem(ref)))
@@ -6248,13 +6479,96 @@ function updateProviderModels(){ renderDynamicParams(); }
 function controlTypeKey(el){
     return el ? Array.from(el.classList).find(c => c !== 'smart-control' && c.endsWith('-control')) || '' : '';
 }
+function clearVideoSettingsPopoverPosition(ctrl){
+    const popover = ctrl?.querySelector?.('.video-settings-popover');
+    if(!popover) return;
+    popover.style.removeProperty('left');
+    popover.style.removeProperty('top');
+    popover.style.removeProperty('right');
+    popover.style.removeProperty('bottom');
+    popover.style.removeProperty('transform');
+    delete ctrl._videoPopoverPosition;
+}
+function captureVideoSettingsPopoverPosition(ctrl){
+    const popover = ctrl?.querySelector?.('.video-settings-popover');
+    if(!popover) return null;
+    clearVideoSettingsPopoverPosition(ctrl);
+    const popoverRect = popover.getBoundingClientRect();
+    const ctrlRect = ctrl.getBoundingClientRect();
+    const scaleX = ctrl.offsetWidth > 0 ? ctrlRect.width / ctrl.offsetWidth : 1;
+    const scaleY = ctrl.offsetHeight > 0 ? ctrlRect.height / ctrl.offsetHeight : 1;
+    ctrl._videoPopoverPosition = {
+        left:(popoverRect.left - ctrlRect.left) / (scaleX || 1),
+        top:(popoverRect.top - ctrlRect.top) / (scaleY || 1)
+    };
+    return ctrl._videoPopoverPosition;
+}
+function applyVideoSettingsPopoverPosition(ctrl, position=ctrl?._videoPopoverPosition){
+    const popover = ctrl?.querySelector?.('.video-settings-popover');
+    if(!popover || !position) return;
+    ctrl._videoPopoverPosition = {left:Number(position.left) || 0, top:Number(position.top) || 0};
+    popover.style.left = `${ctrl._videoPopoverPosition.left}px`;
+    popover.style.top = `${ctrl._videoPopoverPosition.top}px`;
+    popover.style.right = 'auto';
+    popover.style.bottom = 'auto';
+    popover.style.transform = 'none';
+}
+function videoSettingsHasKeyboardFocus(ctrl){
+    return Boolean(ctrl?.querySelector?.(':focus-visible'));
+}
+function videoSettingsShouldBeOpen(ctrl){
+    return Boolean(ctrl && (
+        ctrl.matches(':hover')
+        || ctrl.classList.contains('pinned')
+        || ctrl.classList.contains('interacting')
+        || videoSettingsHasKeyboardFocus(ctrl)
+    ));
+}
+function openVideoSettingsControl(ctrl, position=null){
+    if(!ctrl?.classList?.contains('video-settings-control')) return;
+    const popover = ctrl.querySelector('.video-settings-popover');
+    if(!popover) return;
+    if(position) applyVideoSettingsPopoverPosition(ctrl, position);
+    else if(!ctrl._videoPopoverPosition){
+        const captured = captureVideoSettingsPopoverPosition(ctrl);
+        if(captured) applyVideoSettingsPopoverPosition(ctrl, captured);
+    }
+    ctrl.classList.add('is-open');
+    ctrl.querySelector('.video-settings-pill')?.setAttribute('aria-expanded', 'true');
+}
+function closeVideoSettingsControl(ctrl){
+    if(!ctrl?.classList?.contains('video-settings-control')) return;
+    ctrl.classList.remove('is-open');
+    ctrl.querySelector('.video-settings-pill')?.setAttribute('aria-expanded', 'false');
+    // Keep the locked position while opacity fades. It is reset invisibly
+    // before the next fresh open, so the closing frame can never jump.
+}
+function syncVideoSettingsOpenState(ctrl){
+    if(!ctrl?.classList?.contains('video-settings-control')) return;
+    if(videoSettingsShouldBeOpen(ctrl)){
+        if(!ctrl.classList.contains('is-open')){
+            const opacity = Number.parseFloat(getComputedStyle(ctrl.querySelector('.video-settings-popover')).opacity);
+            if(!(opacity > 0)) clearVideoSettingsPopoverPosition(ctrl);
+        }
+        openVideoSettingsControl(ctrl);
+    } else {
+        closeVideoSettingsControl(ctrl);
+    }
+}
 // 记住重渲染前哪个控件的弹层是打开的：pinned=点击药丸锁定，interacting=悬浮打开后点了里面的参数。
 // 重渲染会重建 DOM、丢掉这两个状态，所以渲染后要按原样恢复，否则点一下就收起来了。
 function openControlState(){
-    const el = dynamicParams?.querySelector('.smart-control.pinned, .smart-control.interacting');
+    const el = dynamicParams?.querySelector('.video-settings-control.is-open')
+        || dynamicParams?.querySelector('.smart-control.pinned, .smart-control.interacting');
     const key = controlTypeKey(el);
     if(!key) return null;
-    return { key, pinned: el.classList.contains('pinned'), interacting: el.classList.contains('interacting') };
+    return {
+        key,
+        pinned:el.classList.contains('pinned'),
+        interacting:el.classList.contains('interacting'),
+        isOpen:el.classList.contains('is-open'),
+        popoverPosition:el._videoPopoverPosition ? {...el._videoPopoverPosition} : null
+    };
 }
 function restoreOpenControl(state){
     if(!state) return;
@@ -6262,6 +6576,12 @@ function restoreOpenControl(state){
     if(!match) return;
     if(state.pinned) match.classList.add('pinned');
     if(state.interacting) match.classList.add('interacting');
+    if(state.isOpen && match.classList.contains('video-settings-control')){
+        openVideoSettingsControl(match, state.popoverPosition);
+        requestAnimationFrame(() => {
+            if(match.isConnected) syncVideoSettingsOpenState(match);
+        });
+    }
 }
 function dynamicParamsScrollSnapshot(){
     if(!dynamicParams) return null;
@@ -6385,23 +6705,11 @@ function renderApiVideoParams(){
     if(!settings.videoProvider || !providers.some(p => p.id === settings.videoProvider)) settings.videoProvider = providers[0]?.id || 'comfly';
     const models = filterJimengVideoModels(providerVideoModels(settings.videoProvider));
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'veo3-fast';
+    normalizeVideoSettingsForCapabilities(settings);
     dynamicParams.innerHTML = `
         ${renderVideoProviderControl(providers)}
         ${renderVideoModelControl(models)}
-        ${renderVideoResolutionControl()}
-        ${renderVideoAspectControl()}
-        ${renderVideoDurationControl()}
-        ${renderParamRowBreak()}
-        ${renderVideoToggleGroup(`
-            ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-            ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-            ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-            ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-            ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-            ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-            ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-            ${settings.videoProvider === 'jimeng' ? '' : renderVideoTrustedAssetControl()}
-        `)}
+        ${renderVideoSettingsControl()}
     `;
 }
 function renderVolcengineParams(){
@@ -6425,23 +6733,11 @@ function renderVolcengineVideoParams(){
     const models = volcengineVideoModels();
     settings.videoProvider = 'volcengine';
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'seedance-1.0-pro';
+    normalizeVideoSettingsForCapabilities(settings);
     dynamicParams.innerHTML = `
         ${renderVideoProviderControl(providers)}
         ${renderVideoModelControl(models)}
-        ${renderVideoResolutionControl()}
-        ${renderVideoAspectControl()}
-        ${renderVideoDurationControl()}
-        ${renderParamRowBreak()}
-        ${renderVideoToggleGroup(`
-            ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-            ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-            ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-            ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-            ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-            ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-            ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-            ${renderVideoTrustedAssetControl()}
-        `)}
+        ${renderVideoSettingsControl()}
     `;
 }
 function renderRunningHubParams(){
@@ -7495,7 +7791,7 @@ function smartComfyRandomValue(field){
 }
 function setDynamicSetting(key, value){
     const numericKeys = new Set(['count','width','height','videoDuration','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
-    const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoAspect','videoResolution','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
+    const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
     settings[key] = numericKeys.has(key) && value !== '' ? Number(value) : value;
     if(key === 'provider_id') settings.model = '';
     if(key === 'videoProvider') settings.videoModel = '';
@@ -7548,18 +7844,21 @@ function setDynamicSetting(key, value){
     rememberRecentSmartSettings(settings, activeSettingsSubject());
     if(layoutKeys.has(key)) renderDynamicParams();
     else {
-        if(key === 'videoDuration') syncVeniceVideoQuote();
+        if(['videoAspect','videoResolution','videoDuration'].includes(key)) syncVeniceVideoQuote();
         syncVeniceImageQuote();
     }
     scheduleSave();
 }
 function closeAllSmartPopovers(){
-    document.querySelectorAll('.smart-control.pinned, .smart-control.interacting').forEach(c => c.classList.remove('pinned', 'interacting'));
+    document.querySelectorAll('.smart-control.pinned, .smart-control.interacting, .video-settings-control.is-open').forEach(c => {
+        c.classList.remove('pinned', 'interacting');
+        if(c.classList.contains('video-settings-control')) closeVideoSettingsControl(c);
+    });
 }
 // 悬浮打开弹层后点了里面的参数：标记 interacting，让它熬过重渲染不收起；鼠标真正离开该控件时才关闭。
 function markControlInteracting(el){
     const ctrl = el?.closest?.('.smart-control');
-    if(ctrl && !ctrl.classList.contains('pinned')) ctrl.classList.add('interacting');
+    if(ctrl && ctrl.matches(':hover') && !ctrl.classList.contains('pinned')) ctrl.classList.add('interacting');
 }
 const pickerScrollMemory = new Map();
 function pickerScrollMemoryKey(list){
@@ -7613,10 +7912,26 @@ function centerCurrentPickerOption(ctrl){
 function bindDynamicParams(){
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
-        ctrl.onmouseleave = () => ctrl.classList.remove('interacting');
-        ctrl.onmouseenter = () => centerCurrentPickerOption(ctrl);
+        ctrl.onmouseleave = () => {
+            ctrl.classList.remove('interacting');
+            if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+        };
+        ctrl.onmouseenter = () => {
+            if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+            centerCurrentPickerOption(ctrl);
+        };
         ctrl.onmouseover = () => centerCurrentPickerOption(ctrl);
-        ctrl.onfocusin = () => centerCurrentPickerOption(ctrl);
+        ctrl.onfocusin = () => {
+            centerCurrentPickerOption(ctrl);
+            if(ctrl.classList.contains('video-settings-control')){
+                requestAnimationFrame(() => syncVideoSettingsOpenState(ctrl));
+            }
+        };
+        ctrl.onfocusout = () => {
+            if(ctrl.classList.contains('video-settings-control')){
+                requestAnimationFrame(() => syncVideoSettingsOpenState(ctrl));
+            }
+        };
     });
     dynamicParams.querySelectorAll('.smart-control > .smart-pill').forEach(pill => {
         pill.onclick = event => {
@@ -7627,9 +7942,81 @@ function bindDynamicParams(){
             closeAllSmartPopovers();
             if(!wasPinned){
                 ctrl.classList.add('pinned');
+                if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
                 centerCurrentPickerOption(ctrl);
             }
         };
+    });
+    dynamicParams.querySelectorAll('[data-video-setting-param]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            markControlInteracting(btn);
+            const ctrl = btn.closest('.video-settings-control');
+            setDynamicSetting(btn.dataset.videoSettingParam, btn.dataset.videoSettingValue);
+            syncVideoSettingsSelection(ctrl);
+            syncVideoSettingsOpenState(ctrl);
+        };
+    });
+    dynamicParams.querySelectorAll('[data-video-bool-param]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            markControlInteracting(btn);
+            const ctrl = btn.closest('.video-settings-control');
+            setDynamicSetting(btn.dataset.videoBoolParam, btn.dataset.videoBoolValue === 'true');
+            syncVideoSettingsSelection(ctrl);
+            syncVideoSettingsOpenState(ctrl);
+        };
+    });
+    dynamicParams.querySelectorAll('[data-video-reference-mode]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            markControlInteracting(btn);
+            const frameMode = btn.dataset.videoReferenceMode === 'frames';
+            settings.videoUseFrameRoles = frameMode;
+            settings.videoMultimodal = !frameMode;
+            settings._videoMultimodalUserSet = true;
+            normalizeSmartVideoModeSettings(settings);
+            persistActiveSmartSettings();
+            rememberRecentSmartSettings(settings, activeSettingsSubject());
+            renderDynamicParams();
+            scheduleSave();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-video-duration-slider]').forEach(input => {
+        let previewing = false;
+        const preview = () => {
+            const ctrl = input.closest('.video-settings-control');
+            const caps = videoCapabilitiesFor(settings);
+            const min = Math.max(1, Number(caps.duration?.min) || 1);
+            const max = Math.min(15, Math.max(min, Number(caps.duration?.max) || 15));
+            const value = Math.max(min, Math.min(max, Number(input.value) || 5));
+            input.value = String(value);
+            ctrl?.querySelector('.video-duration-value')?.replaceChildren(document.createTextNode(String(value)));
+            markControlInteracting(input);
+            settings.videoDuration = value;
+            return value;
+        };
+        input.oninput = event => {
+            event.stopPropagation();
+            if(!previewing){
+                previewing = true;
+                invalidateVeniceVideoQuoteRequest();
+            }
+            preview();
+        };
+        input.onchange = event => {
+            event.stopPropagation();
+            const value = preview();
+            previewing = false;
+            setDynamicSetting('videoDuration', value);
+            const ctrl = input.closest('.video-settings-control');
+            syncVideoSettingsSelection(ctrl);
+            syncVideoSettingsOpenState(ctrl);
+        };
+        input.onclick = event => event.stopPropagation();
     });
     dynamicParams.querySelectorAll('[data-smart-param]:not(.size-picker-control [data-smart-param])').forEach(btn => {
         btn.onclick = event => {
@@ -17554,6 +17941,7 @@ function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
+    syncVideoSettingsPanelForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
     promptEditor?.setReferenceContext(dedup.map(withPromptReferencePreview));
     syncVeniceImageQuote();
@@ -22157,7 +22545,8 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.videoProvider || '');
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
-        const trustedMode = Boolean(runSettings.videoTrustedAsset);
+        const videoCaps = videoCapabilitiesFor(runSettings);
+        const trustedMode = Boolean(videoCaps.trustedAsset && runSettings.videoTrustedAsset);
         const trustedSource = trustedMode ? (['library','cloud','manual'].includes(runSettings.videoTrustedSource) ? runSettings.videoTrustedSource : 'library') : 'none';
         // 仅「素材库链接」来源才走 asset:// 认证地址 + 后端可信素材路由；上传云端/手动网址走普通直链。
         const useAssetUris = trustedSource === 'library';
@@ -22174,7 +22563,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         };
         const refImages = imageRefsOnly(uploadedRefs).map((ref, i) => {
             const item = {url:effUrl(ref), name:ref.name || `图${i + 1}`};
-            if(runSettings.videoUseFrameRoles){
+            if(videoCaps.frameRoles && runSettings.videoUseFrameRoles){
                 if(i === 0) item.role = 'first_frame';
                 else if(i === 1) item.role = 'last_frame';
             }
@@ -22193,18 +22582,18 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
             prompt: veniceProvider ? venicePrompt : prompt,
             provider_id: runSettings.videoProvider || 'comfly',
             model: runSettings.videoModel || 'veo3-fast',
-            duration: Math.max(1, Math.min(60, Number(runSettings.videoDuration) || 5)),
+            duration: Math.max(1, Math.min(15, Number(runSettings.videoDuration) || 5)),
             aspect_ratio: veniceProvider ? normalizeVeniceVideoAspect(runSettings.videoAspect || '16:9', uploadedRefs) : (runSettings.videoAspect || '16:9'),
             resolution: runSettings.videoResolution || '',
             images: refImages,
             videos: refVideos,
             audios: refAudios,
-            enhance_prompt: Boolean(runSettings.videoEnhancePrompt),
-            enable_upsample: Boolean(runSettings.videoEnableUpsample),
-            watermark: Boolean(runSettings.videoWatermark),
-            camerafixed: Boolean(runSettings.videoCameraFixed),
-            generate_audio: Boolean(runSettings.videoGenerateAudio),
-            multimodal: Boolean(runSettings.videoMultimodal),
+            enhance_prompt: Boolean(videoCaps.enhancePrompt && runSettings.videoEnhancePrompt),
+            enable_upsample: Boolean(videoCaps.enableUpsample && runSettings.videoEnableUpsample),
+            watermark: Boolean(videoCaps.watermark && runSettings.videoWatermark),
+            camerafixed: Boolean(videoCaps.cameraFixed && runSettings.videoCameraFixed),
+            generate_audio: Boolean(videoCaps.generateAudio && runSettings.videoGenerateAudio),
+            multimodal: Boolean(videoCaps.multimodal && runSettings.videoMultimodal),
             trusted_asset: useAssetUris,
             provider_prompts: providerPrompts,
             ...(veniceProgressId ? {progress_id:veniceProgressId} : {})

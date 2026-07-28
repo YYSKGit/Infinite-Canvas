@@ -188,10 +188,13 @@ for(const priorRunFailed of [false, true]){
             'isGeneratedSmartOutputNode',
             'generationReferenceImagesForRun',
             'visibleReferenceImagesFor',
+            'videoProviderDescriptor',
+            'videoCapabilitiesFor',
             'runApiVideoGeneration'
         ], {
             nodes,
             settings:{},
+            apiProviders:[],
             smartLoopContext:null,
             transientSmartCloudLinks:[],
             canonicalSmartMediaUrl:ref => typeof ref === 'string' ? ref : ref?.url || '',
@@ -210,6 +213,8 @@ for(const priorRunFailed of [false, true]){
                 return refs.filter(ref => ref?.url && !seen.has(ref.url) && seen.add(ref.url));
             },
             isVeniceVideoProvider:() => false,
+            videoProviderById:providerId => ({id:providerId, protocol:'openai', base_url:'https://example.test/v1'}),
+            volcengineProvider:() => ({id:'volcengine', protocol:'volcengine'}),
             beginVeniceCreditsFastRefresh:() => null,
             endVeniceCreditsFastRefresh:() => {},
             applyUploadedUrlsToSmartRefs:refs => refs,
@@ -240,7 +245,7 @@ for(const priorRunFailed of [false, true]){
         await loaded.runApiVideoGeneration('prompt', refs, {
             videoProvider:'custom-api',
             videoModel:'seedance-2-0-enhanced-reference-to-video',
-            videoDuration:5,
+            videoDuration:55,
             videoAspect:'9:16',
             videoResolution:'480p'
         }, {});
@@ -250,8 +255,37 @@ for(const priorRunFailed of [false, true]){
         const body = JSON.parse(capturedRequests[0].options.body);
         assert.deepEqual(body.images.map(image => image.url), ['/a.png']);
         assert.equal(body.images.length, 1);
+        assert.equal(body.duration, 15);
     });
 }
+
+test('video frame-role mode accepts one or two images but not zero or three', () => {
+    const {canUseVideoFrameRoles} = loadProductionFunctions(['canUseVideoFrameRoles']);
+    const supported = {frameRoles:true};
+    assert.equal(canUseVideoFrameRoles(supported, 0), false);
+    assert.equal(canUseVideoFrameRoles(supported, 1), true);
+    assert.equal(canUseVideoFrameRoles(supported, 2), true);
+    assert.equal(canUseVideoFrameRoles(supported, 3), false);
+    assert.equal(canUseVideoFrameRoles({frameRoles:false}, 1), false);
+});
+
+test('Venice video capabilities expose only parameters consumed by its request adapter', () => {
+    const loaded = loadProductionFunctions(['videoProviderDescriptor', 'videoCapabilitiesFor'], {
+        settings:{},
+        apiProviders:[{id:'venice-test', protocol:'venice', base_url:'https://api.venice.ai/api/v1'}],
+        videoProviderById:providerId => ({id:providerId, protocol:'venice', base_url:'https://api.venice.ai/api/v1'}),
+        volcengineProvider:() => ({id:'volcengine', protocol:'volcengine'})
+    });
+    const caps = loaded.videoCapabilitiesFor({videoProvider:'venice-test', videoModel:'seedance'});
+    assert.deepEqual({...caps.duration}, {min:1, max:15});
+    assert.equal(caps.generateAudio, true);
+    assert.equal(caps.enhancePrompt, false);
+    assert.equal(caps.enableUpsample, false);
+    assert.equal(caps.watermark, false);
+    assert.equal(caps.cameraFixed, false);
+    assert.equal(caps.frameRoles, false);
+    assert.equal(caps.trustedAsset, false);
+});
 
 test('Venice credit fast refresh is scoped to Venice providers only', () => {
     const activeRequests = new Set();
