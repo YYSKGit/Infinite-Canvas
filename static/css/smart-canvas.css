@@ -164,7 +164,7 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     stroke-width:2;
     stroke-linecap:round;
     filter:drop-shadow(0 0 3px color-mix(in srgb, var(--strong) 22%, transparent));
-    transition:stroke-dasharray .32s cubic-bezier(.22,1,.36,1),stroke-dashoffset .32s cubic-bezier(.22,1,.36,1),opacity .2s ease;
+    transition:stroke-dasharray .38s cubic-bezier(.22,1,.36,1),stroke-dashoffset .38s cubic-bezier(.22,1,.36,1),opacity .3s ease;
 }
 .theme-dark .rh-progress-track { stroke:rgba(255,255,255,.14); }
 .theme-dark .rh-progress-stroke {
@@ -175,6 +175,7 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .rh-progress-stroke.is-indeterminate.is-queued { opacity:.66; animation-duration:2.8s; }
 .rh-progress-stroke.is-segment-active { animation:rh-progress-segment-breathe 1.35s ease-in-out infinite; animation-delay:var(--rh-progress-delay, 0ms); }
 .rh-progress-stroke.is-segment-active.is-queued { opacity:.48; animation-duration:2.2s; }
+.rh-progress-stroke.is-layer-hidden { opacity:0 !important; }
 .rh-progress-stroke.is-complete { animation:rh-progress-complete .46s ease-out both; }
 .rh-progress-node-badge.image-resolution-badge { z-index:9; max-width:calc(100% - 102px); opacity:1 !important; pointer-events:none !important; }
 .image-node.node-generating .rh-progress-node-badge.image-resolution-badge,

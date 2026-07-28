@@ -144,8 +144,11 @@ test('RunningHub progress uses a smooth inset border and a persistent resolution
     assert.match(cssSource, /@keyframes rh-progress-orbit/);
     assert.match(cssSource, /\.rh-progress-stroke\.is-segment-active/);
     assert.match(cssSource, /animation-delay:var\(--rh-progress-delay,\s*0ms\)/);
-    assert.match(cssSource, /stroke-dasharray \.32s cubic-bezier/);
+    assert.match(cssSource, /stroke-dasharray \.38s cubic-bezier/);
+    assert.match(cssSource, /\.rh-progress-stroke\.is-layer-hidden\s*\{[^}]*opacity:0\s*!important;/);
     assert.match(jsSource, /patchRunningHubProgressHost\(currentHost,\s*fresh\)/);
+    assert.match(jsSource, /preservePhase\s*\?\s*\['style'\]\s*:\s*\[\]/);
+    assert.match(jsSource, /const nodeId = String\(data\.node \?\? ''\)\.trim\(\);\s*if\(!nodeId\) return;/);
 
     const sandbox = vm.createContext({
         Date:{now:() => 5000},
@@ -174,10 +177,42 @@ test('RunningHub progress uses a smooth inset border and a persistent resolution
     assert.match(sandbox.single, /is-determinate/);
     assert.match(sandbox.single, /stroke-dasharray="50 50"/);
     assert.match(sandbox.single, /x="1" y="1"[\s\S]*rx="11"/);
+    assert.match(sandbox.single, /rh-progress-orbit-layer is-indeterminate[\s\S]*is-layer-hidden/);
+    assert.match(sandbox.single, /rh-progress-value-layer is-determinate/);
     assert.match(sandbox.single, /image-resolution-badge rh-progress-node-badge/);
     assert.match(sandbox.single, /KSampler · 50%/);
-    assert.equal((sandbox.multi.match(/class="rh-progress-stroke/g) || []).length, 3);
+    assert.equal((sandbox.single.match(/class="rh-progress-stroke/g) || []).length, 2);
+    assert.equal((sandbox.unnamed.match(/class="rh-progress-stroke/g) || []).length, 2);
+    assert.match(sandbox.unnamed, /rh-progress-value-layer is-determinate is-layer-hidden[\s\S]*stroke-dasharray="0 100"/);
+    assert.equal((sandbox.multi.match(/class="rh-progress-stroke/g) || []).length, 6);
+    assert.equal((sandbox.multi.match(/rh-progress-orbit-layer/g) || []).length, 3);
+    assert.equal((sandbox.multi.match(/rh-progress-value-layer/g) || []).length, 3);
     assert.match(sandbox.multi, /1\/3 · VAEDecode/);
     assert.match(sandbox.multi, /--rh-progress-delay:-1300ms/);
     assert.doesNotMatch(sandbox.unnamed, />10<\/span>/);
+});
+
+test('RunningHub in-place progress patches preserve a live orbit phase', () => {
+    const sandbox = vm.createContext({});
+    vm.runInContext(`
+        ${extractFunction('syncRunningHubProgressElement')}
+        ${extractFunction('runningHubProgressAnimationMode')}
+        const element = values => ({
+            values:{...values},
+            get attributes(){ return Object.entries(this.values).map(([name, value]) => ({name, value})); },
+            getAttribute(name){ return this.values[name] ?? null; },
+            setAttribute(name, value){ this.values[name] = value; },
+            removeAttribute(name){ delete this.values[name]; }
+        });
+        const current = element({class:'rh-progress-stroke is-indeterminate', style:'--rh-progress-delay:-420ms'});
+        const fresh = element({class:'rh-progress-stroke is-indeterminate', style:'--rh-progress-delay:-910ms'});
+        syncRunningHubProgressElement(current, fresh, ['style']);
+        globalThis.preservedStyle = current.values.style;
+        const classElement = names => ({classList:{contains:name => names.includes(name)}});
+        globalThis.runningMode = runningHubProgressAnimationMode(classElement(['is-indeterminate']));
+        globalThis.queuedMode = runningHubProgressAnimationMode(classElement(['is-indeterminate','is-queued']));
+    `, sandbox);
+    assert.equal(sandbox.preservedStyle, '--rh-progress-delay:-420ms');
+    assert.equal(sandbox.runningMode, 'indeterminate-running');
+    assert.equal(sandbox.queuedMode, 'indeterminate-queued');
 });

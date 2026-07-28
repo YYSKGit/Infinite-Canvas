@@ -11923,15 +11923,14 @@ function runningHubProgressBorderHtml(node, layout=null){
     if(total === 1){
         const task = tasks[0];
         const fraction = runningHubTaskFraction(task);
-        if(task.status === 'succeeded' || task.status === 'finalizing'){
-            segments = `<rect class="rh-progress-stroke is-complete" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="100 0"></rect>`;
-        } else if(fraction !== null){
-            const amount = Math.max(.8, fraction * 100);
-            segments = `<rect class="rh-progress-stroke is-determinate" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}"></rect>`;
-        } else {
-            const duration = task.status === 'queued' ? 2800 : 1700;
-            segments = `<rect class="rh-progress-stroke is-indeterminate ${task.status === 'queued' ? 'is-queued' : ''}"${animationStyle(task, duration)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>`;
-        }
+        const complete = task.status === 'succeeded' || task.status === 'finalizing';
+        const determinate = complete || fraction !== null;
+        const amount = complete ? 100 : fraction !== null ? Math.max(.8, fraction * 100) : 0;
+        const duration = task.status === 'queued' ? 2800 : 1700;
+        segments = `
+            <rect class="rh-progress-stroke rh-progress-orbit-layer is-indeterminate ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animationStyle(task, duration)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>
+            <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}"></rect>
+        `;
     } else {
         const span = 100 / total;
         const gap = Math.min(1.5, span * .16);
@@ -11940,12 +11939,13 @@ function runningHubProgressBorderHtml(node, layout=null){
             const available = Math.max(.6, span - gap);
             const fraction = runningHubTaskFraction(task);
             const complete = task.status === 'succeeded' || task.status === 'finalizing';
-            const amount = complete ? available : fraction !== null ? Math.max(.5, available * fraction) : available;
-            const cls = complete ? 'is-complete' : fraction !== null ? 'is-determinate' : `is-segment-active ${task.status === 'queued' ? 'is-queued' : ''}`;
-            const animation = fraction === null && !complete
-                ? animationStyle(task, task.status === 'queued' ? 2200 : 1350)
-                : '';
-            return `<rect class="rh-progress-stroke ${cls}"${animation} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}" stroke-dashoffset="${-start}"></rect>`;
+            const determinate = complete || fraction !== null;
+            const amount = complete ? available : fraction !== null ? Math.max(.5, available * fraction) : 0;
+            const animation = animationStyle(task, task.status === 'queued' ? 2200 : 1350);
+            return `
+                <rect class="rh-progress-stroke rh-progress-orbit-layer is-segment-active ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animation} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${available} ${100 - available}" stroke-dashoffset="${-start}"></rect>
+                <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}" stroke-dashoffset="${-start}"></rect>
+            `;
         }).join('');
     }
     return `<div class="rh-progress-border-host">
@@ -22613,16 +22613,28 @@ function runningHubProgressSlot(context, index=0){
     const node = runningHubProgressNodeForContext(context);
     return node?.runningHubProgress?.tasks?.[Math.max(0, Number(index) || 0)] || null;
 }
-function syncRunningHubProgressElement(current, fresh){
+function syncRunningHubProgressElement(current, fresh, preservedAttributes=[]){
+    const preserved = new Set(preservedAttributes);
     const freshNames = new Set([...fresh.attributes].map(attribute => attribute.name));
     [...current.attributes].forEach(attribute => {
-        if(!freshNames.has(attribute.name)) current.removeAttribute(attribute.name);
+        if(!preserved.has(attribute.name) && !freshNames.has(attribute.name)){
+            current.removeAttribute(attribute.name);
+        }
     });
     [...fresh.attributes].forEach(attribute => {
-        if(current.getAttribute(attribute.name) !== attribute.value){
+        if(!preserved.has(attribute.name) && current.getAttribute(attribute.name) !== attribute.value){
             current.setAttribute(attribute.name, attribute.value);
         }
     });
+}
+function runningHubProgressAnimationMode(element){
+    if(element?.classList?.contains('is-indeterminate')){
+        return element.classList.contains('is-queued') ? 'indeterminate-queued' : 'indeterminate-running';
+    }
+    if(element?.classList?.contains('is-segment-active')){
+        return element.classList.contains('is-queued') ? 'segment-queued' : 'segment-running';
+    }
+    return '';
 }
 function patchRunningHubProgressHost(currentHost, freshHost){
     const currentSvg = currentHost?.querySelector(':scope > .rh-progress-border');
@@ -22635,7 +22647,12 @@ function patchRunningHubProgressHost(currentHost, freshHost){
     }
     syncRunningHubProgressElement(currentHost, freshHost);
     syncRunningHubProgressElement(currentSvg, freshSvg);
-    currentRects.forEach((rect, index) => syncRunningHubProgressElement(rect, freshRects[index]));
+    currentRects.forEach((rect, index) => {
+        const freshRect = freshRects[index];
+        const currentMode = runningHubProgressAnimationMode(rect);
+        const preservePhase = currentMode && currentMode === runningHubProgressAnimationMode(freshRect);
+        syncRunningHubProgressElement(rect, freshRect, preservePhase ? ['style'] : []);
+    });
     const currentBadge = currentHost.querySelector(':scope > .rh-progress-node-badge');
     const freshBadge = freshHost.querySelector(':scope > .rh-progress-node-badge');
     if(currentBadge && freshBadge){
@@ -22799,7 +22816,8 @@ function startRunningHubProgressMonitor(context, taskId, index, nodeMap={}, useW
                 return;
             }
             if(message.type === 'executing'){
-                const nodeId = String(data.node || '');
+                const nodeId = String(data.node ?? '').trim();
+                if(!nodeId) return;
                 const previous = runningHubProgressSlot(context, index);
                 const changed = nodeId && nodeId !== previous?.nodeId;
                 const nodeName = nodeId
