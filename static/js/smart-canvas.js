@@ -2115,7 +2115,7 @@ function bindSmartCanvasVideo(host, nodeId){
     });
     on(host, 'mousemove', showControlsTemporarily);
     on(host, 'mouseleave', event => {
-        const hoverChrome = event.relatedTarget?.closest?.('.floating-node-actions,.image-resolution-badge');
+        const hoverChrome = event.relatedTarget?.closest?.('.floating-node-actions,.image-resolution-badge,.node-resize-handle');
         if(hoverChrome && hoverChrome.closest('.image-node') === host.closest('.image-node')){
             clearTimer();
             return;
@@ -12160,7 +12160,11 @@ function render(){
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const floatingPinBtn = smartAncestorPinButtonHtml(node);
-        const floatingDeleteBtn = !isEmpty && !isGroup && !isPending ? `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>` : '';
+        const floatingDeleteBtn = !isEmpty && !isGroup && !isPending
+            ? (isImageNode && imgs.length
+                ? `<button class="mini-x node-media-clear" type="button" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`
+                : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`)
+            : '';
         const floatingCancelBtn = isGenerating && !isPrompt
             ? `<button class="smart-task-cancel" type="button" data-smart-task-cancel="${escapeAttr(node.id)}" title="取消任务" aria-label="取消任务"><i data-lucide="square"></i></button>`
             : '';
@@ -13038,7 +13042,21 @@ function bindNodeEvents(){
                 deleteNodeFromButton(id);
             });
         });
+        el.querySelectorAll('.node-media-clear').forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.preventDefault(); e.stopPropagation();
+                clearNodeMediaBeforeDelete(id);
+            });
+        });
         el.querySelectorAll('.floating-node-actions').forEach(actions => {
+            const stopActionGapEvent = event => {
+                if(event.target !== actions) return;
+                event.preventDefault();
+                event.stopPropagation();
+            };
+            actions.addEventListener('mousedown', stopActionGapEvent, true);
+            actions.addEventListener('click', stopActionGapEvent, true);
+            actions.addEventListener('dblclick', stopActionGapEvent, true);
             const videoHost = el.querySelector('.smart-canvas-video-host');
             const video = videoHost?.querySelector('.smart-canvas-video');
             if(!videoHost) return;
@@ -13056,6 +13074,13 @@ function bindNodeEvents(){
             });
         });
         el.querySelectorAll('.image-resolution-badge').forEach(badge => {
+            ['mousedown', 'click', 'dblclick'].forEach(eventName => {
+                badge.addEventListener(eventName, event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+                }, true);
+            });
             const videoHost = badge.closest('.image-wrap')?.querySelector('.smart-canvas-video-host');
             const video = videoHost?.querySelector('.smart-canvas-video');
             if(!videoHost || !video) return;
@@ -13186,7 +13211,7 @@ function bindNodeEvents(){
             });
             item.addEventListener('mousedown', e => {
                 if(e.target.closest('video,audio')) return;
-                if(e.button !== 0 || e.target.closest('.image-delete,.image-name-badge')) return;
+                if(e.button !== 0 || e.target.closest('.image-delete,.image-name-badge,.image-resolution-badge')) return;
                 if(e.detail < 2) return;
                 e.preventDefault();
                 e.stopPropagation();
@@ -13196,7 +13221,7 @@ function bindNodeEvents(){
             }, true);
             item.addEventListener('click', e => {
                 if(e.target.closest('video,audio')) return;
-                if(e.target.closest('.image-delete,.image-name-badge')) return;
+                if(e.target.closest('.image-delete,.image-name-badge,.image-resolution-badge')) return;
                 e.preventDefault();
                 e.stopPropagation();
                 e.stopImmediatePropagation();
@@ -13230,7 +13255,7 @@ function bindNodeEvents(){
             });
         item.addEventListener('dblclick', e => {
             if(e.target.closest('video,audio')) return;
-            if(e.target.closest('.image-delete,.image-name-badge')) return;
+            if(e.target.closest('.image-delete,.image-name-badge,.image-resolution-badge')) return;
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
@@ -13255,7 +13280,7 @@ function bindNodeEvents(){
                 // be detached from a media group. Native controls stop propagation
                 // in bindSmartCanvasVideo and therefore never reach this handler.
                 if(e.target.closest('audio')) return;
-                if(e.button !== 0 || e.target.closest('.mini-x')) return;
+                if(e.button !== 0 || e.target.closest('.mini-x,.image-resolution-badge')) return;
                 if(e.detail >= 2) return;
                 const node = nodes.find(n => n.id === id);
                 const refNodeId = item.dataset.refNodeId || '';
@@ -13278,6 +13303,15 @@ function bindNodeEvents(){
             });
         });
         const resizeHandle = el.querySelector('.node-resize-handle');
+        if(resizeHandle){
+            const videoHost = el.querySelector('.smart-canvas-video-host');
+            const video = videoHost?.querySelector('.smart-canvas-video');
+            resizeHandle.addEventListener('mouseleave', event => {
+                if(!videoHost || !video || videoHost.contains(event.relatedTarget)) return;
+                const draggingThisNode = dragState?.id === id || dragState?.groupIds?.includes?.(id);
+                if(!isNodeSelected(id) && !draggingThisNode && !resizeState) resetSmartCanvasVideo(video);
+            });
+        }
         resizeHandle?.addEventListener('pointerdown', e => {
             if(e.button !== 0 || !e.isPrimary) return;
             e.preventDefault(); e.stopPropagation();
@@ -13345,7 +13379,7 @@ function bindNodeEvents(){
             if(resizeState?.pointerId === e.pointerId) finishNodeBoxResize();
         });
         const beginNodeDrag = e => {
-            if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
+            if(e.button !== 0 || e.target.closest('.mini-x, .floating-node-actions, .image-resolution-badge, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             e.preventDefault(); e.stopPropagation();
             const node = nodes.find(n => n.id === id);

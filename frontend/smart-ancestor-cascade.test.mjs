@@ -303,16 +303,20 @@ test('video action chrome does not activate ports or interrupt hover playback', 
     assert.match(cssSource, /\.smart-video-capture-menu\s*\{[^}]*cursor:default;/);
 
     const bindVideoSource = extractFunction('bindSmartCanvasVideo');
-    assert.match(bindVideoSource, /event\.relatedTarget\?\.closest\?\.\('\.floating-node-actions,\.image-resolution-badge'\)/);
+    assert.match(bindVideoSource, /event\.relatedTarget\?\.closest\?\.\('\.floating-node-actions,\.image-resolution-badge,\.node-resize-handle'\)/);
     const bindNodeSource = extractFunction('bindNodeEvents');
     assert.match(bindNodeSource, /if\(videoHost\.contains\(event\.relatedTarget\)\)\s*return;/);
     assert.match(bindNodeSource, /!isNodeSelected\(id\)[\s\S]*resetSmartCanvasVideo\(video\)/);
 });
 
-test('video node border remains highlighted while hovering its floating actions', () => {
+test('image and video node borders remain highlighted while hovering floating actions', () => {
     assert.match(
         cssSource,
-        /\.image-node:has\(>\s*\.floating-node-actions:hover\)\s+\.image-wrap\s*>\s*\.media-video-card\s*\{\s*border-color:var\(--strong\);\s*\}/
+        /\.image-node:not\(\.node-generating\):has\(>\s*\.floating-node-actions:hover,\s*>\s*\.node-resize-handle:hover\)\s+\.image-wrap\s*>\s*:is\(img,\.media-video-card\)\s*\{\s*border-color:var\(--strong\);\s*\}/
+    );
+    assert.match(
+        cssSource,
+        /\.image-node:not\(\.node-generating\):not\(:has\(\.node-port\.is-magnetic\)\):has\(>\s*\.floating-node-actions:hover,\s*>\s*\.node-resize-handle:hover\)\s+\.image-wrap\s*>\s*\.image-resolution-badge\s*\{\s*opacity:1;\s*transform:translateY\(0\);\s*\}/
     );
 });
 
@@ -323,7 +327,7 @@ test('video resolution badge uses a normal cursor without interrupting hover pla
     );
     assert.match(
         cssSource,
-        /\.shell\.port-magnetic-ready\s+\.image-wrap:has\(\.smart-canvas-video\)\s*>\s*\.image-resolution-badge\s*\{\s*cursor:default !important;\s*\}/
+        /\.shell\.port-magnetic-ready\s+\.image-resolution-badge\s*\{\s*cursor:default !important;\s*\}/
     );
     const bindVideoSource = extractFunction('bindSmartCanvasVideo');
     assert.match(bindVideoSource, /\.floating-node-actions,\.image-resolution-badge/);
@@ -333,7 +337,7 @@ test('video resolution badge uses a normal cursor without interrupting hover pla
     assert.match(bindNodeSource, /badge\.addEventListener\('mouseleave'[\s\S]*resetSmartCanvasVideo\(video\)/);
 });
 
-test('live generation force-hides and disables all hover video chrome', () => {
+test('live generation hides all hover chrome except the dedicated cancel action', () => {
     assert.match(
         cssSource,
         /\.image-node\.node-generating \.floating-node-actions,[\s\S]*?\.image-node\.node-generating \.node-resize-handle\s*\{[\s\S]*?opacity:0 !important;[\s\S]*?pointer-events:none !important;/
@@ -346,6 +350,43 @@ test('live generation force-hides and disables all hover video chrome', () => {
         cssSource,
         /\.image-node\.node-generating \.smart-canvas-video-host \.smart-video-controls,[\s\S]*?\.smart-video-capture-menu,[\s\S]*?\.smart-video-play\s*\{[\s\S]*?opacity:0 !important;[\s\S]*?visibility:hidden !important;[\s\S]*?pointer-events:none !important;[\s\S]*?transition:none !important;/
     );
+    assert.match(
+        cssSource,
+        /\.image-node\.node-generating \.floating-node-actions\s*\{\s*opacity:1 !important;\s*pointer-events:auto !important;\s*\}[\s\S]*?\.image-node\.node-generating \.floating-node-actions > :not\(\.smart-task-cancel\)\s*\{\s*display:none;\s*\}/
+    );
+});
+
+test('image hover chrome is inert and cannot leak interactions into the node', () => {
+    assert.match(cssSource, /\.image-resolution-badge\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/);
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /if\(event\.target !== actions\)\s*return;[\s\S]*actions\.addEventListener\('mousedown',\s*stopActionGapEvent,\s*true\)/);
+    assert.match(bindNodeSource, /querySelectorAll\('\.image-resolution-badge'\)[\s\S]*\['mousedown',\s*'click',\s*'dblclick'\]\.forEach/);
+    assert.match(bindNodeSource, /\.image-delete,\.image-name-badge,\.image-resolution-badge/);
+    assert.match(bindNodeSource, /\.mini-x,\.image-resolution-badge/);
+    assert.match(bindNodeSource, /\.mini-x, \.floating-node-actions, \.image-resolution-badge/);
+    assert.match(cssSource, /\.image-node\.node-generating \.floating-node-actions > :not\(\.smart-task-cancel\)\s*\{\s*display:none;\s*\}/);
+});
+
+test('single-media nodes never stack image and node delete shadows', () => {
+    assert.match(
+        cssSource,
+        /\.image-node:not\(\.smart-group-node\):has\(> \.floating-node-actions\) \.image-wrap > \.mini-x\.image-delete\s*\{\s*opacity:0 !important;\s*pointer-events:none !important;\s*\}/
+    );
+    const renderSource = extractFunction('render');
+    assert.match(renderSource, /isImageNode && imgs\.length[\s\S]*class="mini-x node-media-clear"[\s\S]*smart\.deleteImage/);
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /querySelectorAll\('\.node-media-clear'\)[\s\S]*clearNodeMediaBeforeDelete\(id\)/);
+});
+
+test('magnetic ports hide all other node chrome and resize hover extends video presence', () => {
+    assert.match(
+        cssSource,
+        /\.image-node:has\(\.node-port\.is-magnetic\) \.floating-node-actions,[\s\S]*?\.mini-x,[\s\S]*?\.image-resolution-badge,[\s\S]*?\.node-resize-handle,[\s\S]*?\{[^}]*opacity:0 !important;[^}]*pointer-events:none !important;/
+    );
+    const bindVideoSource = extractFunction('bindSmartCanvasVideo');
+    assert.match(bindVideoSource, /\.floating-node-actions,\.image-resolution-badge,\.node-resize-handle/);
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /resizeHandle\.addEventListener\('mouseleave'[\s\S]*videoHost\.contains\(event\.relatedTarget\)[\s\S]*resetSmartCanvasVideo\(video\)/);
 });
 
 test('hover preview marks the complete ancestor chain before execution', () => {

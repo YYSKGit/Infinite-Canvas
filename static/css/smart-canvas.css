@@ -557,15 +557,15 @@ body.smart-node-resize .smart-node-floating-menu,
 .image-node:not(.empty-node) .node-delete { background:transparent; color:var(--text); border:0; opacity:1; }
 .theme-dark .image-node:not(.empty-node) .node-delete { background:transparent; color:#f8fafc; text-shadow:0 1px 4px rgba(0,0,0,.85); }
 /* floating-node-actions delete button: override the transparent .node-delete rule with higher specificity placed after it */
-.image-node .floating-node-actions .mini-x.node-delete { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
-.image-node .floating-node-actions .mini-x.node-delete:hover { background:#fee2e2; color:#dc2626; border-color:#fecaca; }
+.image-node .floating-node-actions .mini-x:is(.node-delete,.node-media-clear) { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
+.image-node .floating-node-actions .mini-x:is(.node-delete,.node-media-clear):hover { background:#fee2e2; color:#dc2626; border-color:#fecaca; }
 .image-node .floating-node-actions .mini-x.cascade-pin-btn { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
 .image-node .floating-node-actions .mini-x.cascade-pin-btn:hover,
 .image-node .floating-node-actions .mini-x.cascade-pin-btn.active { background:#fef3c7; color:#b45309; border-color:#f59e0b; }
 .image-node .floating-node-actions .mini-x.cascade-pin-btn.active svg { fill:currentColor; }
 .image-node .floating-node-actions .mini-x.cascade-pin-btn:disabled { cursor:not-allowed; opacity:.55; transform:none; }
-.theme-dark .image-node .floating-node-actions .mini-x.node-delete { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
-.theme-dark .image-node .floating-node-actions .mini-x.node-delete:hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
+.theme-dark .image-node .floating-node-actions .mini-x:is(.node-delete,.node-media-clear) { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
+.theme-dark .image-node .floating-node-actions .mini-x:is(.node-delete,.node-media-clear):hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
 .theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn:hover,
 .theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn.active { background:rgba(146,64,14,.9); color:#fef3c7; border-color:#f59e0b; }
@@ -574,6 +574,11 @@ body.smart-node-resize .smart-node-floating-menu,
 .theme-dark .image-wrap .mini-x, .theme-dark .thumb-item .mini-x { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .theme-dark .image-wrap .mini-x:hover, .theme-dark .thumb-item .mini-x:hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
 .thumb-item:hover .mini-x, .image-wrap:hover .mini-x { opacity:1; pointer-events:auto; }
+/* A single-media node already exposes its node delete action in the floating
+   tray at this exact corner. Do not reveal the underlying image-delete button:
+   two identical translucent buttons and shadows would otherwise stack until
+   the pointer enters the tray, making the visible shadow appear to fade. */
+.image-node:not(.smart-group-node):has(> .floating-node-actions) .image-wrap > .mini-x.image-delete { opacity:0 !important; pointer-events:none !important; }
 .image-wrap-loading:hover .mini-x { opacity:0 !important; pointer-events:none !important; }
 .image-node.dragging .mini-x { opacity:0 !important; pointer-events:none; }
 .image-name-badge { position:absolute; left:6px; top:5px; z-index:7; max-width:calc(100% - 12px); height:20px; display:inline-flex; align-items:center; gap:6px; color:rgba(100,116,139,.86); font-size:12px; font-weight:650; line-height:1; white-space:nowrap; cursor:text; user-select:none; pointer-events:auto; }
@@ -711,7 +716,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .theme-dark .image-wrap > img { border-color:rgba(148,163,184,.3); }
 .theme-dark .image-wrap > .media-video-card { border-color:rgba(148,163,184,.3); }
 .thumb-item:hover, .image-wrap:hover > img, .image-wrap:hover > .media-video-card { border-color:var(--strong); }
-.image-node:has(> .floating-node-actions:hover) .image-wrap > .media-video-card { border-color:var(--strong); }
+.image-node:not(.node-generating):has(> .floating-node-actions:hover, > .node-resize-handle:hover) .image-wrap > :is(img,.media-video-card) { border-color:var(--strong); }
 .theme-dark .thumb-item:hover, .theme-dark .image-wrap:hover > img, .theme-dark .image-wrap:hover > .media-video-card { border-color:var(--strong); }
 .image-node.dragging .thumb-item:hover, .image-node.dragging .image-wrap:hover { box-shadow:none; }
 .image-node.dragging .thumb-item:hover, .image-node.dragging .image-wrap:hover > img, .image-node.dragging .image-wrap:hover > .media-video-card { border-color:var(--line); }
@@ -721,7 +726,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-node.dragging .node-port,
 .image-node.dragging .node-resize-handle,
 .image-node.dragging .image-resolution-badge { transition:none !important; }
-.image-resolution-badge { position:absolute; left:7px; top:7px; z-index:4; max-width:calc(100% - 14px); height:22px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(255,255,255,.88); color:#334155; border:1px solid rgba(148,163,184,.34); box-shadow:0 8px 18px rgba(15,23,42,.12); backdrop-filter:blur(12px); font-size:10px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; transform:translateY(-2px); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
+.image-resolution-badge { position:absolute; left:7px; top:7px; z-index:4; max-width:calc(100% - 14px); height:22px; padding:0 8px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(255,255,255,.88); color:#334155; border:1px solid rgba(148,163,184,.34); box-shadow:0 8px 18px rgba(15,23,42,.12); backdrop-filter:blur(12px); font-size:10px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; transform:translateY(-2px); pointer-events:auto; cursor:default; transition:opacity .14s ease, transform .14s ease; }
 .theme-dark .image-resolution-badge { background:rgba(15,23,42,.82); color:#e2e8f0; border-color:rgba(148,163,184,.32); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .thumb-item:hover .image-resolution-badge, .image-wrap:hover .image-resolution-badge, .thumb-item.image-selected .image-resolution-badge, .image-wrap.image-selected .image-resolution-badge { opacity:1; transform:translateY(0); }
 /* Before hover playback starts, video badges/actions keep the normal immediate
@@ -744,6 +749,10 @@ video.node-img { object-fit:cover; background:#0f172a; }
 :is(.image-wrap,.thumb-item):has(.smart-canvas-video-host:is(.is-controls-visible,.is-controls-pinned,.is-controls-interacting)) > .image-resolution-badge { transform:translateY(0); }
 :is(.image-wrap,.thumb-item):has(.smart-canvas-video[data-smart-has-played="1"]) > .mini-x,
 .image-node:has(.smart-canvas-video[data-smart-has-played="1"]) > .floating-node-actions { transition-duration:.22s; }
+/* Treat the node-level action tray and resize handle as extensions of the media
+   surface. Moving between any of them keeps the same media highlight and badge
+   state, including after a video has entered its played/auto-hide mode. */
+.image-node:not(.node-generating):not(:has(.node-port.is-magnetic)):has(> .floating-node-actions:hover, > .node-resize-handle:hover) .image-wrap > .image-resolution-badge { opacity:1; transform:translateY(0); }
 .image-wrap-loading:hover .image-resolution-badge { opacity:0 !important; transform:translateY(-2px) !important; pointer-events:none !important; }
 .image-node.dragging .image-resolution-badge { opacity:0 !important; transform:translateY(-2px) !important; }
 .node-hint { padding:0 12px 10px; color:var(--faint); font-size:10.5px; line-height:1.35; font-weight:700; }
@@ -845,13 +854,15 @@ video.node-img { object-fit:cover; background:#0f172a; }
    Suppress the node's incidental :hover controls until the pointer truly
    enters the card; the magnetic port itself stays visible. */
 .image-node:has(.node-port.is-magnetic) .floating-node-actions,
+.image-node:has(.node-port.is-magnetic) .mini-x,
+.image-node:has(.node-port.is-magnetic) .image-resolution-badge,
 .image-node:has(.node-port.is-magnetic) .node-resize-handle,
 .empty-node:has(.node-port.is-magnetic) .node-delete { opacity:0 !important; pointer-events:none !important; }
 .image-node:has(.node-port.is-magnetic) .node-port:not(.is-magnetic) { opacity:0 !important; pointer-events:none !important; }
 .image-node.dragging .node-port { opacity:0 !important; pointer-events:none !important; }
 .shell.port-dragging { cursor:crosshair !important; }
 .shell.port-magnetic-ready,.shell.port-magnetic-ready * { cursor:crosshair !important; }
-.shell.port-magnetic-ready .image-wrap:has(.smart-canvas-video) > .image-resolution-badge { cursor:default !important; }
+.shell.port-magnetic-ready .image-resolution-badge { cursor:default !important; }
 body.smart-node-box-resize,
 body.smart-node-box-resize .shell,
 body.smart-node-box-resize .shell * { cursor:nwse-resize !important; }
