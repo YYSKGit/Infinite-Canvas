@@ -6167,7 +6167,11 @@ function veniceQuoteRemainingCountText(quote){
     const cost = Math.max(0, Number(quote) || 0);
     if(!Number.isFinite(remaining) || cost <= 0) return '';
     const count = Math.max(0, Math.floor(remaining / cost));
-    return ` (${count}次)`;
+    return `${count}`;
+}
+function veniceQuoteBadgeText(quote){
+    if(Number(quote) === 0) return '免费';
+    return veniceQuoteRemainingCountText(quote) || '--';
 }
 function hideVeniceImageQuote(){
     if(veniceImageQuoteTimer){
@@ -6217,8 +6221,8 @@ function renderVeniceImageQuoteAmount(unitQuote){
     const creditsText = Number.isInteger(totalQuote) ? `${totalQuote}` : totalQuote.toFixed(2);
     setVeniceImageQuoteStatus(
         totalQuote === 0 ? 'free' : 'ready',
-        totalQuote === 0 ? '免费' : `¥${totalCny.toFixed(2)}`,
-        `${unitQuote} 积分/张 × ${count} = ${creditsText} 积分 ≈ $${totalUsd.toFixed(2)} × 7${veniceQuoteRemainingCountText(totalQuote)}`
+        veniceQuoteBadgeText(totalQuote),
+        `${unitQuote} 积分/张 × ${count} = ${creditsText} 积分 ≈ $${totalUsd.toFixed(2)} ≈ ¥${totalCny.toFixed(2)}`
     );
 }
 function veniceImageQuoteHasReferenceImage(subject){
@@ -6364,7 +6368,7 @@ function syncVeniceVideoQuote(){
         const cny = Number(cached.cny);
         const usd = Number.isFinite(Number(cached.usd)) ? Number(cached.usd) : quote / 100;
         veniceVideoQuoteSignature = activeKey;
-        setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingCountText(quote)}`);
+        setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', veniceQuoteBadgeText(quote), `${quote} 积分 ≈ $${usd.toFixed(2)} ≈ ¥${cny.toFixed(2)}`);
         return;
     }
     if(activeKey === veniceVideoQuoteSignature) return;
@@ -6395,7 +6399,7 @@ function syncVeniceVideoQuote(){
                 subject.veniceVideoQuoteCache = {signature, quote, usd, cny, updatedAt:Date.now()};
                 scheduleSave();
             }
-            setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', quote === 0 ? '免费' : `¥${cny.toFixed(2)}`, `${quote} 积分 ≈ $${usd.toFixed(2)} × 7${veniceQuoteRemainingCountText(quote)}`);
+            setVeniceVideoQuoteStatus(quote === 0 ? 'free' : 'ready', veniceQuoteBadgeText(quote), `${quote} 积分 ≈ $${usd.toFixed(2)} ≈ ¥${cny.toFixed(2)}`);
         } catch(error) {
             if(error?.name === 'AbortError') return;
             if(requestToken !== veniceVideoQuoteRequestToken || activeKey !== veniceVideoQuoteSignature) return;

@@ -287,6 +287,15 @@ test('Venice video capabilities expose only parameters consumed by its request a
     assert.equal(caps.trustedAsset, false);
 });
 
+test('Venice quote badges prioritize the remaining generation count', () => {
+    const loaded = loadProductionFunctions(['veniceQuoteRemainingCountText', 'veniceQuoteBadgeText'], {
+        veniceCreditsState:{remaining:528}
+    });
+    assert.equal(loaded.veniceQuoteRemainingCountText(44), '12');
+    assert.equal(loaded.veniceQuoteBadgeText(44), '12');
+    assert.equal(loaded.veniceQuoteBadgeText(0), '免费');
+});
+
 test('Venice credit fast refresh is scoped to Venice providers only', () => {
     const activeRequests = new Set();
     const refreshes = [];
