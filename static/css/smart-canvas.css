@@ -527,7 +527,7 @@ body.smart-prompt-split-resize .prompt-node-llm .prompt-node-select-control { po
 .smart-task-cancel { width:26px; height:26px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(248,113,113,.48); border-radius:10px; background:rgba(127,29,29,.88); color:#fecaca; box-shadow:0 8px 22px rgba(15,23,42,.18); backdrop-filter:blur(12px); cursor:pointer; transition:transform .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease; }
 .smart-task-cancel:hover { transform:translateY(-1px); background:rgba(153,27,27,.94); color:#fee2e2; border-color:rgba(252,165,165,.72); box-shadow:0 10px 24px rgba(220,38,38,.18); }
 .smart-task-cancel:active { transform:translateY(0) scale(.97); }
-.smart-task-cancel i,.smart-task-cancel svg { width:12px; height:12px; fill:currentColor; stroke-width:2.2; }
+.smart-task-cancel i,.smart-task-cancel svg { width:11px; height:11px; fill:currentColor; stroke-width:2.2; }
 .theme-dark .smart-task-cancel { background:rgba(127,29,29,.88); color:#fecaca; border-color:rgba(248,113,113,.48); box-shadow:0 10px 24px rgba(0,0,0,.34); }
 .theme-dark .smart-task-cancel:hover { background:rgba(153,27,27,.94); color:#fee2e2; border-color:rgba(252,165,165,.72); }
 .theme-dark .image-node.node-generating .run-time-pill { border-color:rgba(148,163,184,.3); background:rgba(15,23,42,.86); color:#e2e8f0; box-shadow:0 10px 24px rgba(0,0,0,.34); }
