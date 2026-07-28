@@ -333,6 +333,21 @@ test('video resolution badge uses a normal cursor without interrupting hover pla
     assert.match(bindNodeSource, /badge\.addEventListener\('mouseleave'[\s\S]*resetSmartCanvasVideo\(video\)/);
 });
 
+test('live generation force-hides and disables all hover video chrome', () => {
+    assert.match(
+        cssSource,
+        /\.image-node\.node-generating \.floating-node-actions,[\s\S]*?\.image-node\.node-generating \.node-resize-handle\s*\{[\s\S]*?opacity:0 !important;[\s\S]*?pointer-events:none !important;/
+    );
+    assert.match(
+        cssSource,
+        /\.image-node\.node-generating \.smart-canvas-video-host\s*\{\s*pointer-events:none !important;\s*\}/
+    );
+    assert.match(
+        cssSource,
+        /\.image-node\.node-generating \.smart-canvas-video-host \.smart-video-controls,[\s\S]*?\.smart-video-capture-menu,[\s\S]*?\.smart-video-play\s*\{[\s\S]*?opacity:0 !important;[\s\S]*?visibility:hidden !important;[\s\S]*?pointer-events:none !important;[\s\S]*?transition:none !important;/
+    );
+});
+
 test('hover preview marks the complete ancestor chain before execution', () => {
     const preview = {
         stepIds:['a','target'],
