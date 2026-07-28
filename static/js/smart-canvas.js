@@ -13116,6 +13116,15 @@ function bindNodeEvents(){
                 if(video && !isNodeSelected(id) && !draggingThisNode) resetSmartCanvasVideo(video);
             });
         });
+        el.querySelectorAll('.run-time-pill').forEach(pill => {
+            ['pointerdown', 'mousedown', 'click', 'dblclick'].forEach(eventName => {
+                pill.addEventListener(eventName, event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+                }, true);
+            });
+        });
         el.querySelectorAll('.image-resolution-badge').forEach(badge => {
             ['mousedown', 'click', 'dblclick'].forEach(eventName => {
                 badge.addEventListener(eventName, event => {

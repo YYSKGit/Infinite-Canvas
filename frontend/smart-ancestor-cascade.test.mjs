@@ -369,6 +369,14 @@ test('live generation hides all hover chrome except the dedicated cancel action'
         cssSource,
         /\.image-node\.node-generating \.floating-node-actions\s*\{\s*opacity:1 !important;\s*pointer-events:auto !important;\s*\}[\s\S]*?\.image-node\.node-generating \.floating-node-actions > :not\(\.smart-task-cancel\)\s*\{\s*display:none;\s*\}/
     );
+    assert.match(
+        cssSource,
+        /\.image-node:not\(\.node-generating\) :is\(\.thumb-item:hover, \.image-wrap:hover > img, \.image-wrap:hover > \.media-video-card\)\s*\{\s*border-color:var\(--strong\);\s*\}/
+    );
+    assert.match(
+        cssSource,
+        /\.smart-group-node:not\(\.node-generating\):hover\s*\{\s*border-color:var\(--strong\);/
+    );
 });
 
 test('image hover chrome is inert and cannot leak interactions into the node', () => {
