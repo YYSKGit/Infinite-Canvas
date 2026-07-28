@@ -252,7 +252,7 @@ test('collapsed prompt resizing does not reinterpret exact legacy heights', () =
     const sandbox = vm.createContext({
         node:{type:'smart-prompt', w:316, h:340},
         isSmartGroupCompactMember:() => false,
-        promptNodeMinHeight:() => 160,
+        promptNodeMinHeight:() => 170,
         PROMPT_NODE_DEFAULT_W:316,
         Math,
         Number
@@ -264,12 +264,12 @@ test('collapsed prompt resizing does not reinterpret exact legacy heights', () =
 test('collapsed prompt nodes and their text box use the smaller minimum height', () => {
     const minHeightSource = extractFunction('promptNodeMinHeight');
     assert.match(minHeightSource, /PROMPT_NODE_COLLAPSED_MIN_H\s*\+\s*promptNodeSplitExtraHeight/);
-    assert.match(source, /const PROMPT_NODE_COLLAPSED_MIN_H = 160;/);
+    assert.match(source, /const PROMPT_NODE_COLLAPSED_MIN_H = 170;/);
     assert.match(cssSource, /\.prompt-node-text\s*\{[^}]*min-height:48px;/);
 });
 
 test('expanded prompt layouts reserve the same smaller text-box minimum', () => {
-    assert.match(source, /const PROMPT_NODE_EXPANDED_BASE_H = 264;/);
+    assert.match(source, /const PROMPT_NODE_EXPANDED_BASE_H = 320;/);
     assert.match(extractFunction('promptNodeExpandedHeight'), /return PROMPT_NODE_EXPANDED_BASE_H \+/);
 });
 

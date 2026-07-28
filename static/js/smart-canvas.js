@@ -10553,6 +10553,23 @@ function updateNodeElementDuringResize(node){
     scheduleSmartVideoResetFrameRefresh({debounce:true});
     scheduleSmartImageLodRefresh();
 }
+function finishNodeBoxResize(){
+    if(!resizeState) return false;
+    const state = resizeState;
+    resizeState = null;
+    document.body.classList.remove('smart-node-resize', 'smart-node-box-resize');
+    if(state.captureTarget?.hasPointerCapture?.(state.pointerId)){
+        try { state.captureTarget.releasePointerCapture(state.pointerId); } catch(_err){}
+    }
+    const node = nodes.find(n => n.id === state.id);
+    const rect = node ? nodeRect(node) : null;
+    const changed = Boolean(rect && (Math.abs(rect.width - state.startW) > 1 || Math.abs(rect.height - state.startH) > 1));
+    if(changed) commitPendingUndo();
+    else discardPendingUndo();
+    if(changed) render();
+    scheduleSave();
+    return true;
+}
 function syncSmartGroupMemberElements(group){
     if(!isSmartGroupNode(group)) return;
     smartGroupCompactMembers(group).forEach(member => {
@@ -13181,15 +13198,24 @@ function bindNodeEvents(){
                 capturePendingUndo();
             });
         });
-        el.querySelector('.node-resize-handle')?.addEventListener('mousedown', e => {
-            if(e.button !== 0) return;
+        const resizeHandle = el.querySelector('.node-resize-handle');
+        resizeHandle?.addEventListener('pointerdown', e => {
+            if(e.button !== 0 || !e.isPrimary) return;
             e.preventDefault(); e.stopPropagation();
             resetMagneticPort();
             const node = nodes.find(n => n.id === id);
             if(!node) return;
             if(isSmartGroupNode(node)) delete node._singleMediaCell;
             const rect = nodeRect(node);
-            resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height};
+            resizeState = {
+                id,
+                startX:e.clientX,
+                startY:e.clientY,
+                startW:rect.width,
+                startH:rect.height,
+                pointerId:e.pointerId,
+                captureTarget:resizeHandle
+            };
             // 分组缩放：记录本次手势开始时所有成员的位置/尺寸快照与起始缩放，缩放过程按相对快照的比例实时计算，
             // 整体等比缩放+重排。用快照而非持久基准，移动成员后再缩放也不会回退到旧位置。
             if(isSmartGroupNode(node)){
@@ -13209,6 +13235,27 @@ function bindNodeEvents(){
             }
             document.body.classList.add('smart-node-resize', 'smart-node-box-resize');
             capturePendingUndo();
+            try { resizeHandle.setPointerCapture(e.pointerId); } catch(_err){}
+        });
+        resizeHandle?.addEventListener('pointermove', e => {
+            if(!resizeState || resizeState.pointerId !== e.pointerId) return;
+            if((e.buttons & 1) === 0){
+                finishNodeBoxResize();
+                return;
+            }
+            e.preventDefault();
+            window.onmousemove?.(e);
+        });
+        resizeHandle?.addEventListener('pointerup', e => {
+            if(resizeState?.pointerId !== e.pointerId) return;
+            e.preventDefault();
+            finishNodeBoxResize();
+        });
+        resizeHandle?.addEventListener('pointercancel', e => {
+            if(resizeState?.pointerId === e.pointerId) finishNodeBoxResize();
+        });
+        resizeHandle?.addEventListener('lostpointercapture', e => {
+            if(resizeState?.pointerId === e.pointerId) finishNodeBoxResize();
         });
         const beginNodeDrag = e => {
             if(e.button !== 0 || e.target.closest('.mini-x, .smart-node-floating-menu, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button')) return;
@@ -23225,17 +23272,7 @@ window.onmouseup = e => {
         document.getElementById('cropCanvas')?.classList.remove('dragging-image');
         cropDrag = null;
     }
-    if(resizeState){
-        const node = nodes.find(n => n.id === resizeState.id);
-        const rect = node ? nodeRect(node) : null;
-        const changed = rect && (Math.abs(rect.width - resizeState.startW) > 1 || Math.abs(rect.height - resizeState.startH) > 1);
-        if(changed){
-            commitPendingUndo();
-        } else { discardPendingUndo(); }
-        resizeState = null;
-        if(changed) render();
-        scheduleSave();
-    }
+    finishNodeBoxResize();
     if(llmInstructionResizeState){
         const node = nodes.find(n => n.id === llmInstructionResizeState.id);
         const changed = node && promptLlmInstructionHeight(node) !== llmInstructionResizeState.startH;
@@ -23579,6 +23616,7 @@ window.addEventListener('blur', () => {
     setHoveredConnectionKey('');
     smartConfigActivePointers.clear();
     releaseSmartConfigPointerIdleWaiters();
+    finishNodeBoxResize();
 });
 shell.addEventListener('mouseleave', () => setHoveredConnectionKey(''));
 if(engineSelect){
