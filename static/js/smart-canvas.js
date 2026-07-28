@@ -346,6 +346,7 @@ function syncSmartCascadeLegacyState(preferredLoopId=''){
     smartCascadeRunPath = activeRun?.runPath || null;
 }
 function smartCascadeAnyRunning(){ return smartCascadeRunning || activeSmartCascadeCount() > 0; }
+function smartOneClickRunActive(){ return Boolean(smartAncestorCascadeRun || smartCascadeAnyRunning()); }
 function smartCascadeEdgeState(edgeKey){
     const ancestorState = smartAncestorCascadeRun?.runPath?.states?.[edgeKey];
     if(ancestorState) return ancestorState;
@@ -3374,6 +3375,8 @@ function resetSmartCanvasTransientStateForSwitch(){
     dragState = null;
     selectionState = null;
     resizeState = null;
+    document.body.classList.remove('smart-node-resize', 'smart-node-box-resize', 'smart-llm-instr-resize', 'smart-llm-system-resize', 'smart-prompt-split-resize');
+    resetMagneticPort();
     thumbDragState = null;
     detachedVideoDomHandoff = null;
     viewport = {x:0, y:0, scale:1};
@@ -4505,6 +4508,11 @@ const PROMPT_LLM_SYSTEM_MAX_H = 260;
 const PROMPT_LLM_SYSTEM_BLOCK_BASE_H = 69;
 const PROMPT_NODE_DEFAULT_W = 316;
 const PROMPT_NODE_MIN_W = 260;
+// 12px node padding on both sides + 48px prompt text + the 24px tool row
+// and its gap. Keep these budgets aligned with the real CSS min-content size
+// so flex:1 cannot turn a nominally small text box back into a tall one.
+const PROMPT_NODE_COLLAPSED_MIN_H = 170;
+const PROMPT_NODE_EXPANDED_BASE_H = 320;
 const PROMPT_SPLIT_PREVIEW_DEFAULT_H = 70;
 const PROMPT_SPLIT_PREVIEW_MIN_H = 40;
 const PROMPT_SPLIT_PREVIEW_MAX_H = 220;
@@ -4551,7 +4559,7 @@ function syncPromptNodeHeightForSplit(node, prevExtra=0){
     node.w = Math.max(Number(node.w) || 0, PROMPT_NODE_MIN_W);
 }
 function promptNodeMinHeight(node){
-    return node?.llmEnabled ? promptNodeExpandedHeight(node) : 240 + promptNodeSplitExtraHeight(node);
+    return node?.llmEnabled ? promptNodeExpandedHeight(node) : PROMPT_NODE_COLLAPSED_MIN_H + promptNodeSplitExtraHeight(node);
 }
 function promptTextItemsForNode(node, ctx=smartLoopContext){
     if(!node) return [];
@@ -4584,11 +4592,9 @@ function promptNodeExpandedHeight(node){
     const extra = Math.max(0, promptLlmInstructionHeight(node) - PROMPT_LLM_INSTRUCTION_DEFAULT_H);
     const systemExtra = node?.llmSystemEnabled ? Math.max(0, promptLlmSystemHeight(node) - PROMPT_LLM_SYSTEM_DEFAULT_H) : 0;
     const upstreamExtra = node?.llmEnabled && promptNodeUpstreamPromptItems(node).length ? 74 : 0;
-    return 360 + (node?.llmSystemEnabled ? PROMPT_LLM_SYSTEM_BLOCK_BASE_H : 0) + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + extra + systemExtra + upstreamExtra + promptNodeSplitExtraHeight(node);
+    return PROMPT_NODE_EXPANDED_BASE_H + (node?.llmSystemEnabled ? PROMPT_LLM_SYSTEM_BLOCK_BASE_H : 0) + smartNodeInputThumbsHeight(promptNodeInputImages(node)) + extra + systemExtra + upstreamExtra + promptNodeSplitExtraHeight(node);
 }
 function promptNodeLayoutSize(node){
-    const oldCollapsedH = 230;
-    const oldExpandedH = node?.llmSystemEnabled ? 400 : 340;
     const explicitW = Number(node?.w);
     const explicitH = Number(node?.h);
     if(isSmartGroupCompactMember(node) && Number.isFinite(explicitW) && explicitW > 24 && Number.isFinite(explicitH) && explicitH > 24){
@@ -4596,10 +4602,11 @@ function promptNodeLayoutSize(node){
     }
     const width = !Number.isFinite(explicitW) ? PROMPT_NODE_DEFAULT_W : explicitW;
     const fallbackH = promptNodeMinHeight(node);
-    const legacyExpandedH = node?.llmSystemEnabled ? 344 : 292;
-    const height = !Number.isFinite(explicitH) || explicitH === 194 || explicitH === oldCollapsedH || explicitH === oldExpandedH || explicitH === legacyExpandedH
-        ? fallbackH
-        : Math.max(explicitH, fallbackH);
+    // Height is live user data, not a schema marker. Older releases used a
+    // handful of default heights (194/230/292/340/400); treating those values
+    // as migration sentinels here made a resize jump as soon as the pointer
+    // crossed one of them.
+    const height = !Number.isFinite(explicitH) ? fallbackH : Math.max(explicitH, fallbackH);
     return {width:Math.round(width), height:Math.round(height)};
 }
 // 智能分组的图片网格布局：跟多图节点一致，但可见排数上限为 4（超过出现滚动），且缩略图无放大上限
@@ -12089,13 +12096,14 @@ function render(){
         const ancestorRunState = smartAncestorNodeVisualState(node.id);
         const shimmerDelay = continuousAnimationDelay(1500, node.runStartedAt);
         const pendingSpinDelay = continuousAnimationDelay(1000, node.runStartedAt);
+        const ancestorNodeDelay = continuousAnimationDelay(1350, smartAncestorCascadeRun?.startedAt);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const floatingPinBtn = smartAncestorPinButtonHtml(node);
         const floatingDeleteBtn = !isEmpty && !isGroup && !isPending ? `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>` : '';
         const floatingActions = `${floatingPinBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
@@ -13176,6 +13184,7 @@ function bindNodeEvents(){
         el.querySelector('.node-resize-handle')?.addEventListener('mousedown', e => {
             if(e.button !== 0) return;
             e.preventDefault(); e.stopPropagation();
+            resetMagneticPort();
             const node = nodes.find(n => n.id === id);
             if(!node) return;
             if(isSmartGroupNode(node)) delete node._singleMediaCell;
@@ -13198,7 +13207,7 @@ function bindNodeEvents(){
                 resizeState.contentFitW = hasM ? Math.max(1, maxR - gx0 + 16) : (rect.width || 1);
                 resizeState.contentFitH = hasM ? Math.max(1, maxB - gy0 + 16) : (rect.height || 1);
             }
-            document.body.classList.add('smart-node-resize');
+            document.body.classList.add('smart-node-resize', 'smart-node-box-resize');
             capturePendingUndo();
         });
         const beginNodeDrag = e => {
@@ -20366,6 +20375,7 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
     (plan.connections || []).forEach(conn => { runPath.states[`${conn.from}->${conn.to}`] = 'wait'; });
     const runState = {
         id:`ancestor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        startedAt:nowMs(),
         targetId:targetNode.id,
         plan,
         runPath,
@@ -20402,8 +20412,10 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
         }
         if(runState.failedIds.size){
             toast(`运行中断：${runState.completedIds.size} 成功 · ${runState.failedIds.size} 失败`);
+            smartBackgroundNotify('一键运行失败', `${runState.completedIds.size} 个节点完成，${runState.failedIds.size} 个节点失败`, 'failure');
         } else {
             toast(`一键运行完成：${runState.completedIds.size} 个节点`);
+            smartBackgroundNotify('一键运行完成', `${runState.completedIds.size} 个节点已完成`, 'success');
         }
     } finally {
         smartAncestorCascadeRun = null;
@@ -20861,7 +20873,7 @@ async function runSmartCascade(targetNode=null){
     const originalSettings = cloneSmartSettings(settings);
     const originalPromptSnapshot = promptEditor?.snapshot?.();
     const runKey = loopId || `cascade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const runState = {runKey, loopId, stopRequested:false, runPath:null};
+    const runState = {runKey, loopId, startedAt:nowMs(), stopRequested:false, runPath:null};
     smartCascadeRuns.set(runKey, runState);
     syncSmartCascadeLegacyState(runKey);
     smartCascadeSilentSelection = true;
@@ -20905,6 +20917,8 @@ async function runSmartCascade(targetNode=null){
         scheduleConnectionLayerRefresh();
         updateComposer();
     }
+    let cascadeOutcome = 'failed';
+    let cascadeFailureMessage = '';
     try {
         const runRound = async (loopIndex=startIndex, options={}) => {
             throwIfSmartCascadeStopRequested(runState);
@@ -21035,10 +21049,13 @@ async function runSmartCascade(targetNode=null){
         settings = originalSettings;
         if(originalPromptSnapshot) promptEditor.setValue(originalPromptSnapshot.doc, originalPromptSnapshot.references, {silent:true});
         scheduleSave();
+        cascadeOutcome = 'completed';
         toast(totalRounds > 1
             ? trf(loopMode === 'parallel' ? 'smart.loopParallelRoundsDone' : 'smart.loopRunRoundsDone', {n:totalRounds})
             : tr('smart.loopRunDone'));
     } catch(e) {
+        cascadeOutcome = e?.smartCascadeStopped ? 'stopped' : 'failed';
+        cascadeFailureMessage = String(e?.message || tr('smart.errRunFailed')).slice(0, 160);
         if(parallelLimit === 1) smartLoopContext = null;
         selectedId = originalSelected;
         settings = originalSettings;
@@ -21053,6 +21070,11 @@ async function runSmartCascade(targetNode=null){
         if(directLoopTargetRun) finishLoopTargetPreviewState(tail);
         scheduleSave();
         render();
+        if(cascadeOutcome === 'completed'){
+            smartBackgroundNotify('一键运行完成', totalRounds > 1 ? `${totalRounds} 轮任务已完成` : '工作流已完成', 'success');
+        } else if(cascadeOutcome === 'failed'){
+            smartBackgroundNotify('一键运行失败', cascadeFailureMessage || '工作流运行中断', 'failure');
+        }
     }
 }
 function runSmartCascadeFromLoop(loopId){
@@ -21880,10 +21902,13 @@ function smartTaskKindText(kind='image'){
 function notifySmartTaskSuccess(kind='image', count=1){
     const amount = Math.max(1, Number(count) || 1);
     toast(`已生成 ${amount} 个${smartTaskKindText(kind)}结果`);
-    smartBackgroundNotify('任务完成', `已生成 ${amount} 个${smartTaskKindText(kind)}结果`, 'success');
+    // The cascade runner owns one-click-run notifications. Keeping individual
+    // node completions silent prevents a background canvas from notifying once
+    // per workflow step.
+    if(!smartOneClickRunActive()) smartBackgroundNotify('任务完成', `已生成 ${amount} 个${smartTaskKindText(kind)}结果`, 'success');
 }
 function notifySmartTaskFailure(message=''){
-    smartBackgroundNotify('任务失败', String(message || tr('smart.errRunFailed')), 'failure');
+    if(!smartOneClickRunActive()) smartBackgroundNotify('任务失败', String(message || tr('smart.errRunFailed')), 'failure');
 }
 async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSettings=settings, options={}){
     const allRefs = refs || [];
@@ -22960,7 +22985,7 @@ window.onmousemove = e => {
         const dx = (e.clientX - resizeState.startX) / viewport.scale;
         const dy = (e.clientY - resizeState.startY) / viewport.scale;
         const minW = node.type === 'smart-prompt' ? 260 : node.type === 'smart-loop' ? 252 : node.type === 'smart-group' ? SMART_GROUP_MIN_WIDTH : 48;
-        const minH = node.type === 'smart-prompt' ? 170 : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : 48;
+        const minH = node.type === 'smart-prompt' ? promptNodeMinHeight(node) : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : 48;
         if(node.type === 'smart-group' && smartGroupImageRefs(node).some(ref => ref.item?.url)){
             // 图片分组：和普通节点一样直接改 w/h，缩略图网格按新尺寸实时重排。不要走下面的“成员缩放”那套，
             // 否则拖动过程里会按成员包围盒/缩放比例收缩，松手才回到拖动宽度（用户反馈的“变宽时先缩小”）。
@@ -23167,7 +23192,7 @@ window.onmousemove = e => {
 window.onmouseup = e => {
     stopSmartEdgePan();
     document.body.classList.remove('smart-node-drag');
-    document.body.classList.remove('smart-node-resize');
+    document.body.classList.remove('smart-node-resize', 'smart-node-box-resize');
     if(portDragState){
         const drag = portDragState;
         portDragState = null;

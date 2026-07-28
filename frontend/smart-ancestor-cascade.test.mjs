@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import {fileURLToPath} from 'node:url';
 
 const sourcePath = fileURLToPath(new URL('../static/js/smart-canvas.js', import.meta.url));
 const source = readFileSync(sourcePath, 'utf8');
+const cssSource = readFileSync(fileURLToPath(new URL('../static/css/smart-canvas.css', import.meta.url)), 'utf8');
 
 function extractFunction(name){
     const markers = [`function ${name}(`, `async function ${name}(`];
@@ -226,6 +227,57 @@ test('ancestor run node visuals expose wait, active, done, and failed states', (
         sandbox
     );
     assert.deepEqual([...sandbox.states], ['', 'wait', 'active', 'done', 'failed', 'source', 'skipped', 'boundary']);
+});
+
+test('one-click runs silence per-node desktop notifications', () => {
+    const successSource = extractFunction('notifySmartTaskSuccess');
+    const failureSource = extractFunction('notifySmartTaskFailure');
+    assert.match(successSource, /if\(!smartOneClickRunActive\(\)\)\s+smartBackgroundNotify/);
+    assert.match(failureSource, /if\(!smartOneClickRunActive\(\)\)\s+smartBackgroundNotify/);
+    assert.match(extractFunction('runSmartAncestorCascade'), /smartBackgroundNotify\('一键运行完成'/);
+    assert.match(extractFunction('runSmartCascade'), /smartBackgroundNotify\('一键运行完成'/);
+});
+
+test('running-node animations retain a stable phase across DOM rebuilds', () => {
+    const renderSource = extractFunction('render');
+    assert.match(renderSource, /continuousAnimationDelay\(1500,\s*node\.runStartedAt\)/);
+    assert.match(renderSource, /continuousAnimationDelay\(1350,\s*smartAncestorCascadeRun\?\.startedAt\)/);
+    assert.match(renderSource, /--loading-shimmer-delay:\$\{shimmerDelay\}ms/);
+    assert.match(renderSource, /--ancestor-node-delay:\$\{ancestorNodeDelay\}ms/);
+    assert.match(cssSource, /animation-delay:var\(--loading-shimmer-delay,\s*0ms\)/);
+    assert.match(cssSource, /animation-delay:var\(--ancestor-node-delay,\s*0ms\)/);
+});
+
+test('collapsed prompt resizing does not reinterpret exact legacy heights', () => {
+    const sandbox = vm.createContext({
+        node:{type:'smart-prompt', w:316, h:340},
+        isSmartGroupCompactMember:() => false,
+        promptNodeMinHeight:() => 160,
+        PROMPT_NODE_DEFAULT_W:316,
+        Math,
+        Number
+    });
+    vm.runInContext(`${extractFunction('promptNodeLayoutSize')}\nglobalThis.heights = [194, 230, 292, 340, 400].map(h => promptNodeLayoutSize({...node, h}).height);`, sandbox);
+    assert.deepEqual([...sandbox.heights], [194, 230, 292, 340, 400]);
+});
+
+test('collapsed prompt nodes and their text box use the smaller minimum height', () => {
+    const minHeightSource = extractFunction('promptNodeMinHeight');
+    assert.match(minHeightSource, /PROMPT_NODE_COLLAPSED_MIN_H\s*\+\s*promptNodeSplitExtraHeight/);
+    assert.match(source, /const PROMPT_NODE_COLLAPSED_MIN_H = 160;/);
+    assert.match(cssSource, /\.prompt-node-text\s*\{[^}]*min-height:48px;/);
+});
+
+test('expanded prompt layouts reserve the same smaller text-box minimum', () => {
+    assert.match(source, /const PROMPT_NODE_EXPANDED_BASE_H = 264;/);
+    assert.match(extractFunction('promptNodeExpandedHeight'), /return PROMPT_NODE_EXPANDED_BASE_H \+/);
+});
+
+test('node resize owns the cursor and clears magnetic port state', () => {
+    const bindSource = extractFunction('bindNodeEvents');
+    assert.match(bindSource, /resetMagneticPort\(\);[\s\S]*classList\.add\('smart-node-resize',\s*'smart-node-box-resize'\)/);
+    assert.match(cssSource, /body\.smart-node-box-resize \.shell \* \{\s*cursor:nwse-resize !important;/);
+    assert.match(cssSource, /body\.smart-node-box-resize \.node-port \{\s*pointer-events:none !important;/);
 });
 
 test('hover preview marks the complete ancestor chain before execution', () => {

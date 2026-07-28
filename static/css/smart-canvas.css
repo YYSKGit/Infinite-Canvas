@@ -225,7 +225,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.ancestor-run-source::before { border:1px solid var(--ancestor-route-source); box-shadow:0 0 0 2px color-mix(in srgb, var(--ancestor-route-source) 12%, transparent); }
 .image-node.ancestor-run-skipped::before { border:1px dashed color-mix(in srgb, var(--cascade-pin) 62%, transparent); box-shadow:0 0 0 2px color-mix(in srgb, var(--cascade-pin) 8%, transparent); }
 .image-node.ancestor-run-boundary::before { border:1.5px solid color-mix(in srgb, var(--cascade-pin) 82%, transparent); box-shadow:0 0 0 3px var(--cascade-pin-soft); }
-.image-node.ancestor-run-active::before { border:1.5px solid var(--ancestor-route-active); box-shadow:0 0 0 3px color-mix(in srgb, var(--ancestor-route-active) 16%, transparent), 0 0 22px color-mix(in srgb, var(--ancestor-route-active) 24%, transparent); animation:ancestor-node-breathe 1.35s ease-in-out infinite; }
+.image-node.ancestor-run-active::before { border:1.5px solid var(--ancestor-route-active); box-shadow:0 0 0 3px color-mix(in srgb, var(--ancestor-route-active) 16%, transparent), 0 0 22px color-mix(in srgb, var(--ancestor-route-active) 24%, transparent); animation:ancestor-node-breathe 1.35s ease-in-out infinite; animation-delay:var(--ancestor-node-delay, 0ms); }
 .image-node.ancestor-run-done::before { border:1px solid var(--ancestor-route-done); box-shadow:0 0 0 2px color-mix(in srgb, var(--ancestor-route-done) 18%, transparent); }
 .image-node.ancestor-run-failed::before { border:1.5px solid var(--ancestor-route-failed); box-shadow:0 0 0 3px color-mix(in srgb, var(--ancestor-route-failed) 16%, transparent); }
 @keyframes ancestor-node-breathe {
@@ -272,7 +272,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.smart-group-member-node .node-hint { display:none !important; }
 .image-node.smart-group-member-node .loop-smart-card::before { content:"Loop"; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:10px; font-weight:900; background:var(--soft); }
 .prompt-node-card { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; gap:7px; }
-.prompt-node-text { flex:1; min-height:72px; width:100%; resize:none; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word; border:1px solid rgba(148,163,184,.32); border-radius:13px; background:rgba(255,255,255,.74); color:var(--text); outline:none; padding:10px; font-size:11.2px; line-height:1.45; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.55); }
+.prompt-node-text { flex:1; min-height:48px; width:100%; resize:none; overflow:auto; white-space:pre-wrap; overflow-wrap:break-word; border:1px solid rgba(148,163,184,.32); border-radius:13px; background:rgba(255,255,255,.74); color:var(--text); outline:none; padding:10px; font-size:11.2px; line-height:1.45; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.45) transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.55); }
 .theme-dark .prompt-node-text { background:rgba(15,23,42,.42); border-color:rgba(148,163,184,.24); box-shadow:none; }
 .prompt-node-text::-webkit-scrollbar, .prompt-node-llm textarea::-webkit-scrollbar { width:7px; height:7px; }
 .prompt-node-text::-webkit-scrollbar-track, .prompt-node-llm textarea::-webkit-scrollbar-track { background:transparent; }
@@ -826,6 +826,10 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-node.dragging .node-port { opacity:0 !important; pointer-events:none !important; }
 .shell.port-dragging { cursor:crosshair !important; }
 .shell.port-magnetic-ready,.shell.port-magnetic-ready * { cursor:crosshair !important; }
+body.smart-node-box-resize,
+body.smart-node-box-resize .shell,
+body.smart-node-box-resize .shell * { cursor:nwse-resize !important; }
+body.smart-node-box-resize .node-port { pointer-events:none !important; }
 .image-node.drop-target { outline:2px dashed var(--strong); outline-offset:4px; border-radius:18px; }
 .image-node.drag-out { opacity:.5; }
 .run-time-pill { position:absolute; right:8px; top:8px; z-index:7; height:24px; padding:0 9px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:rgba(37,99,235,.92); color:#fff; font-size:10.5px; font-weight:800; font-variant-numeric:tabular-nums; box-shadow:0 8px 18px rgba(15,23,42,.18); pointer-events:none; }
