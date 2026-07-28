@@ -41,6 +41,7 @@ test('cancelled RunningHub logs retain the task id', () => {
         runningHubLogDescriptor:() => ({kind:'workflow', id:'wf-1', label:'Workflow'})
     });
     vm.runInContext(`
+        ${extractFunction('smartLoggableTaskId')}
         ${extractFunction('smartRunRequestMeta')}
         globalThis.meta = smartRunRequestMeta({
             kind:'image',
@@ -55,6 +56,38 @@ test('cancelled RunningHub logs retain the task id', () => {
     assert.equal(sandbox.meta.useWallet, true);
 });
 
+test('API image logs hide local wrapper ids and retain upstream ids', () => {
+    const sandbox = vm.createContext({});
+    vm.runInContext(`
+        ${extractFunction('smartLoggableTaskId')}
+        ${extractFunction('smartUpstreamTaskIdFromResult')}
+        ${extractFunction('smartLogTaskIds')}
+        ${extractFunction('smartRunRequestMeta')}
+        globalThis.meta = smartRunRequestMeta({
+            kind:'image',
+            settings:{engine:'api', provider_id:'venice', model:'z-image-turbo'},
+            taskIds:['canvas_img_local_1', 'upstream-1', 'canvas_img_local_2', 'upstream-2']
+        });
+        globalThis.upstream = smartUpstreamTaskIdFromResult(
+            {task_id:'upstream-result-1', request_id:'request-fallback'},
+            'canvas_img_local_1'
+        );
+        globalThis.visibleLegacyIds = smartLogTaskIds({
+            task_id:'canvas_img_legacy',
+            task_ids:['canvas_img_legacy', 'upstream-legacy']
+        });
+    `, sandbox);
+    assert.equal(sandbox.meta.task_id, 'upstream-1');
+    assert.deepEqual([...sandbox.meta.task_ids], ['upstream-1', 'upstream-2']);
+    assert.equal(sandbox.upstream, 'upstream-result-1');
+    assert.deepEqual([...sandbox.visibleLegacyIds], ['upstream-legacy']);
+    assert.match(jsSource, /const upstreamTaskId = smartUpstreamTaskIdFromResult\(result, taskId\);[\s\S]*?rememberSmartRunTaskId\(runContext, upstreamTaskId\)/);
+    assert.match(jsSource, /const taskIdSummary = taskIds\.length \? `ID \$\{taskIds\[0\]\}` : ''/);
+    assert.doesNotMatch(jsSource, /remainingTaskIdCount|另有 \$\{/);
+    assert.match(jsSource, /const taskIdTitle = taskIds\.map\(taskId => `ID \$\{taskId\}`\)\.join\('\\n'\)/);
+    assert.doesNotMatch(jsSource, /const backend = legacyRunningHubMetadata/);
+});
+
 test('generation nodes expose a dedicated cancel control and cancelled log style', () => {
     assert.match(jsSource, /data-smart-task-cancel=/);
     assert.match(jsSource, /cancelSmartNodeGeneration\(btn\.dataset\.smartTaskCancel/);
@@ -65,6 +98,11 @@ test('generation nodes expose a dedicated cancel control and cancelled log style
     assert.match(cssSource, /\.log-chip\.status-cancelled\s*\{/);
     assert.match(jsSource, /status:'cancelled'/);
     assert.match(jsSource, /log\.error && !logCancelled/);
+    assert.match(jsSource, /const copied = await copyTextToClipboard\(text\);[\s\S]*?toast\(copied \? tr\('canvas\.copied'\) : tr\('canvas\.copyFailed'\)\)/);
+    assert.match(cssSource, /\.toast\s*\{[^}]*position:fixed;[^}]*z-index:2147483000;/);
+    assert.doesNotMatch(jsSource, /el\.textContent = copied \?/);
+    assert.doesNotMatch(jsSource, /log-copy-feedback/);
+    assert.doesNotMatch(cssSource, /\.log-copy-feedback/);
 });
 
 test('timer and cancel corner controls do not overlap, and the composer run button becomes stop', () => {

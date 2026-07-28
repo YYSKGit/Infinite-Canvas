@@ -11811,6 +11811,20 @@ function smartRunPlatformLabel(run){
     if(run?.kind === 'video') return videoProviderById(s.videoProvider || '')?.name || s.videoProvider || 'Video';
     return apiProviderById(s.provider_id || '')?.name || s.provider_id || 'API';
 }
+function smartLoggableTaskId(value){
+    const taskId = String(value || '').trim();
+    return taskId && !taskId.startsWith('canvas_img_') ? taskId : '';
+}
+function smartUpstreamTaskIdFromResult(result, localTaskId=''){
+    if(!result || typeof result !== 'object') return '';
+    const taskId = smartLoggableTaskId(result.task_id || result.taskId || result.submit_id || result.submitId || result.request_id || result.requestId || '');
+    return taskId && taskId !== String(localTaskId || '').trim() ? taskId : '';
+}
+function smartLogTaskIds(request=null){
+    request = request || {};
+    const values = Array.isArray(request.task_ids) ? request.task_ids : [];
+    return [...new Set([...values, request.task_id || request.taskId || request.prompt_id || request.promptId || ''].map(smartLoggableTaskId).filter(Boolean))];
+}
 function smartRunRequestMeta(run){
     const s = run?.settings || {};
     let meta;
@@ -11834,7 +11848,7 @@ function smartRunRequestMeta(run){
     if(!meta && run?.kind === 'text') meta = {provider_id:s.provider_id || '', model:s.model || '', mode:'llm'};
     else if(!meta && run?.kind === 'video') meta = {provider_id:s.videoProvider || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
     else if(!meta) meta = {provider_id:s.provider_id || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
-    const taskIds = [...new Set([...(run?.taskIds || []), run?.taskId || ''].map(value => String(value || '').trim()).filter(Boolean))];
+    const taskIds = [...new Set([...(run?.taskIds || []), run?.taskId || ''].map(smartLoggableTaskId).filter(Boolean))];
     if(taskIds.length){
         meta.task_id = taskIds[0];
         if(taskIds.length > 1) meta.task_ids = taskIds;
@@ -12052,17 +12066,17 @@ function renderSmartCanvasLog(){
         }).join('');
         const date = new Date(log.createdAt || Date.now()).toLocaleString(window.StudioI18n?.lang() === 'en' ? 'en-US' : 'zh-CN');
         const req = log.request || {};
-        const taskId = req.task_id || req.taskId || req.prompt_id || req.promptId || '';
+        const taskIds = smartLogTaskIds(req);
+        const taskIdSummary = taskIds.length ? `ID ${taskIds[0]}` : '';
+        const taskIdTitle = taskIds.map(taskId => `ID ${taskId}`).join('\n');
         const legacyRunningHubMetadata = smartLogHasLegacyRunningHubMetadata(log);
         const modelLabel = legacyRunningHubMetadata ? '' : (log.model || '');
-        const backend = legacyRunningHubMetadata ? '' : (req.workflow_json || req.workflow || req.provider_id || req.providerId || req.backend || '');
         const sizeSummary = smartLogSizeSummary(log, outputs);
         const subParts = [
             date,
             `${window.StudioI18n?.lang() === 'en' ? 'outputs' : '输出'} ${outputs.length}`,
             sizeSummary,
-            taskId ? `ID ${taskId}` : '',
-            backend
+            taskIdSummary
         ].filter(Boolean);
         const logCancelled = log.status === 'cancelled';
         const logFailed = log.status === 'failed';
@@ -12076,7 +12090,7 @@ function renderSmartCanvasLog(){
                     ${modelLabel ? `<span class="log-chip">${escapeHtml(modelLabel)}</span>` : ''}
                     <span class="log-chip">${escapeHtml(formatRunDuration(log.runMs || 0))}</span>
                 </div>
-                <div class="log-subline">${subParts.map(part => `<span title="${escapeAttr(part)}">${escapeHtml(part)}</span>`).join('')}</div>
+                <div class="log-subline">${subParts.map(part => `<span title="${escapeAttr(part === taskIdSummary ? taskIdTitle : part)}">${escapeHtml(part)}</span>`).join('')}</div>
                 ${log.error && !logCancelled ? `<div class="log-error" title="${escapeAttr(log.error)}" data-error="${escapeAttr(log.error)}">${escapeHtml(log.error)}</div>` : ''}
                 <div class="log-prompt" title="${escapeAttr(log.prompt || tr('canvas.noPromptMeta'))}" data-prompt="${escapeAttr(log.prompt || '')}">${escapeHtml(log.prompt || tr('canvas.noPromptMeta'))}</div>
             </div>
@@ -12096,13 +12110,7 @@ function renderSmartCanvasLog(){
                 e.stopPropagation();
                 const text = el.dataset[key] || '';
                 const copied = await copyTextToClipboard(text);
-                const oldText = el.textContent;
-                el.textContent = copied ? tr('canvas.copied') : tr('canvas.copyFailed');
-                if(copied) el.classList.add('copied');
-                setTimeout(() => {
-                    el.textContent = oldText;
-                    el.classList.remove('copied');
-                }, 900);
+                toast(copied ? tr('canvas.copied') : tr('canvas.copyFailed'));
             };
         });
     };
@@ -23969,6 +23977,8 @@ async function pollSmartCanvasTask(taskId, runContext=null, veniceProgressIndex=
     activeSmartTaskPolls.set(pollKey, promise);
     try {
         const result = await promise;
+        const upstreamTaskId = smartUpstreamTaskIdFromResult(result, taskId);
+        if(upstreamTaskId) rememberSmartRunTaskId(runContext, upstreamTaskId);
         if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'succeeded');
         return result;
     } catch(error) {

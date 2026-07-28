@@ -585,6 +585,7 @@ test('RunningHub logs use the selected RH config instead of stale API model sett
     const loaded = loadProductionFunctions([
         'runningHubLogDescriptor',
         'smartRunTaskLabel',
+        'smartLoggableTaskId',
         'smartRunRequestMeta',
         'smartRunSnapshot',
         'smartLogHasLegacyRunningHubMetadata'
@@ -647,7 +648,7 @@ test('RunningHub logs use the selected RH config instead of stale API model sett
 });
 
 test('engine-specific log metadata wins over output media kind', () => {
-    const loaded = loadProductionFunctions(['smartRunTaskLabel', 'smartRunRequestMeta'], {
+    const loaded = loadProductionFunctions(['smartRunTaskLabel', 'smartLoggableTaskId', 'smartRunRequestMeta'], {
         runningHubLogDescriptor:() => ({kind:'app', id:'', label:'RunningHub'}),
         modelDisplayName:() => 'stale API model',
         tr:key => key,
