@@ -6235,8 +6235,15 @@ function veniceImageQuoteResolution(){
     if(longEdge >= 1800 || pixels >= 2400000) return '2K';
     return '1K';
 }
-function renderVeniceImageQuoteAmount(unitQuote){
-    const count = Math.max(1, Math.min(8, Number(settings.count || 1)));
+function veniceImageQuoteTaskCount(subject){
+    const fallback = Math.max(1, Math.min(8, Number(settings.count || 1)));
+    if(!subject) return fallback;
+    const defaultRefs = generationReferenceImagesForRun(subject, false, smartLoopContext);
+    const request = buildPromptRequest(subject, defaultRefs, false, smartLoopContext);
+    return smartExpectedGenerationTaskCount(request.refs || [], settings);
+}
+function renderVeniceImageQuoteAmount(unitQuote, taskCount=Math.max(1, Math.min(8, Number(settings.count || 1)))){
+    const count = Math.max(1, Number(taskCount) || 1);
     const totalQuote = Number(unitQuote) * count;
     const totalUsd = totalQuote / 100;
     const totalCny = totalUsd * 7;
@@ -6262,6 +6269,7 @@ function syncVeniceImageQuote(){
         return;
     }
     const subject = activeSettingsSubject() || activeComposerNode();
+    const taskCount = veniceImageQuoteTaskCount(subject);
     const payload = {
         provider_id:String(settings.provider_id || 'venice'),
         model:String(settings.model || ''),
@@ -6272,7 +6280,8 @@ function syncVeniceImageQuote(){
         setVeniceImageQuoteStatus('error', '暂无报价');
         return;
     }
-    const signature = JSON.stringify(payload);
+    const requestBody = JSON.stringify(payload);
+    const signature = JSON.stringify({...payload, task_count:taskCount});
     const subjectId = String(subject?.id || 'unbound');
     const activeKey = `${subjectId}:${signature}`;
     const cached = subject?.veniceImageQuoteCache?.signature === signature
@@ -6281,10 +6290,10 @@ function syncVeniceImageQuote(){
     if(cached && Number.isFinite(Number(cached.quote)) && Number.isFinite(Number(cached.cny))){
         const quote = Number(cached.quote);
         veniceImageQuoteSignature = activeKey;
-        renderVeniceImageQuoteAmount(quote);
+        renderVeniceImageQuoteAmount(quote, taskCount);
         return;
     }
-    // 批次数不属于请求签名：接口只询一次单张价格，展示时再乘当前张数。
+    // 上游仍只询一次单任务价格；本地任务数进入缓存签名，避免拆分数量变化后显示旧总价。
     if(activeKey === veniceImageQuoteSignature) return;
     veniceImageQuoteSignature = activeKey;
     if(veniceImageQuoteTimer) clearTimeout(veniceImageQuoteTimer);
@@ -6299,7 +6308,7 @@ function syncVeniceImageQuote(){
             const response = await fetch('/api/venice/image/quote', {
                 method:'POST',
                 headers:{'Content-Type':'application/json'},
-                body:signature,
+                body:requestBody,
                 signal:controller.signal
             });
             const data = await response.json().catch(() => ({}));
@@ -6315,7 +6324,7 @@ function syncVeniceImageQuote(){
                 subject.veniceImageQuoteCache = {signature, quote, usd, cny, updatedAt:cache.updatedAt};
                 scheduleSave();
             }
-            renderVeniceImageQuoteAmount(quote);
+            renderVeniceImageQuoteAmount(quote, taskCount);
         } catch(error) {
             if(error?.name === 'AbortError') return;
             if(requestToken !== veniceImageQuoteRequestToken || activeKey !== veniceImageQuoteSignature) return;
@@ -21420,10 +21429,10 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         const urls = resultMediaUrls(taskResult);
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
-    const runningHubCount = Math.max(1, Math.min(8, Number(activeSettings.count || 1)));
+    const runningHubJobs = smartImageGenerationJobs(refs, activeSettings);
     const urls = activeSettings.engine === 'runninghub'
-        ? (await Promise.all(Array.from({length:runningHubCount}, (_, index) =>
-            runRunningHubGeneration(prompt, refs, activeSettings, runContext, {index, total:runningHubCount})
+        ? (await Promise.all(runningHubJobs.map((job, index) =>
+            runRunningHubGeneration(prompt, job.refs, activeSettings, runContext, {index, total:runningHubJobs.length})
                 .then(result => {
                     finishRunningHubProgressTask(runContext, index, 'succeeded');
                     return result;
@@ -21645,9 +21654,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
         const runLog = smartRunSnapshot(rootNode, prompt, request.refs || [], logKind, request, runSettings);
         const runLogStart = nowMs();
-        const expectedCount = isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video'
-            ? Math.max(1, Math.min(8, Number(runSettings.count || 1)))
-            : 1;
+        const expectedCount = smartExpectedGenerationTaskCount(request.refs || [], runSettings);
         outputSlot.queued = false;
         outputSlot.running = true;
         outputSlot.pending = expectedCount;
@@ -22106,13 +22113,7 @@ async function runGeneration(event=null, options={}){
     const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, activeSettings);
     rememberRecentSmartSettings(activeSettings, node);
     const runLogStart = nowMs();
-    const expectedCount = logKind === 'video'
-        ? 1
-        : activeSettings.engine === 'runninghub'
-        ? Math.max(1, Math.min(8, Number(activeSettings.count || 1)))
-        : activeSettings.engine === 'comfy'
-        ? (activeSettings.comfyMode === 'text' || activeSettings.comfyMode === 'enhance' || activeSettings.comfyMode === 'edit' || activeSettings.comfyMode === 'custom' ? 1 : 1)
-        : Math.max(1, Math.min(8, Number(activeSettings.count || 1)));
+    const expectedCount = smartExpectedGenerationTaskCount(refs, activeSettings);
     const apiConcurrentRun = isApiLikeEngine(activeSettings.engine) || activeSettings.engine === 'runninghub' || activeSettings.engine === 'modelscope' || activeSettings.engine === 'comfy';
     if(!options.skipUndo) pushUndo();
     if(node.cascadePinned){
@@ -22189,9 +22190,10 @@ async function runGeneration(event=null, options={}){
             return {status:'completed', nodeId:node.id, outputs:outVideos};
         }
         if(activeSettings.engine === 'runninghub'){
-            const settled = await Promise.all(Array.from({length:expectedCount}, async (_, index) => {
+            const runningHubJobs = smartImageGenerationJobs(refs, activeSettings);
+            const settled = await Promise.all(runningHubJobs.map(async (job, index) => {
                 try {
-                    const batch = resultMediaUrls(await runRunningHubGeneration(prompt, refs, activeSettings, runContext, {index, total:expectedCount}));
+                    const batch = resultMediaUrls(await runRunningHubGeneration(prompt, job.refs, activeSettings, runContext, {index, total:runningHubJobs.length}));
                     throwIfSmartGenerationCancelled(runSignal);
                     if(!batch.length) throw new Error(tr('smart.errNoOutImages'));
                     finalizeSmartPendingTask(pendingNode, `runninghub_${index}`, batch, 'image');
@@ -22512,29 +22514,60 @@ function smartLogActualGenerationRequest(label, {kind='image', endpoint='', prom
         ...extra
     });
 }
+function smartImageGenerationRefBatches(refs, runSettings=settings){
+    const cleanRefs = (refs || []).filter(ref => ref?.url);
+    const images = imageRefsOnly(cleanRefs);
+    if(images.length <= 1) return [cleanRefs];
+    const sourceSettings = runSettings || settings;
+    const veniceImageEdit = isApiLikeEngine(sourceSettings.engine)
+        && sourceSettings.apiKind !== 'video'
+        && isVeniceProviderId(sourceSettings.provider_id || '');
+    const runningHubSingleImageInput = sourceSettings.engine === 'runninghub'
+        && rhActiveFields(sourceSettings).filter(field => rhFieldKind(field) === 'image').length === 1;
+    if(!veniceImageEdit && !runningHubSingleImageInput) return [cleanRefs];
+    const otherRefs = cleanRefs.filter(ref => mediaKindForItem(ref) !== 'image');
+    return images.map(image => [image, ...otherRefs]);
+}
+function smartImageGenerationJobs(refs, runSettings=settings){
+    const sourceSettings = runSettings || settings;
+    const variations = Math.max(1, Math.min(8, Number(sourceSettings.count || 1)));
+    return smartImageGenerationRefBatches(refs, sourceSettings).flatMap(batch =>
+        Array.from({length:variations}, (_, variationIndex) => ({refs:batch, variationIndex}))
+    );
+}
+function smartExpectedGenerationTaskCount(refs, runSettings=settings){
+    const sourceSettings = runSettings || settings;
+    if(isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind === 'video') return 1;
+    if(sourceSettings.engine === 'comfy') return 1;
+    return smartImageGenerationJobs(refs, sourceSettings).length;
+}
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null, runContext=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.provider_id);
-    const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
+    const jobs = smartImageGenerationJobs(refs, runSettings);
+    const count = jobs.length;
     const veniceImageProvider = isVeniceProviderId(runSettings.provider_id);
     if(veniceImageProvider) ensureVeniceProgress(runContext, {kind:'image', total:count, estimateMs:VENICE_IMAGE_ESTIMATE_MS});
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
         : {};
     const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
-    const payload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(apiImageReferencePayload)};
-    const requestBodyJson = JSON.stringify(payload);
+    const basePayload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1};
+    const payloads = jobs.map(job => ({
+        ...basePayload,
+        reference_images:imageRefsOnly(job.refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(apiImageReferencePayload)
+    }));
     smartLogActualGenerationRequest('API Image', {
         kind:'image',
         endpoint:'/api/canvas-image-tasks',
-        provider:payload.provider_id,
-        model:payload.model,
-        prompt:payload.prompt,
-        counts:smartPayloadReferenceMediaCounts(payload),
-        extra:{taskCount:count, size:payload.size, requestBodyJson}
+        provider:basePayload.provider_id,
+        model:basePayload.model,
+        prompt:basePayload.prompt,
+        counts:smartPayloadReferenceMediaCounts(payloads[0] || basePayload),
+        extra:{taskCount:count, referenceBatchCount:smartImageGenerationRefBatches(refs, runSettings).length, size:basePayload.size, requestBodyJson:JSON.stringify(payloads[0] || basePayload)}
     });
     try {
-        const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:requestBodyJson, signal:runContext?.controller?.signal}).then(async r => {
+        const tasks = await Promise.all(payloads.map(payload => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:runContext?.controller?.signal}).then(async r => {
             if(!r.ok) throw new Error(await r.text());
             return r.json();
         })));
@@ -22545,7 +22578,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
                 if(slot) slot.taskId = String(task?.task_id || '');
             });
         }
-        return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+        return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:basePayload.provider_id, model:basePayload.model};
     } catch(error) {
         if(veniceImageProvider){
             for(let index = 0; index < count; index++) finishVeniceProgressTask(runContext, index, 'failed');
@@ -22568,7 +22601,7 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings, runCo
     const ref = selectedRunningHubRef(runSettings);
     if(!ref) throw new Error(tr('smart.rhNeedConfig'));
     const progressIndex = Math.max(0, Number(progressMeta.index) || 0);
-    const progressTotal = Math.max(1, Math.min(8, Number(progressMeta.total) || 1));
+    const progressTotal = Math.max(1, Number(progressMeta.total) || 1);
     ensureRunningHubProgress(runContext, progressTotal);
     updateRunningHubProgressTask(runContext, progressIndex, {
         status:'submitting',
@@ -23118,7 +23151,7 @@ function runningHubProgressNodeForContext(context){
 function ensureRunningHubProgress(context, total=1){
     const node = runningHubProgressNodeForContext(context);
     if(!node) return null;
-    const count = Math.max(1, Math.min(8, Number(total) || 1));
+    const count = Math.max(1, Number(total) || 1);
     if(
         !node.runningHubProgress
         || node.runningHubProgress.runId !== context.runId
@@ -23426,7 +23459,7 @@ function veniceProgressFraction(elapsedMs, estimateMs){
 function ensureVeniceProgress(context, {kind='image', total=1, estimateMs=null}={}){
     const node = runningHubProgressNodeForContext(context);
     if(!node || !context) return null;
-    const count = Math.max(1, Math.min(8, Number(total) || 1));
+    const count = Math.max(1, Number(total) || 1);
     if(
         !node.veniceProgress
         || node.veniceProgress.runId !== context.runId

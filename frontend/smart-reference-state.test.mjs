@@ -77,6 +77,134 @@ function loadProductionFunctions(names, context={}){
     return {sandbox, ...sandbox.__functions};
 }
 
+test('Venice image edits and single-slot RunningHub workflows fan out input images', () => {
+    const imageRefs = [
+        {url:'/a.png', kind:'image'},
+        {url:'/b.png', kind:'image'}
+    ];
+    let runningHubImageFields = 1;
+    const loaded = loadProductionFunctions([
+        'smartImageGenerationRefBatches',
+        'smartImageGenerationJobs',
+        'smartExpectedGenerationTaskCount'
+    ], {
+        settings:{},
+        imageRefsOnly:refs => refs.filter(ref => ref.kind === 'image'),
+        mediaKindForItem:ref => ref.kind || 'image',
+        isApiLikeEngine:engine => engine === 'api',
+        isVeniceProviderId:providerId => providerId === 'venice',
+        rhActiveFields:() => Array.from({length:runningHubImageFields}, (_, index) => ({fieldType:'IMAGE', index})),
+        rhFieldKind:field => field.fieldType === 'IMAGE' ? 'image' : 'text'
+    });
+
+    const veniceSettings = {engine:'api', apiKind:'image', provider_id:'venice', count:2};
+    assert.deepEqual(
+        Array.from(loaded.smartImageGenerationRefBatches(imageRefs, veniceSettings), batch => Array.from(batch, ref => ref.url)),
+        [['/a.png'], ['/b.png']]
+    );
+    assert.equal(loaded.smartImageGenerationJobs(imageRefs, veniceSettings).length, 4);
+    assert.equal(loaded.smartExpectedGenerationTaskCount(imageRefs, veniceSettings), 4);
+
+    const runningHubSettings = {engine:'runninghub', count:1};
+    assert.deepEqual(
+        Array.from(loaded.smartImageGenerationRefBatches(imageRefs, runningHubSettings), batch => Array.from(batch, ref => ref.url)),
+        [['/a.png'], ['/b.png']]
+    );
+
+    runningHubImageFields = 2;
+    assert.deepEqual(
+        Array.from(loaded.smartImageGenerationRefBatches(imageRefs, runningHubSettings), batch => Array.from(batch, ref => ref.url)),
+        [['/a.png', '/b.png']]
+    );
+
+    const genericSettings = {engine:'api', apiKind:'image', provider_id:'generic', count:1};
+    assert.deepEqual(
+        Array.from(loaded.smartImageGenerationRefBatches(imageRefs, genericSettings), batch => Array.from(batch, ref => ref.url)),
+        [['/a.png', '/b.png']]
+    );
+});
+
+test('fan-out is scoped away from Venice video and Comfy generation', () => {
+    const refs = [{url:'/a.png', kind:'image'}, {url:'/b.png', kind:'image'}];
+    const loaded = loadProductionFunctions([
+        'smartImageGenerationRefBatches',
+        'smartImageGenerationJobs',
+        'smartExpectedGenerationTaskCount'
+    ], {
+        settings:{},
+        imageRefsOnly:values => values.filter(ref => ref.kind === 'image'),
+        mediaKindForItem:ref => ref.kind || 'image',
+        isApiLikeEngine:engine => engine === 'api',
+        isVeniceProviderId:providerId => providerId === 'venice',
+        rhActiveFields:() => [],
+        rhFieldKind:() => 'text'
+    });
+
+    assert.equal(loaded.smartExpectedGenerationTaskCount(refs, {
+        engine:'api',
+        apiKind:'video',
+        provider_id:'venice',
+        count:8
+    }), 1);
+    assert.equal(loaded.smartExpectedGenerationTaskCount(refs, {
+        engine:'comfy',
+        apiKind:'image',
+        count:8
+    }), 1);
+});
+
+test('Venice fan-out submits one reference image per API task', async () => {
+    const requestBodies = [];
+    let taskIndex = 0;
+    const loaded = loadProductionFunctions([
+        'smartImageGenerationRefBatches',
+        'smartImageGenerationJobs',
+        'apiImageReferencePayload',
+        'runApiGeneration'
+    ], {
+        settings:{},
+        imageRefsOnly:refs => refs.filter(ref => ref.kind === 'image'),
+        mediaKindForItem:ref => ref.kind || 'image',
+        isApiLikeEngine:engine => engine === 'api',
+        isVeniceProviderId:providerId => providerId === 'venice',
+        rhActiveFields:() => [],
+        rhFieldKind:() => 'text',
+        beginVeniceCreditsFastRefresh:() => 'credits-token',
+        endVeniceCreditsFastRefresh:() => {},
+        ensureVeniceProgress:() => {},
+        finishVeniceProgressTask:() => {},
+        smartLogActualGenerationRequest:() => {},
+        smartPayloadReferenceMediaCounts:() => ({total:1, images:1, videos:0, audios:0}),
+        sizeForRun:() => '1024x1024',
+        rememberSmartRunTaskId:() => {},
+        runningHubProgressNodeForContext:() => null,
+        tr:key => key,
+        VENICE_IMAGE_ESTIMATE_MS:1000,
+        SMART_REFERENCE_IMAGE_MAX:20,
+        fetch:async (_url, options) => {
+            requestBodies.push(JSON.parse(options.body));
+            const id = `task-${++taskIndex}`;
+            return {
+                ok:true,
+                json:async () => ({task_id:id}),
+                text:async () => ''
+            };
+        }
+    });
+
+    const result = await loaded.runApiGeneration(
+        'edit each image',
+        [{url:'/a.png', kind:'image'}, {url:'/b.png', kind:'image'}],
+        {engine:'api', apiKind:'image', provider_id:'venice', model:'z-image-turbo', count:2}
+    );
+
+    assert.equal(result.taskIds.length, 4);
+    assert.deepEqual(
+        requestBodies.map(body => body.reference_images.map(ref => ref.url)),
+        [['/a.png'], ['/a.png'], ['/b.png'], ['/b.png']]
+    );
+});
+
 test('buildPromptRequest preserves upstream provenance in the refs saved for reruns', () => {
     let promptParts = [];
     const {buildPromptRequest} = loadProductionFunctions(['smartGenerationRequestRef', 'buildPromptRequest'], {
@@ -294,6 +422,34 @@ test('Venice quote badges prioritize the remaining generation count', () => {
     assert.equal(loaded.veniceQuoteRemainingCountText(44), '12');
     assert.equal(loaded.veniceQuoteBadgeText(44), '12');
     assert.equal(loaded.veniceQuoteBadgeText(0), '免费');
+});
+
+test('Venice image quote totals use the expanded fan-out task count', () => {
+    let rendered = null;
+    const loaded = loadProductionFunctions([
+        'veniceImageQuoteTaskCount',
+        'renderVeniceImageQuoteAmount'
+    ], {
+        settings:{count:2},
+        smartLoopContext:null,
+        generationReferenceImagesForRun:() => [
+            {url:'/a.png', kind:'image'},
+            {url:'/b.png', kind:'image'}
+        ],
+        buildPromptRequest:(_subject, refs) => ({refs}),
+        smartExpectedGenerationTaskCount:(refs, sourceSettings) => refs.length * sourceSettings.count,
+        veniceQuoteBadgeText:quote => String(quote),
+        setVeniceImageQuoteStatus:(status, text, title) => {
+            rendered = {status, text, title};
+        }
+    });
+
+    const taskCount = loaded.veniceImageQuoteTaskCount({id:'subject'});
+    assert.equal(taskCount, 4);
+    loaded.renderVeniceImageQuoteAmount(11, taskCount);
+    assert.equal(rendered.status, 'ready');
+    assert.equal(rendered.text, '44');
+    assert.match(rendered.title, /× 4 = 44/);
 });
 
 test('Venice credit fast refresh is scoped to Venice providers only', () => {

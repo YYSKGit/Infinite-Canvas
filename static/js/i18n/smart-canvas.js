@@ -92,7 +92,7 @@
         "smart.exportDone": { zh: "已导出 {n} 个文件", en: "Exported {n} files" },
         "smart.exportPickerUnsupported": { zh: "当前浏览器不支持选择文件夹，已使用默认导出路径", en: "Folder picker is unavailable. Used the default export path instead." },
         "smart.hintEmpty": { zh: "支持图片 / 视频 / 音频，也可直接文生图", en: "Images, video, audio, or run text-to-image directly" },
-        "smart.hintMulti": { zh: "多图会作为同一组参考图发送", en: "All images will be sent as one reference set" },
+        "smart.hintMulti": { zh: "多图会按当前模型自动处理", en: "Multiple images are handled automatically for the current model" },
         "smart.hintSingle": { zh: "点击后在下方输入编辑需求", en: "Click and type editing instructions below" },
         "smart.hintPending": { zh: "正在生成…", en: "Generating…" },
         "smart.deleteNode": { zh: "删除节点", en: "Delete node" },
