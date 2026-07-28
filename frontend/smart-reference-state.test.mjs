@@ -471,3 +471,28 @@ test('engine-specific log metadata wins over output media kind', () => {
         {workflow_json:'video-workflow.json', mode:'custom'}
     );
 });
+
+test('live generation freezes image LOD and keeps decoded media reusable', () => {
+    const runningNode = {id:'running', running:true, images:[{url:'/existing.png'}]};
+    const loaded = loadProductionFunctions([
+        'smartImageLodCandidateActive',
+        'smartNodeHasLiveMedia'
+    ], {
+        nodes:[runningNode],
+        nodeHasLiveRunState:node => Boolean(node?.running)
+    });
+    const img = {
+        dataset:{smartImageLodFrame:''},
+        closest:selector => selector === '.image-node' ? {dataset:{id:'running'}} : null
+    };
+
+    assert.equal(loaded.smartImageLodCandidateActive(img), false);
+    assert.equal(loaded.smartNodeHasLiveMedia(runningNode), true);
+
+    runningNode.running = false;
+    assert.equal(loaded.smartImageLodCandidateActive(img), true);
+});
+
+test('fresh loading overlays inherit the current spinner phase', () => {
+    assert.match(extractFunction('nodeBodyHtml'), /--spinner-rotation:\$\{spinnerRotation\}deg/);
+});

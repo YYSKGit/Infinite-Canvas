@@ -4,14 +4,14 @@
     --text:#111827; --muted:#64748b; --faint:#94a3b8; --line:#e8edf3; --soft:#f8fafc;
     --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff; --connection-flow:#3b82f6;
     --cascade-pin:#d97706; --cascade-pin-soft:rgba(217,119,6,.16);
-    --ancestor-route-wait:rgba(59,130,246,.38); --ancestor-route-active:#2563eb; --ancestor-route-done:rgba(37,99,235,.62); --ancestor-route-failed:#dc2626; --ancestor-route-source:rgba(100,116,139,.58);
+    --ancestor-route-wait:rgba(59,130,246,.38); --ancestor-route-active:#2563eb; --ancestor-route-done:rgba(37,99,235,.62); --ancestor-route-failed:#dc2626; --ancestor-route-source:rgba(100,116,139,.58); --ancestor-route-preview:rgba(59,130,246,.44); --ancestor-route-skipped:rgba(217,119,6,.38);
 }
 .theme-dark {
     --page:#0f141d; --grid:rgba(148,163,184,.18); --panel:rgba(23,29,41,.92); --card:#171d29;
     --text:#e5e9f0; --muted:#8f9aab; --faint:#657286; --line:#2a3444; --soft:#111722;
     --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d; --connection-flow:#60a5fa;
     --cascade-pin:#f59e0b; --cascade-pin-soft:rgba(245,158,11,.18);
-    --ancestor-route-wait:rgba(96,165,250,.38); --ancestor-route-active:#60a5fa; --ancestor-route-done:rgba(96,165,250,.62); --ancestor-route-failed:#f87171; --ancestor-route-source:rgba(148,163,184,.52);
+    --ancestor-route-wait:rgba(96,165,250,.38); --ancestor-route-active:#60a5fa; --ancestor-route-done:rgba(96,165,250,.62); --ancestor-route-failed:#f87171; --ancestor-route-source:rgba(148,163,184,.52); --ancestor-route-preview:rgba(96,165,250,.46); --ancestor-route-skipped:rgba(245,158,11,.34);
 }
 * { box-sizing:border-box; }
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
@@ -747,6 +747,24 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .connection-layer.conn-reduce-motion .conn-ancestor-flow { animation:none; stroke-dashoffset:0; }
 .connection-layer .conn-cascade-done { stroke-dasharray:none; opacity:1; }
 .connection-layer .conn-ancestor { stroke-dasharray:none; transition:stroke .18s ease, stroke-width .18s ease, stroke-opacity .18s ease; }
+.connection-layer .conn-ancestor-preview { opacity:.78; }
+.connection-layer .conn-ancestor-skipped { stroke-dasharray:3 7; opacity:.72; }
+.connection-layer .conn-ancestor-preview.conn-ancestor-selected { stroke:var(--ancestor-route-preview); opacity:.9; }
+.connection-layer .conn-ancestor-skipped.conn-ancestor-selected { stroke:var(--ancestor-route-skipped); opacity:.82; }
+.connection-layer .conn-ancestor-wait.conn-ancestor-selected { stroke:var(--ancestor-route-wait); opacity:.9; }
+.connection-layer .conn-ancestor-active.conn-ancestor-selected { stroke:var(--ancestor-route-active); opacity:1; }
+.connection-layer .conn-ancestor-done.conn-ancestor-selected { stroke:var(--ancestor-route-done); opacity:.92; }
+.connection-layer .conn-ancestor-failed.conn-ancestor-selected { stroke:var(--ancestor-route-failed); opacity:1; }
+.connection-layer .conn-selection-flow-ancestor {
+    stroke:color-mix(in srgb, var(--ancestor-route-active) 76%, var(--card));
+    stroke-width:3;
+    filter:drop-shadow(0 0 2px color-mix(in srgb, var(--ancestor-route-active) 24%, transparent));
+}
+.connection-layer .conn-selection-flow-ancestor-skipped {
+    stroke:color-mix(in srgb, var(--cascade-pin) 78%, var(--card));
+    stroke-width:2.7;
+    filter:none;
+}
 .connection-layer .conn-ancestor-wait { opacity:.72; }
 .connection-layer .conn-ancestor-active { opacity:1; filter:drop-shadow(0 0 3px color-mix(in srgb, var(--ancestor-route-active) 32%, transparent)); }
 .connection-layer .conn-ancestor-done { opacity:.82; }
@@ -760,6 +778,10 @@ video.node-img { object-fit:cover; background:#0f172a; }
     filter:drop-shadow(0 0 4px color-mix(in srgb, var(--ancestor-route-active) 56%, transparent));
     animation:ancestor-route-flow 1.1s linear infinite;
     animation-delay:var(--ancestor-route-delay, 0ms);
+}
+.connection-layer .conn-ancestor-flow-selected {
+    stroke:color-mix(in srgb, var(--ancestor-route-active) 82%, #fff);
+    filter:drop-shadow(0 0 5px color-mix(in srgb, var(--ancestor-route-active) 64%, transparent));
 }
 .connection-layer .conn-ancestor-endpoint { transition:fill .18s ease, r .18s ease; }
 .connection-layer .conn-history { stroke-dasharray:6 5; }

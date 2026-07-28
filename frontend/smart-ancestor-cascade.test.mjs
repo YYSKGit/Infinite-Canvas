@@ -101,6 +101,10 @@ test('runs only ancestors of the selected node and excludes downstream siblings'
     assert.equal(plan.invalid, '');
     assert.deepEqual([...plan.stepIds], ['a', 'b', 'target']);
     assert.deepEqual(new Set(plan.reachableIds), new Set(['upload', 'a', 'b', 'target']));
+    assert.deepEqual(
+        new Set(plan.reachableConnections.map(connection => `${connection.from}->${connection.to}`)),
+        new Set(['upload->a', 'a->b', 'b->target'])
+    );
     assert.ok(!plan.activeIds.includes('sibling'));
 });
 
@@ -143,6 +147,11 @@ test('a pinned node cuts off itself and its exclusive upstream path', () => {
     assert.deepEqual([...plan.stepIds], ['target']);
     assert.deepEqual([...plan.pinnedBoundaryIds], ['checkpoint']);
     assert.deepEqual(new Set(plan.skippedIds), new Set(['upload', 'a', 'checkpoint']));
+    assert.deepEqual(
+        new Set(plan.reachableConnections.map(connection => `${connection.from}->${connection.to}`)),
+        new Set(['upload->a', 'a->checkpoint', 'checkpoint->target'])
+    );
+    assert.deepEqual(plan.connections.map(connection => `${connection.from}->${connection.to}`), ['checkpoint->target']);
 });
 
 test('shared upstream still runs when required by an unpinned branch', () => {
@@ -235,9 +244,15 @@ test('hover preview marks the complete ancestor chain before execution', () => {
     assert.deepEqual([...sandbox.states], ['', 'source', 'preview', 'boundary', 'skipped', 'preview']);
 });
 
-test('ancestor route owns its animation instead of stacking selected-line flow', () => {
+test('ancestor route keeps normal selection flow except on the actively moving edge', () => {
     const connectionRenderer = extractFunction('renderConnections');
-    assert.match(connectionRenderer, /hasSelectionFlow = isSelectedLine && !isAncestorCascade/);
+    assert.match(connectionRenderer, /hasSelectionFlow = isSelectedLine && !\(isAncestorCascade && ancestorState === 'active'\)/);
     assert.match(connectionRenderer, /conn-ancestor-flow/);
-    assert.match(connectionRenderer, /cutControl = !isAncestorCascade/);
+    assert.match(connectionRenderer, /conn-ancestor-preview/);
+    assert.match(connectionRenderer, /conn-ancestor-skipped/);
+    assert.match(connectionRenderer, /conn-selection-flow-ancestor/);
+    assert.match(connectionRenderer, /conn-selection-flow-ancestor-skipped/);
+    assert.match(connectionRenderer, /conn-ancestor-selected/);
+    assert.match(connectionRenderer, /conn-ancestor-flow-selected/);
+    assert.match(connectionRenderer, /cutControl = !isAncestorContextLine/);
 });
