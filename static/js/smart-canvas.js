@@ -6092,19 +6092,22 @@ function syncVeniceVideoQuote(){
         hideVeniceVideoQuote();
         return;
     }
+    const subject = activeSettingsSubject() || activeComposerNode();
+    const defaultRefs = subject ? generationReferenceImagesForRun(subject, false, smartLoopContext) : [];
+    const request = subject ? buildPromptRequest(subject, defaultRefs, false, smartLoopContext) : {refs:[]};
     const payload = {
         provider_id:String(settings.videoProvider || 'venice'),
         model:String(settings.videoModel || ''),
         duration:Math.max(1, Math.min(60, Number(settings.videoDuration) || 5)),
         resolution:String(settings.videoResolution || '480p'),
-        generate_audio:Boolean(settings.videoGenerateAudio)
+        generate_audio:Boolean(settings.videoGenerateAudio),
+        has_media_input:Array.isArray(request.refs) && request.refs.some(ref => ['image','video','audio'].includes(mediaKindForItem(ref)))
     };
     if(!payload.model){
         setVeniceVideoQuoteStatus('error', '暂无报价');
         return;
     }
     const signature = JSON.stringify(payload);
-    const subject = activeSettingsSubject() || activeComposerNode();
     const subjectId = String(subject?.id || 'unbound');
     const activeKey = `${subjectId}:${signature}`;
     const cached = subject?.veniceVideoQuoteCache;
@@ -17292,6 +17295,7 @@ function renderInputThumbsRow(node){
     const dedup = node ? visibleReferenceImagesFor(node) : [];
     promptEditor?.setReferenceContext(dedup.map(withPromptReferencePreview));
     syncVeniceImageQuote();
+    syncVeniceVideoQuote();
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const addActive = mentionInsertMode === 'manual-ref';
     // 仅当参考图集合/状态真正变化时才重建缩略图 DOM。否则每敲一个字都重建并重新解码所有图片，

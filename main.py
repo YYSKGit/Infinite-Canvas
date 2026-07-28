@@ -2541,6 +2541,7 @@ class VeniceVideoQuoteRequest(BaseModel):
     duration: int = 5
     resolution: str = "480p"
     generate_audio: bool = False
+    has_media_input: bool = False
 
 class VeniceImageQuoteRequest(BaseModel):
     provider_id: str = "venice"
@@ -8898,6 +8899,13 @@ VENICE_IMAGE_EDIT_MODEL_ALIASES = {
     "seedream-v5-lite": "seedream-v5-lite-edit",
     "seedream-v4": "seedream-v4-edit"
 }
+VENICE_VIDEO_TEXT_MODEL_ALIASES = {
+    "seedance-2-0-enhanced-reference-to-video": "seedance-2-0-enhanced-text-to-video",
+    "seedance-2-0-mini-enhanced-reference-to-video": "seedance-2-0-mini-enhanced-text-to-video",
+    "wan-2-7-reference-to-video": "wan-2-7-text-to-video",
+    "wan-2-7-image-to-video": "wan-2-7-text-to-video",
+    "wan-2-7-enhanced-image-to-video": "wan-2-7-enhanced-text-to-video"
+}
 VENICE_FREE_IMAGE_MODELS = frozenset({
     "chroma",
     "firered-image-edit",
@@ -8992,6 +9000,22 @@ def venice_image_edit_model(model):
     if normalized.endswith("-edit"):
         return raw
     return VENICE_IMAGE_EDIT_MODEL_ALIASES.get(normalized)
+
+def venice_video_text_model(model):
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+    normalized = raw.lower().replace("_", "-")
+    if normalized.endswith("-text-to-video"):
+        return raw
+    return VENICE_VIDEO_TEXT_MODEL_ALIASES.get(normalized)
+
+def venice_video_has_media(payload: CanvasVideoRequest) -> bool:
+    if any(str(getattr(ref, "url", "") or "").strip() for ref in (payload.images or [])):
+        return True
+    if any(str(url or "").strip() for url in (payload.videos or [])):
+        return True
+    return any(str(url or "").strip() for url in (payload.audios or []))
 
 def venice_video_requires_face_consent(model):
     text = str(model or "").strip().lower()
@@ -9503,7 +9527,14 @@ async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queu
     raise HTTPException(status_code=504, detail=f"Venice 视频生成任务超时：{last_payload or queue_id}{timeout_hint} (task_id={queue_id})")
 
 async def generate_venice_video(client, payload, provider, requested_model):
-    model = selected_model(requested_model, "seedance-2-0-enhanced-reference-to-video")
+    requested_model = selected_model(requested_model, "seedance-2-0-enhanced-reference-to-video")
+    has_media_input = venice_video_has_media(payload)
+    model = requested_model if has_media_input else venice_video_text_model(requested_model)
+    if not model:
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前选择的 Venice 视频模型 {requested_model} 没有对应的文生视频模型。",
+        )
     aspect_ratio = venice_video_aspect_ratio(payload)
     provider_prompts = payload.provider_prompts if isinstance(payload.provider_prompts, dict) else {}
     prompt_text = str(provider_prompts.get("venice_video") or payload.prompt or "").strip()
@@ -9517,7 +9548,7 @@ async def generate_venice_video(client, payload, provider, requested_model):
         "simpleMode": False,
     }
     body.update(venice_video_image_fields(payload))
-    if venice_video_requires_face_consent(model):
+    if has_media_input and venice_video_requires_face_consent(model):
         body["faceConsent"] = dict(VENICE_SEEDANCE_FACE_CONSENT)
     async def send(jwt, _user_id):
         queue_headers = {
@@ -14012,10 +14043,17 @@ async def get_venice_video_quote(payload: VeniceVideoQuoteRequest):
     provider = get_api_provider(payload.provider_id)
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
+    requested_model = selected_model(payload.model, "seedance-2-0-reference-to-video")
+    model = requested_model if payload.has_media_input else venice_video_text_model(requested_model)
+    if not model:
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前选择的 Venice 视频模型 {requested_model} 没有对应的文生视频模型。",
+        )
     body = {
         "audio": bool(payload.generate_audio),
         "duration": str(max(1, min(60, int(payload.duration or 5)))),
-        "modelId": selected_model(payload.model, "seedance-2-0-reference-to-video"),
+        "modelId": model,
         "resolution": str(payload.resolution or "480p"),
         "variants": 1,
     }
@@ -14042,6 +14080,9 @@ async def get_venice_video_quote(payload: VeniceVideoQuoteRequest):
         raise HTTPException(status_code=502, detail="Venice 视频报价接口返回了无效价格。")
     return {
         "provider_id": str(provider.get("id") or payload.provider_id),
+        "model": model,
+        "requested_model": requested_model,
+        "is_text_to_video": not payload.has_media_input,
         "quote": quote,
         "usd": round(quote / 100, 4),
         "cny": round(quote / 100 * 7, 2),
