@@ -443,6 +443,70 @@ test('live generation hides all hover chrome except the dedicated cancel action'
     );
 });
 
+test('clicking a locked running video selects its node without entering the video state machine', () => {
+    const helperSource = extractFunction('selectLockedRunningVideoNode');
+    const sandbox = {
+        nodes:[{id:'video-running', running:true}, {id:'video-idle', running:false}],
+        selectedId:'',
+        selectedIds:['previous'],
+        selectedImage:{nodeId:'previous', index:2},
+        smartCascadeSilentSelection:true,
+        nodeHasLiveRunState:node => Boolean(node?.running),
+        smartCascadeAnyRunning:() => true,
+        syncSelectionUiCalls:0,
+        updateComposerCalls:0,
+        syncSelectionUi:() => { sandbox.syncSelectionUiCalls++; },
+        updateComposer:() => { sandbox.updateComposerCalls++; }
+    };
+    vm.runInNewContext(`
+        ${helperSource}
+        globalThis.runningResult = selectLockedRunningVideoNode('video-running');
+        globalThis.runningSelection = {
+            selectedId,
+            selectedIds:[...selectedIds],
+            selectedImage:{...selectedImage},
+            smartCascadeSilentSelection
+        };
+        globalThis.idleResult = selectLockedRunningVideoNode('video-idle');
+    `, sandbox);
+    assert.equal(sandbox.runningResult, true);
+    assert.equal(sandbox.idleResult, false);
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(sandbox.runningSelection)),
+        {
+            selectedId:'video-running',
+            selectedIds:[],
+            selectedImage:{nodeId:'', index:-1},
+            smartCascadeSilentSelection:false
+        }
+    );
+    assert.equal(sandbox.syncSelectionUiCalls, 1);
+    assert.equal(sandbox.updateComposerCalls, 1);
+
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(
+        bindNodeSource,
+        /mediaKindForItem\(target\.image \|\| \{\}\) === 'video'[\s\S]*?if\(selectLockedRunningVideoNode\(id\)\) return;[\s\S]*?smartActivateVideoPreview\(item\)/
+    );
+    assert.doesNotMatch(helperSource, /smartActivateVideoPreview|playSmartCanvasVideo|resetSmartCanvasVideo|syncSmartCanvasVideoSelection/);
+});
+
+test('image clicks select immediately while double clicks only add preview behavior', () => {
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    const imageClickBlock = bindNodeSource.match(
+        /item\.addEventListener\('click',[\s\S]*?item\.addEventListener\('dblclick',[\s\S]*?\}, true\);/
+    )?.[0] || '';
+    assert.ok(imageClickBlock, 'missing image click and double-click handlers');
+    assert.doesNotMatch(imageClickBlock, /setTimeout\(/);
+    assert.match(
+        imageClickBlock,
+        /selectedId = id;[\s\S]*?selectedImage = \{nodeId:target\.targetNodeId, index:target\.imageIndex\};[\s\S]*?syncSelectionUi\(\);[\s\S]*?updateComposer\(\);/
+    );
+    const doubleClickBlock = imageClickBlock.slice(imageClickBlock.indexOf("item.addEventListener('dblclick'"));
+    assert.match(doubleClickBlock, /openImagePreviewSmart\(target\.targetNodeId, target\.imageIndex\)/);
+    assert.doesNotMatch(doubleClickBlock, /selectedId = id|syncSelectionUi\(\)|updateComposer\(\)/);
+});
+
 test('image hover chrome is inert and cannot leak interactions into the node', () => {
     assert.match(cssSource, /\.image-resolution-badge\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/);
     const bindNodeSource = extractFunction('bindNodeEvents');

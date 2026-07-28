@@ -3969,6 +3969,19 @@ function playVeniceCreditsChangeSound(direction='increase'){
     } catch(e) {}
 }
 function selectedNode(){ return nodes.find(n => n.id === selectedId) || null; }
+function selectLockedRunningVideoNode(nodeId){
+    const node = nodes.find(candidate => candidate.id === nodeId);
+    if(!nodeHasLiveRunState(node)) return false;
+    // Live video keeps its playback surface inert. Select the owning node
+    // directly without entering any video playback, preview, or control path.
+    selectedId = nodeId;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
+    syncSelectionUi();
+    updateComposer();
+    return true;
+}
 function clearSelection(){
     savePromptDraftForCurrent();
     selectedId = '';
@@ -13834,6 +13847,7 @@ function bindNodeEvents(){
                     clearImageClickTimer();
                     suppressImageClickUntil = Date.now() + 260;
                     hideRunTimerForNode(target.owner || owner);
+                    if(selectLockedRunningVideoNode(id)) return;
                     smartActivateVideoPreview(item);
                     return;
                 }
@@ -13842,18 +13856,14 @@ function bindNodeEvents(){
                     suppressImageClickUntil = Date.now() + 260;
                     return;
                 }
-                clearImageClickTimer();
-                imageClickTimer = setTimeout(() => {
-                    imageClickTimer = null;
                 hideRunTimerForNode(owner);
                 selectedId = id;
                 selectedIds = [];
                 // Composer 绑定节点本身；这里记录图层焦点，用于交叠时置顶和工具栏目标。
                 selectedImage = {nodeId:target.targetNodeId, index:target.imageIndex};
-                    if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
-                    syncSelectionUi();
-                    updateComposer();
-                }, 220);
+                if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
+                syncSelectionUi();
+                updateComposer();
             });
         item.addEventListener('dblclick', e => {
             if(e.target.closest('video,audio')) return;
@@ -13868,11 +13878,6 @@ function bindNodeEvents(){
                 smartActivateVideoPreview(item);
                 return;
             }
-            selectedId = id;
-            selectedIds = [];
-            selectedImage = {nodeId:target.targetNodeId, index:target.imageIndex};
-            syncSelectionUi();
-            updateComposer();
             openImagePreviewSmart(target.targetNodeId, target.imageIndex);
         }, true);
         });
