@@ -12389,8 +12389,8 @@ function runningHubProgressLabel(node){
     const tasks = runningHubProgressTasks(node);
     if(!tasks.length) return '';
     const completed = tasks.filter(task => task.status === 'succeeded').length;
-    const active = tasks.find(task => task.nodeName && !['succeeded','failed','cancelled'].includes(task.status))
-        || tasks.find(task => !['succeeded','failed','cancelled'].includes(task.status));
+    const active = tasks.find(task => task.nodeName && !['succeeded','failed','cancelled','canceled'].includes(task.status))
+        || tasks.find(task => !['succeeded','failed','cancelled','canceled'].includes(task.status));
     if(tasks.length > 1){
         const detail = active?.nodeName ? ` · ${active.nodeName}` : '';
         return `${completed}/${tasks.length}${detail}`;
@@ -12426,27 +12426,47 @@ function runningHubProgressBorderHtml(node, layout=null){
         const complete = task.status === 'succeeded' || task.status === 'finalizing';
         const determinate = complete || fraction !== null;
         const amount = complete ? 100 : fraction !== null ? Math.max(.8, fraction * 100) : 0;
-        const duration = task.status === 'queued' ? 2800 : 1700;
+        const duration = 1700;
         segments = `
             <rect class="rh-progress-stroke rh-progress-orbit-layer is-indeterminate ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animationStyle(task, duration)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>
             <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}"></rect>
         `;
     } else {
+        const progressState = node?.runningHubProgress || {};
+        const hasReliableProgress = tasks.some(task => (
+            task.status === 'succeeded'
+            || task.status === 'finalizing'
+            || ['failed','cancelled','canceled'].includes(task.status)
+            || runningHubTaskFraction(task) !== null
+        ));
+        const segmented = Boolean(progressState.segmented) || hasReliableProgress;
+        const aggregateQueued = tasks.every(task => ['submitting','queued'].includes(task.status));
+        const aggregateStartedAt = tasks.reduce((earliest, task) => {
+            const startedAt = Math.max(0, Number(task?.startedAt) || 0);
+            return startedAt && (!earliest || startedAt < earliest) ? startedAt : earliest;
+        }, 0);
         const span = 100 / total;
         const gap = Math.min(1.5, span * .16);
-        segments = tasks.map((task, index) => {
+        const globalOrbit = `<rect class="rh-progress-stroke rh-progress-global-orbit is-indeterminate ${aggregateQueued ? 'is-queued' : ''} ${segmented ? 'is-layer-hidden' : ''}"${animationStyle({startedAt:aggregateStartedAt}, 1700)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>`;
+        const taskSegments = tasks.map((task, index) => {
             const start = index * span + gap / 2;
             const available = Math.max(.6, span - gap);
             const fraction = runningHubTaskFraction(task);
             const complete = task.status === 'succeeded' || task.status === 'finalizing';
             const determinate = complete || fraction !== null;
+            const terminal = ['failed','cancelled','canceled'].includes(task.status);
             const amount = complete ? available : fraction !== null ? Math.max(.5, available * fraction) : 0;
-            const animation = animationStyle(task, task.status === 'queued' ? 2200 : 1350);
+            const pendingAmount = Math.max(.8, available * .3);
+            const pendingStart = start + Math.max(0, (available - pendingAmount) / 2);
+            const orbitVisible = segmented && !determinate && !terminal;
+            const valueVisible = segmented && determinate;
+            const animation = animationStyle(task, 1350);
             return `
-                <rect class="rh-progress-stroke rh-progress-orbit-layer is-segment-active ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animation} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${available} ${100 - available}" stroke-dashoffset="${-start}"></rect>
-                <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}" stroke-dashoffset="${-start}"></rect>
+                <rect class="rh-progress-stroke rh-progress-orbit-layer is-segment-active ${task.status === 'queued' || task.status === 'submitting' ? 'is-queued' : ''} ${orbitVisible ? '' : 'is-layer-hidden'}"${animation} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${pendingAmount} ${100 - pendingAmount}" stroke-dashoffset="${-pendingStart}"></rect>
+                <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${valueVisible ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}" stroke-dashoffset="${-start}"></rect>
             `;
         }).join('');
+        segments = `${globalOrbit}${taskSegments}`;
     }
     return `<div class="rh-progress-border-host ${node?.veniceProgress ? 'is-venice-progress' : ''}">
         <svg class="rh-progress-border" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
@@ -23169,6 +23189,7 @@ function ensureRunningHubProgress(context, total=1){
         delete node.veniceProgress;
         node.runningHubProgress = {
             runId:context.runId,
+            segmented:false,
             tasks:Array.from({length:count}, (_, index) => ({
                 index,
                 taskId:'',
@@ -23205,10 +23226,10 @@ function syncRunningHubProgressElement(current, fresh, preservedAttributes=[]){
 }
 function runningHubProgressAnimationMode(element){
     if(element?.classList?.contains('is-indeterminate')){
-        return element.classList.contains('is-queued') ? 'indeterminate-queued' : 'indeterminate-running';
+        return 'indeterminate';
     }
     if(element?.classList?.contains('is-segment-active')){
-        return element.classList.contains('is-queued') ? 'segment-queued' : 'segment-running';
+        return 'segment';
     }
     return '';
 }
@@ -23267,8 +23288,15 @@ function updateRunningHubProgressTask(context, index, patch={}){
     const node = runningHubProgressNodeForContext(context);
     const slot = runningHubProgressSlot(context, index);
     if(!node || !slot) return null;
+    const measurable = Number.isFinite(Number(patch.value))
+        && Number.isFinite(Number(patch.max))
+        && Number(patch.max) > 0;
+    const shouldSegment = runningHubProgressTasks(node).length > 1
+        && (measurable || ['succeeded','finalizing','failed','cancelled','canceled'].includes(patch.status));
+    const segmentedChanged = shouldSegment && node.runningHubProgress?.segmented !== true;
     const changed = Object.entries(patch).some(([key, value]) => slot[key] !== value);
-    if(!changed) return slot;
+    if(!changed && !segmentedChanged) return slot;
+    if(segmentedChanged) node.runningHubProgress.segmented = true;
     Object.assign(slot, patch, {updatedAt:nowMs()});
     scheduleRunningHubProgressRefresh(node);
     return slot;

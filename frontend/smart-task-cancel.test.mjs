@@ -217,6 +217,24 @@ test('RunningHub progress uses a smooth inset border and a persistent resolution
                 {index:2,status:'queued',value:null,max:null}
             ]}
         });
+        globalThis.multiUnknown = runningHubProgressBorderHtml({
+            runningHubProgress:{segmented:false,tasks:[
+                {index:0,status:'running',nodeName:'KSampler',value:null,max:null,startedAt:1000},
+                {index:1,status:'queued',value:null,max:null,startedAt:1000}
+            ]}
+        });
+        globalThis.multiSticky = runningHubProgressBorderHtml({
+            runningHubProgress:{segmented:true,tasks:[
+                {index:0,status:'running',nodeName:'KSampler',value:null,max:null,startedAt:1000},
+                {index:1,status:'queued',value:null,max:null,startedAt:1000}
+            ]}
+        });
+        globalThis.multiTerminal = runningHubProgressBorderHtml({
+            runningHubProgress:{segmented:false,tasks:[
+                {index:0,status:'failed',value:null,max:null,startedAt:1000},
+                {index:1,status:'running',nodeName:'VAEDecode',value:null,max:null,startedAt:1000}
+            ]}
+        });
         globalThis.unnamed = runningHubProgressBorderHtml({
             runningHubProgress:{tasks:[{index:0,status:'running',nodeId:'10',nodeName:'',value:null,max:null,startedAt:1000}]}
         });
@@ -231,11 +249,19 @@ test('RunningHub progress uses a smooth inset border and a persistent resolution
     assert.equal((sandbox.single.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.equal((sandbox.unnamed.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.match(sandbox.unnamed, /rh-progress-value-layer is-determinate is-layer-hidden[\s\S]*stroke-dasharray="0 100"/);
-    assert.equal((sandbox.multi.match(/class="rh-progress-stroke/g) || []).length, 6);
+    assert.equal((sandbox.multi.match(/class="rh-progress-stroke/g) || []).length, 7);
+    assert.equal((sandbox.multi.match(/rh-progress-global-orbit/g) || []).length, 1);
     assert.equal((sandbox.multi.match(/rh-progress-orbit-layer/g) || []).length, 3);
     assert.equal((sandbox.multi.match(/rh-progress-value-layer/g) || []).length, 3);
     assert.match(sandbox.multi, /1\/3 · VAEDecode/);
     assert.match(sandbox.multi, /--rh-progress-delay:-1300ms/);
+    assert.match(sandbox.multiUnknown, /rh-progress-global-orbit is-indeterminate\s{2}"/);
+    assert.equal((sandbox.multiUnknown.match(/is-segment-active[\s\S]*?is-layer-hidden/g) || []).length, 2);
+    assert.match(sandbox.multiSticky, /rh-progress-global-orbit is-indeterminate\s+is-layer-hidden/);
+    assert.equal((sandbox.multiSticky.match(/is-segment-active\s+(?:is-queued\s+)?"/g) || []).length, 2);
+    assert.match(sandbox.multiTerminal, /rh-progress-global-orbit is-indeterminate\s+is-layer-hidden/);
+    assert.match(sandbox.multiTerminal, /is-segment-active\s+is-layer-hidden[\s\S]*?rh-progress-value-layer is-determinate is-layer-hidden/);
+    assert.match(jsSource, /node\.runningHubProgress\.segmented = true/);
     assert.doesNotMatch(sandbox.unnamed, />10<\/span>/);
 });
 
@@ -260,8 +286,8 @@ test('RunningHub in-place progress patches preserve a live orbit phase', () => {
         globalThis.queuedMode = runningHubProgressAnimationMode(classElement(['is-indeterminate','is-queued']));
     `, sandbox);
     assert.equal(sandbox.preservedStyle, '--rh-progress-delay:-420ms');
-    assert.equal(sandbox.runningMode, 'indeterminate-running');
-    assert.equal(sandbox.queuedMode, 'indeterminate-queued');
+    assert.equal(sandbox.runningMode, 'indeterminate');
+    assert.equal(sandbox.queuedMode, 'indeterminate');
 });
 
 test('Venice image and video tasks reuse the border with stable asymptotic estimates', () => {
