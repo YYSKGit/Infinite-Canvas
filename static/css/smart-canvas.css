@@ -1405,8 +1405,6 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .param-row select:hover,.param-row select:focus,.dynamic-params select:hover,.dynamic-params select:focus,.dynamic-params input:hover,.dynamic-params input:focus,.dynamic-params textarea:hover,.dynamic-params textarea:focus { border-color:var(--line); background:var(--card); }
 .dynamic-params { width:100%; min-width:0; overflow:visible; display:flex; align-items:flex-start; column-gap:0; flex-wrap:wrap; row-gap:2px; }
 .dynamic-params:has(.video-settings-control) { align-items:center; flex-wrap:nowrap; }
-.dynamic-params:has(.video-settings-control) > .model-control { flex:0 1 140px; }
-.dynamic-params:has(.video-settings-control) > .model-control .smart-pill { width:100%; }
 .dynamic-params:has(.video-settings-control) > .video-settings-control { flex:0 0 auto; min-width:0; }
 .dynamic-params > .smart-control { padding-inline:2px; }
 .dynamic-params > * { flex:0 0 auto; width:auto; }

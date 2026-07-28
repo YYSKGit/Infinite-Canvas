@@ -507,6 +507,16 @@ test('image clicks select immediately while double clicks only add preview behav
     assert.doesNotMatch(doubleClickBlock, /selectedId = id|syncSelectionUi\(\)|updateComposer\(\)/);
 });
 
+test('image and video model pills share the same intrinsic sizing rules', () => {
+    assert.match(extractFunction('renderModelControl'), /class="smart-control model-control"/);
+    assert.match(extractFunction('renderVideoModelControl'), /class="smart-control model-control"/);
+    assert.match(cssSource, /\.model-control \.smart-pill\s*\{\s*max-width:140px;\s*\}/);
+    assert.doesNotMatch(
+        cssSource,
+        /\.dynamic-params:has\(\.video-settings-control\)\s*>\s*\.model-control(?:\s+\.smart-pill)?\s*\{/
+    );
+});
+
 test('image hover chrome is inert and cannot leak interactions into the node', () => {
     assert.match(cssSource, /\.image-resolution-badge\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/);
     const bindNodeSource = extractFunction('bindNodeEvents');
