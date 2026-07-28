@@ -280,6 +280,59 @@ test('node resize owns the cursor and clears magnetic port state', () => {
     assert.match(cssSource, /body\.smart-node-box-resize \.node-port \{\s*pointer-events:none !important;/);
 });
 
+test('unselected paused video actions retain a transparent hit area and normal auto-hide', () => {
+    assert.match(
+        cssSource,
+        /\.image-node:has\(\.smart-canvas-video\[data-smart-user-paused="1"\]\)\s*>\s*\.floating-node-actions\s*\{\s*pointer-events:auto;\s*\}/
+    );
+    assert.doesNotMatch(
+        cssSource,
+        /\.image-node:has\(\.smart-canvas-video\[data-smart-user-paused="1"\]\)\s*>\s*\.floating-node-actions\s*\{[^}]*opacity:1;/
+    );
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /actions\.addEventListener\('mouseenter',[\s\S]*classList\.add\('is-controls-interacting'\)/);
+    assert.match(bindNodeSource, /actions\.addEventListener\('mouseleave',[\s\S]*classList\.remove\('is-controls-interacting'\)/);
+});
+
+test('video action chrome does not activate ports or interrupt hover playback', () => {
+    const magneticPortSource = extractFunction('updateMagneticPort');
+    assert.match(magneticPortSource, /\.floating-node-actions/);
+    assert.match(magneticPortSource, /\.smart-video-controls/);
+    assert.match(magneticPortSource, /\.smart-video-capture-menu/);
+    assert.match(cssSource, /\.floating-node-actions\s*\{[^}]*cursor:default;/);
+    assert.match(cssSource, /\.smart-video-capture-menu\s*\{[^}]*cursor:default;/);
+
+    const bindVideoSource = extractFunction('bindSmartCanvasVideo');
+    assert.match(bindVideoSource, /event\.relatedTarget\?\.closest\?\.\('\.floating-node-actions,\.image-resolution-badge'\)/);
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /if\(videoHost\.contains\(event\.relatedTarget\)\)\s*return;/);
+    assert.match(bindNodeSource, /!isNodeSelected\(id\)[\s\S]*resetSmartCanvasVideo\(video\)/);
+});
+
+test('video node border remains highlighted while hovering its floating actions', () => {
+    assert.match(
+        cssSource,
+        /\.image-node:has\(>\s*\.floating-node-actions:hover\)\s+\.image-wrap\s*>\s*\.media-video-card\s*\{\s*border-color:var\(--strong\);\s*\}/
+    );
+});
+
+test('video resolution badge uses a normal cursor without interrupting hover playback', () => {
+    assert.match(
+        cssSource,
+        /:is\(\.image-wrap,\.thumb-item\):has\(\.smart-canvas-video\[data-smart-has-played="1"\]\)\s*>\s*\.image-resolution-badge\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/
+    );
+    assert.match(
+        cssSource,
+        /\.shell\.port-magnetic-ready\s+\.image-wrap:has\(\.smart-canvas-video\)\s*>\s*\.image-resolution-badge\s*\{\s*cursor:default !important;\s*\}/
+    );
+    const bindVideoSource = extractFunction('bindSmartCanvasVideo');
+    assert.match(bindVideoSource, /\.floating-node-actions,\.image-resolution-badge/);
+    assert.match(extractFunction('updateMagneticPort'), /\.image-resolution-badge/);
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /querySelectorAll\('\.image-resolution-badge'\)[\s\S]*badge\.addEventListener\('mouseenter'/);
+    assert.match(bindNodeSource, /badge\.addEventListener\('mouseleave'[\s\S]*resetSmartCanvasVideo\(video\)/);
+});
+
 test('hover preview marks the complete ancestor chain before execution', () => {
     const preview = {
         stepIds:['a','target'],

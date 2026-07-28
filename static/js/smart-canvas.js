@@ -2113,7 +2113,12 @@ function bindSmartCanvasVideo(host, nodeId){
         }, 400);
     });
     on(host, 'mousemove', showControlsTemporarily);
-    on(host, 'mouseleave', () => {
+    on(host, 'mouseleave', event => {
+        const hoverChrome = event.relatedTarget?.closest?.('.floating-node-actions,.image-resolution-badge');
+        if(hoverChrome && hoverChrome.closest('.image-node') === host.closest('.image-node')){
+            clearTimer();
+            return;
+        }
         host._smartCloseCaptureMenu?.();
         host.classList.remove('is-controls-hovered');
         hideControls();
@@ -12758,7 +12763,7 @@ function scheduleMagneticPortCatch(){
 }
 function updateMagneticPort(e){
     if(portDragState || dragState || resizeState || panState || selectionState){ resetMagneticPort(); return; }
-    if(e.target?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')){ resetMagneticPort(); return; }
+    if(e.target?.closest?.('.composer,.smart-back,.smart-canvas-switcher,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap,.floating-node-actions,.image-resolution-badge,.smart-video-controls,.smart-video-capture-menu')){ resetMagneticPort(); return; }
     const shellRect = shell.getBoundingClientRect();
     const magneticRadius = MAGNETIC_PORT_RADIUS_WORLD * viewport.scale;
     let best = null;
@@ -12993,6 +12998,39 @@ function bindNodeEvents(){
             btn.addEventListener('click', e => {
                 e.preventDefault(); e.stopPropagation();
                 deleteNodeFromButton(id);
+            });
+        });
+        el.querySelectorAll('.floating-node-actions').forEach(actions => {
+            const videoHost = el.querySelector('.smart-canvas-video-host');
+            const video = videoHost?.querySelector('.smart-canvas-video');
+            if(!videoHost) return;
+            actions.addEventListener('mouseenter', () => {
+                videoHost.classList.add('is-controls-interacting');
+                videoHost._smartShowControls?.();
+            });
+            actions.addEventListener('mouseleave', event => {
+                videoHost.classList.remove('is-controls-interacting');
+                videoHost._smartShowControls?.();
+                if(videoHost.contains(event.relatedTarget)) return;
+                videoHost._smartCloseCaptureMenu?.();
+                const draggingThisNode = dragState?.id === id || dragState?.groupIds?.includes?.(id);
+                if(video && !isNodeSelected(id) && !draggingThisNode) resetSmartCanvasVideo(video);
+            });
+        });
+        el.querySelectorAll('.image-resolution-badge').forEach(badge => {
+            const videoHost = badge.closest('.image-wrap')?.querySelector('.smart-canvas-video-host');
+            const video = videoHost?.querySelector('.smart-canvas-video');
+            if(!videoHost || !video) return;
+            badge.addEventListener('mouseenter', () => {
+                videoHost.classList.add('is-controls-interacting');
+                videoHost._smartShowControls?.();
+            });
+            badge.addEventListener('mouseleave', event => {
+                videoHost.classList.remove('is-controls-interacting');
+                videoHost._smartShowControls?.();
+                if(videoHost.contains(event.relatedTarget)) return;
+                const draggingThisNode = dragState?.id === id || dragState?.groupIds?.includes?.(id);
+                if(!isNodeSelected(id) && !draggingThisNode) resetSmartCanvasVideo(video);
             });
         });
         el.querySelectorAll('[data-cascade-pin]').forEach(btn => {
