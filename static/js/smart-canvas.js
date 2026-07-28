@@ -298,6 +298,8 @@ let veniceCreditsState = {
 const activeSmartTaskPolls = new Map();
 const activeSmartGenerationRuns = new Map();
 const runningHubProgressRefreshFrames = new Map();
+const VENICE_IMAGE_ESTIMATE_MS = 10000;
+const VENICE_PROGRESS_TICK_MS = 100;
 const smartNodeRunTokens = new Map();
 const activePromptNodeStreams = new Map();
 const PROMPT_NODE_STREAM_FLUSH_MS = 48;
@@ -325,7 +327,7 @@ const SMART_UNDO_HISTORY_REASON_KEYS = {
     trimmed:'smart.toastUndoHistoryTrimmed'
 };
 const SMART_UNDO_HISTORY_IGNORED_KEYS = new Set([
-    'running', 'pending', 'queued', 'jimengPending', 'pendingTasks', 'runningHubProgress', '_runMetaTargetId',
+    'running', 'pending', 'queued', 'jimengPending', 'pendingTasks', 'runningHubProgress', 'veniceProgress', '_runMetaTargetId',
     '_undoPreRunBox',
     'runStartedAt', 'runFinishedAt', 'runElapsedMs', 'runFailed', 'runCancelled', 'runTimerHidden',
     '_naturalSizeLoading', '_inlineVideoActive', '_dom', 'veniceImageQuoteCache',
@@ -2773,6 +2775,7 @@ function canvasForStorage(){
         if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
         if(node.runSnapshotSettings) node.runSnapshotSettings = settingsForStorage(node.runSnapshotSettings);
         delete node.runningHubProgress;
+        delete node.veniceProgress;
     });
     return clean;
 }
@@ -11875,7 +11878,7 @@ function smartGroupBodyHtml(node){
     </div>`;
 }
 function runningHubProgressTasks(node){
-    const state = node?.runningHubProgress;
+    const state = node?.runningHubProgress || node?.veniceProgress;
     return Array.isArray(state?.tasks) ? state.tasks.filter(Boolean).sort((a, b) => Number(a.index || 0) - Number(b.index || 0)) : [];
 }
 function runningHubTaskFraction(task){
@@ -11948,7 +11951,7 @@ function runningHubProgressBorderHtml(node, layout=null){
             `;
         }).join('');
     }
-    return `<div class="rh-progress-border-host">
+    return `<div class="rh-progress-border-host ${node?.veniceProgress ? 'is-venice-progress' : ''}">
         <svg class="rh-progress-border" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
             <rect class="rh-progress-track" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}"></rect>
             ${segments}
@@ -20903,7 +20906,7 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         const taskResult = await runApiGeneration(prompt, refs, activeSettings, requestMeta, runContext);
         const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
         if(taskIds.length){
-            const settled = await Promise.all(taskIds.map(taskId => pollSmartCanvasTask(taskId, runContext)));
+            const settled = await Promise.all(taskIds.map((taskId, index) => pollSmartCanvasTask(taskId, runContext, index)));
             const urls = settled.flatMap(result => resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result))).filter(Boolean);
             return {urls, kind:mediaKindForUrls(urls, 'image')};
         }
@@ -22006,6 +22009,8 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.provider_id);
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
+    const veniceImageProvider = isVeniceProviderId(runSettings.provider_id);
+    if(veniceImageProvider) ensureVeniceProgress(runContext, {kind:'image', total:count, estimateMs:VENICE_IMAGE_ESTIMATE_MS});
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
         : {};
@@ -22027,7 +22032,18 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
             return r.json();
         })));
         tasks.forEach(task => rememberSmartRunTaskId(runContext, task?.task_id));
+        if(veniceImageProvider){
+            tasks.forEach((task, index) => {
+                const slot = runningHubProgressNodeForContext(runContext)?.veniceProgress?.tasks?.[index];
+                if(slot) slot.taskId = String(task?.task_id || '');
+            });
+        }
         return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    } catch(error) {
+        if(veniceImageProvider){
+            for(let index = 0; index < count; index++) finishVeniceProgressTask(runContext, index, 'failed');
+        }
+        throw error;
     } finally {
         endVeniceCreditsFastRefresh(veniceCreditsToken);
     }
@@ -22134,6 +22150,10 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings, runCo
 async function runApiVideoGeneration(prompt, refs, runSettings=settings, requestMeta=null, runContext=null){
     if(!runSettings.videoModel) throw new Error(tr('smart.errNoVideoModel'));
     const veniceVideoProvider = isVeniceVideoProvider(runSettings.videoProvider || '');
+    const veniceProgressId = veniceVideoProvider && runContext
+        ? `${runContext.runId}_${Math.random().toString(36).slice(2, 9)}`
+        : '';
+    if(veniceVideoProvider) ensureVeniceProgress(runContext, {kind:'video', total:1});
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.videoProvider || '');
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
@@ -22186,7 +22206,8 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
             generate_audio: Boolean(runSettings.videoGenerateAudio),
             multimodal: Boolean(runSettings.videoMultimodal),
             trusted_asset: useAssetUris,
-            provider_prompts: providerPrompts
+            provider_prompts: providerPrompts,
+            ...(veniceProgressId ? {progress_id:veniceProgressId} : {})
         };
         const requestBodyJson = JSON.stringify(payload);
         smartLogActualGenerationRequest('API Video', {
@@ -22201,6 +22222,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         if(requestMeta && typeof requestMeta === 'object'){
             requestMeta.actualApiPrompt = String(payload.prompt || '');
         }
+        if(veniceProgressId) startVeniceVideoProgressMonitor(runContext, veniceProgressId);
         const result = await fetch('/api/canvas-video', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -22210,7 +22232,11 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         const upstreamTaskId = result?.task_id || result?.taskId || result?.submit_id || '';
         if(runContext) rememberSmartRunTaskId(runContext, upstreamTaskId);
         if(result && result.jimeng_pending) throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
+        if(veniceVideoProvider) finishVeniceProgressTask(runContext, 0, 'succeeded');
         return resultMediaUrls(result);
+    } catch(error) {
+        if(veniceVideoProvider) finishVeniceProgressTask(runContext, 0, 'failed');
+        throw error;
     } finally {
         endVeniceCreditsFastRefresh(veniceCreditsToken);
         if(veniceVideoProvider) scheduleVeniceCreditsRefresh(runSettings.videoProvider || '', 120);
@@ -22591,6 +22617,7 @@ function ensureRunningHubProgress(context, total=1){
         || !Array.isArray(node.runningHubProgress.tasks)
         || node.runningHubProgress.tasks.length !== count
     ){
+        delete node.veniceProgress;
         node.runningHubProgress = {
             runId:context.runId,
             tasks:Array.from({length:count}, (_, index) => ({
@@ -22867,6 +22894,164 @@ function startRunningHubProgressMonitor(context, taskId, index, nodeMap={}, useW
     connect();
     return monitor;
 }
+function veniceProgressFraction(elapsedMs, estimateMs){
+    const elapsed = Math.max(0, Number(elapsedMs) || 0);
+    const estimate = Math.max(1, Number(estimateMs) || 1);
+    const ratio = elapsed / estimate;
+    if(ratio <= .8) return Math.max(0, ratio);
+    if(ratio <= 1){
+        // Cubic Hermite bridge: both ends have an explicitly matched velocity,
+        // so entering the slow zone and reaching the estimate have no speed kink.
+        const t = (ratio - .8) / .2;
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const h00 = 2 * t3 - 3 * t2 + 1;
+        const h10 = t3 - 2 * t2 + t;
+        const h01 = -2 * t3 + 3 * t2;
+        const h11 = t3 - t2;
+        return h00 * .8 + h10 * .2 + h01 * .955 + h11 * .06;
+    }
+    // Match the bridge ending velocity (0.3) and then asymptotically approach
+    // 99.5%; only the actual result is allowed to complete the border.
+    return Math.min(.995, .955 + .04 * (1 - Math.exp(-(ratio - 1) * 7.5)));
+}
+function ensureVeniceProgress(context, {kind='image', total=1, estimateMs=null}={}){
+    const node = runningHubProgressNodeForContext(context);
+    if(!node || !context) return null;
+    const count = Math.max(1, Math.min(8, Number(total) || 1));
+    if(
+        !node.veniceProgress
+        || node.veniceProgress.runId !== context.runId
+        || node.veniceProgress.kind !== kind
+        || node.veniceProgress.tasks?.length !== count
+    ){
+        const startedAt = nowMs();
+        delete node.runningHubProgress;
+        node.veniceProgress = {
+            runId:context.runId,
+            kind,
+            tasks:Array.from({length:count}, (_, index) => ({
+                index,
+                status:'running',
+                nodeName:`Venice · ${kind === 'video' ? '视频' : '图片'}`,
+                value:kind === 'image' ? 0 : null,
+                max:kind === 'image' ? 1 : null,
+                estimateMs:Number(estimateMs) > 0 ? Number(estimateMs) : null,
+                executionMs:null,
+                observedAt:0,
+                startedAt,
+                updatedAt:startedAt
+            }))
+        };
+        render();
+    }
+    if(!context.veniceProgressTimer){
+        context.veniceProgressTimer = setInterval(() => tickVeniceProgress(context), VENICE_PROGRESS_TICK_MS);
+    }
+    tickVeniceProgress(context);
+    return node.veniceProgress;
+}
+function tickVeniceProgress(context){
+    const node = runningHubProgressNodeForContext(context);
+    const state = node?.veniceProgress;
+    if(!state || state.runId !== context?.runId) return;
+    const now = nowMs();
+    let changed = false;
+    state.tasks.forEach(task => {
+        if(['succeeded','failed','cancelled'].includes(task.status) || !(Number(task.estimateMs) > 0)) return;
+        const localElapsed = Math.max(0, now - Number(task.startedAt || now));
+        const serverElapsed = Number(task.executionMs) >= 0
+            ? Number(task.executionMs) + Math.max(0, now - Number(task.observedAt || now))
+            : 0;
+        const elapsed = state.kind === 'video' ? Math.max(serverElapsed, 0) : localElapsed;
+        const next = veniceProgressFraction(elapsed, task.estimateMs);
+        const previous = Number(task.value);
+        const monotonic = Number.isFinite(previous) ? Math.max(previous, next) : next;
+        if(task.max !== 1 || !Number.isFinite(previous) || Math.abs(monotonic - previous) >= .0005){
+            task.value = monotonic;
+            task.max = 1;
+            task.updatedAt = now;
+            changed = true;
+        }
+    });
+    if(changed) scheduleRunningHubProgressRefresh(node);
+}
+function updateVeniceVideoProgress(context, payload={}){
+    const node = runningHubProgressNodeForContext(context);
+    const task = node?.veniceProgress?.tasks?.[0];
+    if(!task) return;
+    const incomingAverage = Number(payload.average_execution_time);
+    if(Number.isFinite(incomingAverage) && incomingAverage > 0){
+        if(!(Number(task.estimateMs) > 0)){
+            task.estimateMs = incomingAverage;
+        } else {
+            // Venice's average shifts slightly on every poll. Smooth it and
+            // cap each adjustment so the visible stroke never surges or stalls.
+            const current = Number(task.estimateMs);
+            const blendedDelta = (incomingAverage - current) * .18;
+            const cappedDelta = Math.max(-current * .025, Math.min(current * .025, blendedDelta));
+            task.estimateMs = Math.max(1000, current + cappedDelta);
+        }
+    }
+    const incomingDuration = Number(payload.execution_duration);
+    if(Number.isFinite(incomingDuration) && incomingDuration >= 0){
+        task.executionMs = Math.max(Number(task.executionMs) || 0, incomingDuration);
+        task.observedAt = nowMs();
+    }
+    task.status = String(payload.status || '').toUpperCase() === 'SUBMITTING' ? 'queued' : 'running';
+    task.updatedAt = nowMs();
+    tickVeniceProgress(context);
+}
+function stopVeniceVideoProgressMonitor(context){
+    if(context?.veniceVideoProgressMonitor) context.veniceVideoProgressMonitor.closed = true;
+    if(context) context.veniceVideoProgressMonitor = null;
+}
+function startVeniceVideoProgressMonitor(context, progressId){
+    if(!context || !progressId) return null;
+    stopVeniceVideoProgressMonitor(context);
+    const monitor = {progressId, closed:false};
+    context.veniceVideoProgressMonitor = monitor;
+    (async () => {
+        while(!monitor.closed && !context.cancelled){
+            try {
+                const response = await fetch(`/api/venice/video/progress/${encodeURIComponent(progressId)}`, {
+                    signal:context.controller?.signal
+                });
+                if(response.ok) updateVeniceVideoProgress(context, await response.json());
+            } catch(error) {
+                if(context.controller?.signal?.aborted) break;
+            }
+            try {
+                await smartAbortableSleep(900, context.controller?.signal);
+            } catch(_error) {
+                break;
+            }
+        }
+    })();
+    return monitor;
+}
+function finishVeniceProgressTask(context, index=0, status='succeeded'){
+    const node = runningHubProgressNodeForContext(context);
+    const state = node?.veniceProgress;
+    const task = state?.tasks?.[Math.max(0, Number(index) || 0)];
+    if(!node || !state || state.runId !== context?.runId || !task) return;
+    task.status = status;
+    task.value = status === 'succeeded' ? 1 : task.value;
+    task.max = status === 'succeeded' ? 1 : task.max;
+    task.updatedAt = nowMs();
+    scheduleRunningHubProgressRefresh(node);
+    if(state.tasks.every(item => ['succeeded','failed','cancelled'].includes(item.status))){
+        if(context.veniceProgressTimer) clearInterval(context.veniceProgressTimer);
+        context.veniceProgressTimer = null;
+        stopVeniceVideoProgressMonitor(context);
+        setTimeout(() => {
+            const current = nodes.find(item => item.id === node.id);
+            if(current?.veniceProgress?.runId !== context.runId) return;
+            delete current.veniceProgress;
+            scheduleRunningHubProgressRefresh(current);
+        }, 520);
+    }
+}
 function registerSmartGenerationRun(node, data={}){
     if(!node?.id) return null;
     const controller = data.controller || new AbortController();
@@ -22881,6 +23066,8 @@ function registerSmartGenerationRun(node, data={}){
         taskIds:new Set(data.taskIds || []),
         runningHubTasks:new Map(),
         runningHubProgressMonitors:new Map(),
+        veniceProgressTimer:null,
+        veniceVideoProgressMonitor:null,
         cleanupNodeOnCancel:Boolean(data.cleanupNodeOnCancel),
         cancelled:false,
         cancelLogged:false,
@@ -22935,7 +23122,11 @@ async function cancelSmartNodeGeneration(nodeId, options=null){
     }
     try { context.controller.abort(smartCancelledError()); } catch(_error) { context.controller.abort(); }
     closeRunningHubProgressMonitors(context);
+    if(context.veniceProgressTimer) clearInterval(context.veniceProgressTimer);
+    context.veniceProgressTimer = null;
+    stopVeniceVideoProgressMonitor(context);
     delete node.runningHubProgress;
+    delete node.veniceProgress;
 
     const runningHubCancels = [...context.runningHubTasks.entries()].map(([taskId, taskMeta]) =>
         cancelRunningHubTask(taskId, taskMeta?.useWallet)
@@ -23212,7 +23403,7 @@ function resumeJimengPendingNodes(){
         startJimengPoll(n);
     });
 }
-async function pollSmartCanvasTask(taskId, runContext=null){
+async function pollSmartCanvasTask(taskId, runContext=null, veniceProgressIndex=null){
     if(!taskId) throw new Error(tr('smart.errRunFailed'));
     const pollKey = `${taskId}:${runContext?.nodeId || ''}`;
     if(activeSmartTaskPolls.has(pollKey)) return activeSmartTaskPolls.get(pollKey);
@@ -23236,7 +23427,12 @@ async function pollSmartCanvasTask(taskId, runContext=null){
     })();
     activeSmartTaskPolls.set(pollKey, promise);
     try {
-        return await promise;
+        const result = await promise;
+        if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'succeeded');
+        return result;
+    } catch(error) {
+        if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'failed');
+        throw error;
     } finally {
         activeSmartTaskPolls.delete(pollKey);
     }
@@ -23317,10 +23513,10 @@ async function resumeSmartPendingNode(node, logContext={}){
     if(!firstPendingTransitionActive(node.id)) render();
     else refreshRunTimerPills();
     const failures = [];
-    await Promise.all(tasks.map(async task => {
+    await Promise.all(tasks.map(async (task, index) => {
         if(task.failed && task.recoverTaskId) return;
         try {
-            const result = await pollSmartCanvasTask(task.taskId, runContext);
+            const result = await pollSmartCanvasTask(task.taskId, runContext, index);
             finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)), task.kind || 'image');
             render();
             scheduleSave();

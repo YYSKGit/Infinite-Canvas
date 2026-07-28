@@ -166,6 +166,9 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     filter:drop-shadow(0 0 3px color-mix(in srgb, var(--strong) 22%, transparent));
     transition:stroke-dasharray .38s cubic-bezier(.22,1,.36,1),stroke-dashoffset .38s cubic-bezier(.22,1,.36,1),opacity .3s ease;
 }
+.rh-progress-border-host.is-venice-progress .rh-progress-stroke {
+    transition:stroke-dasharray .1s linear,stroke-dashoffset .1s linear,opacity .16s ease;
+}
 .theme-dark .rh-progress-track { stroke:rgba(255,255,255,.14); }
 .theme-dark .rh-progress-stroke {
     stroke:rgba(255,255,255,.92);

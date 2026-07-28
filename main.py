@@ -2513,6 +2513,31 @@ class ImageTaskQueryRequest(BaseModel):
 
 CANVAS_TASKS: Dict[str, Dict[str, Any]] = {}
 CANVAS_TASK_LOCK = Lock()
+VENICE_VIDEO_PROGRESS: Dict[str, Dict[str, Any]] = {}
+VENICE_VIDEO_PROGRESS_LOCK = Lock()
+VENICE_VIDEO_PROGRESS_TTL = 15 * 60
+
+def update_venice_video_progress(progress_id: str, **patch):
+    progress_id = str(progress_id or "").strip()
+    if not progress_id:
+        return
+    now = time.time()
+    with VENICE_VIDEO_PROGRESS_LOCK:
+        expired = [
+            key for key, value in VENICE_VIDEO_PROGRESS.items()
+            if now - float((value or {}).get("updated_at") or now) > VENICE_VIDEO_PROGRESS_TTL
+        ]
+        for key in expired:
+            VENICE_VIDEO_PROGRESS.pop(key, None)
+        current = VENICE_VIDEO_PROGRESS.setdefault(progress_id, {
+            "progress_id": progress_id,
+            "status": "SUBMITTING",
+            "average_execution_time": None,
+            "execution_duration": None,
+            "created_at": now,
+        })
+        current.update(patch)
+        current["updated_at"] = now
 
 class CanvasVideoRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_MAX_LENGTH)
@@ -2535,6 +2560,7 @@ class CanvasVideoRequest(BaseModel):
     multimodal: bool = False
     trusted_asset: bool = False
     provider_prompts: Dict[str, str] = Field(default_factory=dict)
+    progress_id: str = Field(default="", max_length=160)
 
 class VeniceVideoQuoteRequest(BaseModel):
     provider_id: str = "venice"
@@ -9476,7 +9502,7 @@ async def venice_fetch_credit_usage(client, provider):
         "user_type": str(token_payload.get("userType") or ""),
     }
 
-async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw=None):
+async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw=None, progress_id=""):
     retrieve_url = f"{venice_api_root(provider)}/video/retrieve"
     retrieve_body = {"model": model, "queue_id": queue_id, "delete_media_on_completion": False}
     fallback_urls = video_output_urls(queue_raw or {})
@@ -9515,6 +9541,13 @@ async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queu
             continue
         last_payload = raw
         status = str((raw or {}).get("status") or "").strip().upper()
+        update_venice_video_progress(
+            progress_id,
+            status=status or "PROCESSING",
+            queue_id=queue_id,
+            average_execution_time=(raw or {}).get("average_execution_time"),
+            execution_duration=(raw or {}).get("execution_duration"),
+        )
         if status == "COMPLETED":
             urls = video_output_urls(raw)
             if not urls and fallback_urls:
@@ -9571,14 +9604,18 @@ async def generate_venice_video(client, payload, provider, requested_model):
     queue_id = venice_queue_task_id(queue_raw)
     if not queue_id:
         raise HTTPException(status_code=502, detail=f"Venice 视频队列接口没有返回 queue_id：{queue_raw}")
+    update_venice_video_progress(payload.progress_id, status="PROCESSING", queue_id=queue_id)
     try:
-        return await wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw)
+        return await wait_for_venice_video_retrieve(client, provider, model, queue_id, queue_raw, payload.progress_id)
     except HTTPException as exc:
+        update_venice_video_progress(payload.progress_id, status="FAILED", queue_id=queue_id)
         raise HTTPException(status_code=exc.status_code, detail=venice_error_with_task_id(getattr(exc, "detail", ""), queue_id)) from exc
     except httpx.HTTPStatusError as exc:
+        update_venice_video_progress(payload.progress_id, status="FAILED", queue_id=queue_id)
         detail = venice_http_error_detail(getattr(exc, "response", None), f"Venice 视频任务请求失败(HTTP {getattr(getattr(exc, 'response', None), 'status_code', 0)})")
         raise HTTPException(status_code=(getattr(exc.response, "status_code", None) or 502), detail=venice_error_with_task_id(detail, queue_id)) from exc
     except httpx.HTTPError as exc:
+        update_venice_video_progress(payload.progress_id, status="FAILED", queue_id=queue_id)
         raise HTTPException(status_code=502, detail=venice_error_with_task_id(f"Venice 视频任务请求失败：{exc}", queue_id)) from exc
 
 def venice_blocked_headers(headers):
@@ -14331,6 +14368,14 @@ async def get_venice_credits(provider_id: str = "venice"):
         **usage,
     }
 
+@app.get("/api/venice/video/progress/{progress_id}")
+async def get_venice_video_progress(progress_id: str):
+    with VENICE_VIDEO_PROGRESS_LOCK:
+        progress = dict(VENICE_VIDEO_PROGRESS.get(str(progress_id or "").strip()) or {})
+    if not progress:
+        raise HTTPException(status_code=404, detail="Venice 视频进度尚未建立或已过期")
+    return progress
+
 @app.post("/api/venice/video/quote")
 async def get_venice_video_quote(payload: VeniceVideoQuoteRequest):
     provider = get_api_provider(payload.provider_id)
@@ -15029,6 +15074,8 @@ async def canvas_video(payload: CanvasVideoRequest):
     is_yuli = is_yuli_provider(provider)
     is_agnes = is_agnes_provider(provider, payload.model)
     is_venice = is_venice_provider(provider)
+    if is_venice:
+        update_venice_video_progress(payload.progress_id, status="SUBMITTING")
     volc_is_proxy = bool(is_volcengine and urllib.parse.urlparse(base_url).path.rstrip("/"))
     submit_urls = video_submit_url_candidates(provider, base_url)
     submit_url = submit_urls[0]

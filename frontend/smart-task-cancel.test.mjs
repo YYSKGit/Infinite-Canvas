@@ -216,3 +216,39 @@ test('RunningHub in-place progress patches preserve a live orbit phase', () => {
     assert.equal(sandbox.runningMode, 'indeterminate-running');
     assert.equal(sandbox.queuedMode, 'indeterminate-queued');
 });
+
+test('Venice image and video tasks reuse the border with stable asymptotic estimates', () => {
+    const sandbox = vm.createContext({Math});
+    vm.runInContext(`
+        ${extractFunction('veniceProgressFraction')}
+        globalThis.atHalf = veniceProgressFraction(7500, 15000);
+        globalThis.atEstimate = veniceProgressFraction(15000, 15000);
+        globalThis.overtime = veniceProgressFraction(30000, 15000);
+        globalThis.beforeSlowZone = veniceProgressFraction(11985, 15000);
+        globalThis.atSlowZone = veniceProgressFraction(12000, 15000);
+        globalThis.afterSlowZone = veniceProgressFraction(12015, 15000);
+        globalThis.beforeEstimate = veniceProgressFraction(14985, 15000);
+        globalThis.afterEstimate = veniceProgressFraction(15015, 15000);
+    `, sandbox);
+    assert.equal(sandbox.atHalf, 0.5);
+    assert.ok(sandbox.atEstimate > 0.95 && sandbox.atEstimate < 1);
+    assert.ok(sandbox.overtime > sandbox.atEstimate && sandbox.overtime < 1);
+    assert.ok(Math.abs(
+        (sandbox.atSlowZone - sandbox.beforeSlowZone)
+        - (sandbox.afterSlowZone - sandbox.atSlowZone)
+    ) < 0.00005);
+    assert.ok(Math.abs(
+        (sandbox.atEstimate - sandbox.beforeEstimate)
+        - (sandbox.afterEstimate - sandbox.atEstimate)
+    ) < 0.00005);
+    assert.match(jsSource, /const VENICE_IMAGE_ESTIMATE_MS = 10000;/);
+    assert.match(jsSource, /const VENICE_PROGRESS_TICK_MS = 100;/);
+    assert.match(jsSource, /node\?\.runningHubProgress \|\| node\?\.veniceProgress/);
+    assert.match(cssSource, /\.rh-progress-border-host\.is-venice-progress \.rh-progress-stroke\s*\{[^}]*stroke-dasharray \.1s linear,/);
+    assert.match(jsSource, /average_execution_time/);
+    assert.match(jsSource, /execution_duration/);
+    assert.match(jsSource, /const cappedDelta = Math\.max\(-current \* \.025/);
+    assert.match(backendSource, /@app\.get\("\/api\/venice\/video\/progress\/\{progress_id\}"\)/);
+    assert.match(backendSource, /average_execution_time=\(raw or \{\}\)\.get\("average_execution_time"\)/);
+    assert.match(backendSource, /execution_duration=\(raw or \{\}\)\.get\("execution_duration"\)/);
+});
