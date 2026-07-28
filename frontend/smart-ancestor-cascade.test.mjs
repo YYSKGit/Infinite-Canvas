@@ -208,25 +208,89 @@ test('concurrent generation does not mutate or read composer settings after disp
     assert.doesNotMatch(comfySource, /\bsettings\./, 'Comfy execution must use its explicit settings snapshot');
 });
 
-test('ancestor run node visuals expose wait, active, done, and failed states', () => {
+test('ancestor run node visuals expose wait, active, done, failed, and cancelled states', () => {
     const run = {
         plan:{
-            stepIds:['wait','active','done','failed'],
-            reachableIds:['wait','active','done','failed','source','skipped','boundary'],
+            stepIds:['wait','active','done','failed','cancelled'],
+            reachableIds:['wait','active','done','failed','cancelled','source','skipped','boundary'],
             skippedIds:['skipped','boundary'],
             pinnedBoundaryIds:['boundary']
         },
         runningIds:new Set(['active']),
         completedIds:new Set(['done']),
-        failedIds:new Set(['failed'])
+        failedIds:new Set(['failed']),
+        cancelledIds:new Set(['cancelled'])
     };
     const sandbox = vm.createContext({smartAncestorCascadeRun:run, smartAncestorCascadePreview:null});
     vm.runInContext(
         `${extractFunction('smartAncestorNodeVisualState')}
-        globalThis.states = ['outside','wait','active','done','failed','source','skipped','boundary'].map(smartAncestorNodeVisualState);`,
+        globalThis.states = ['outside','wait','active','done','failed','cancelled','source','skipped','boundary'].map(smartAncestorNodeVisualState);`,
         sandbox
     );
-    assert.deepEqual([...sandbox.states], ['', 'wait', 'active', 'done', 'failed', 'source', 'skipped', 'boundary']);
+    assert.deepEqual([...sandbox.states], ['', 'wait', 'active', 'done', 'failed', 'cancelled', 'source', 'skipped', 'boundary']);
+});
+
+test('stopping any active ancestor node stops the whole one-click run', async () => {
+    const containsSource = extractFunction('smartAncestorRunContainsNode');
+    const contextSource = extractFunction('smartRunContextForNode');
+    const sandbox = vm.createContext({
+        smartAncestorCascadeRun:{plan:{stepIds:['a','b','target']}},
+        activeSmartGenerationRuns:new Map([['branch-output', {nodeId:'branch-output', sourceNodeId:'b'}]])
+    });
+    vm.runInContext(
+        `${contextSource}
+        ${containsSource}
+        globalThis.matches = [
+            smartAncestorRunContainsNode('a'),
+            smartAncestorRunContainsNode('branch-output'),
+            smartAncestorRunContainsNode('outside')
+        ];`,
+        sandbox
+    );
+    assert.deepEqual([...sandbox.matches], [true, true, false]);
+
+    const requestStop = extractFunction('requestSmartAncestorCascadeStop');
+    assert.match(requestStop, /runState\.stopRequested = true/);
+    assert.match(requestStop, /cancelSmartNodeGeneration\(targetId,\s*\{skipAncestorStop:true,\s*silent:true\}\)/);
+    assert.match(requestStop, /stopPromptLLMNode\(stepId,\s*\{skipAncestorStop:true\}\)/);
+    assert.match(extractFunction('cancelSmartNodeGeneration'), /smartAncestorRunContainsNode\(nodeId\)[\s\S]*?requestSmartAncestorCascadeStop\(nodeId\)/);
+    assert.match(extractFunction('stopPromptLLMNode'), /smartAncestorRunContainsNode\(nodeId\)[\s\S]*?requestSmartAncestorCascadeStop\(nodeId\)/);
+    assert.match(extractFunction('runSmartAncestorCascade'), /if\(runState\.stopRequested\)\s*break;[\s\S]*?一键运行已停止/);
+
+    const stopCalls = [];
+    const liveRun = {
+        plan:{stepIds:['generation','llm','queued']},
+        runPath:{states:{'generation->queued':'wait'}},
+        runningIds:new Set(['generation','llm']),
+        completedIds:new Set(),
+        failedIds:new Set(),
+        cancelledIds:new Set(),
+        stopRequested:false
+    };
+    const stopSandbox = vm.createContext({
+        smartAncestorCascadeRun:liveRun,
+        activeSmartGenerationRuns:new Map([['generation', {nodeId:'generation', sourceNodeId:'generation'}]]),
+        nodes:[{id:'generation', type:'smart-image'}, {id:'llm', type:'smart-prompt'}, {id:'queued', type:'smart-image'}],
+        cancelSmartNodeGeneration:(id, options) => { stopCalls.push(['generation', id, options]); },
+        stopPromptLLMNode:(id, options) => { stopCalls.push(['llm', id, options]); },
+        toast:() => {},
+        render:() => {},
+        syncCascadeRunButton:() => {}
+    });
+    await vm.runInContext(
+        `${contextSource}
+        ${containsSource}
+        ${requestStop}
+        requestSmartAncestorCascadeStop('generation');`,
+        stopSandbox
+    );
+    assert.equal(liveRun.stopRequested, true);
+    assert.equal(liveRun.runPath.states['generation->queued'], 'cancelled');
+    assert.deepEqual([...liveRun.cancelledIds], ['queued']);
+    assert.deepEqual(JSON.parse(JSON.stringify(stopCalls)), [
+        ['generation', 'generation', {skipAncestorStop:true, silent:true}],
+        ['llm', 'llm', {skipAncestorStop:true}]
+    ]);
 });
 
 test('one-click runs silence per-node desktop notifications', () => {

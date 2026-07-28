@@ -59,6 +59,7 @@ test('generation nodes expose a dedicated cancel control and cancelled log style
     assert.match(jsSource, /data-smart-task-cancel=/);
     assert.match(jsSource, /cancelSmartNodeGeneration\(btn\.dataset\.smartTaskCancel/);
     assert.doesNotMatch(jsSource, /class="smart-task-cancel"[^>]*>[\s\S]*?<span>取消<\/span>/);
+    assert.match(jsSource, /const statusText = logCancelled \? '取消' :/);
     assert.match(cssSource, /\.smart-task-cancel\s*\{/);
     assert.match(cssSource, /\.smart-task-cancel\s*\{[^}]*width:26px;[^}]*padding:0;/);
     assert.match(cssSource, /\.log-chip\.status-cancelled\s*\{/);

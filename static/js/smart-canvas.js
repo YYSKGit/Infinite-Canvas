@@ -367,6 +367,7 @@ function smartAncestorNodeVisualState(nodeId){
     if(run && plan.stepIds?.includes(nodeId)){
         if(run.failedIds?.has(nodeId)) return 'failed';
         if(run.completedIds?.has(nodeId)) return 'done';
+        if(run.cancelledIds?.has(nodeId)) return 'cancelled';
         if(run.runningIds?.has(nodeId)) return 'active';
         return 'wait';
     }
@@ -10436,6 +10437,8 @@ function renderConnections(){
         const color = isAncestorCascade
             ? ancestorState === 'failed'
             ? 'var(--ancestor-route-failed)'
+            : ancestorState === 'cancelled'
+            ? 'var(--ancestor-route-cancelled)'
             : ancestorState === 'active'
             ? 'var(--ancestor-route-active)'
             : ancestorState === 'done'
@@ -11569,7 +11572,7 @@ function renderSmartCanvasLog(){
         ].filter(Boolean);
         const logCancelled = log.status === 'cancelled';
         const logFailed = log.status === 'failed';
-        const statusText = logCancelled ? '用户已取消' : (logFailed ? tr('canvas.failed') : tr('canvas.success'));
+        const statusText = logCancelled ? '取消' : (logFailed ? tr('canvas.failed') : tr('canvas.success'));
         const statusClass = logCancelled ? 'status-cancelled' : (logFailed ? 'status-failed' : 'status-ok');
         return `<div class="log-item ${logFailed ? 'failed' : ''} ${logCancelled ? 'cancelled' : ''}">
             <div class="log-main">
@@ -17910,7 +17913,12 @@ function cleanupPromptNodeStream(nodeId=''){
     clearPromptNodeStreamFlush(state);
     activePromptNodeStreams.delete(nodeId);
 }
-function stopPromptLLMNode(nodeId=''){
+function stopPromptLLMNode(nodeId='', options=null){
+    options ||= {};
+    if(!options.skipAncestorStop && smartAncestorRunContainsNode(nodeId)){
+        requestSmartAncestorCascadeStop(nodeId);
+        return true;
+    }
     const state = activePromptNodeStreamState(nodeId);
     if(!state || state.stopping) return false;
     state.stopping = true;
@@ -20514,12 +20522,14 @@ function syncCascadeRunButton(node=selectedNode()){
     if(!cascadeRunBtn) return;
     const plan = node?.id ? buildSmartAncestorRunPlan(node.id) : null;
     const runningForNode = Boolean(smartAncestorCascadeRun && smartAncestorCascadeRun.targetId === node?.id);
+    const stoppingForNode = Boolean(runningForNode && smartAncestorCascadeRun?.stopRequested);
     const visible = Boolean(node && (runningForNode || (plan?.hasUpstream && plan?.targetRunnable)));
     cascadeRunBtn.style.display = visible ? 'inline-flex' : 'none';
     const completed = smartAncestorCascadeRun?.completedIds?.size || 0;
     const total = smartAncestorCascadeRun?.plan?.stepIds?.length || 0;
     const label = runningForNode ? `运行中 ${completed}/${total}` : tr('smart.loopRunAll');
-    let summary = label;
+    const displayLabel = stoppingForNode ? '停止中…' : runningForNode ? `停止链路 · ${completed}/${total}` : label;
+    let summary = displayLabel;
     if(!runningForNode && plan){
         if(plan.invalid === 'cycle') summary = '无法运行：存在循环连线';
         else if(plan.invalid === 'loop') summary = '该链路包含循环节点，暂未接入新运行模式';
@@ -20529,12 +20539,12 @@ function syncCascadeRunButton(node=selectedNode()){
             summary = `运行 ${plan.stepIds.length} 个${skipped ? ` · 固定跳过 ${skipped} 个` : ''}${plan.unpinTarget ? ' · 取消当前固定' : ''}`;
         }
     }
-    cascadeRunBtn.disabled = !visible || Boolean(smartAncestorCascadeRun) || Boolean(node?.running);
-    cascadeRunBtn.classList.remove('is-stop');
+    cascadeRunBtn.disabled = !visible || (Boolean(smartAncestorCascadeRun) && !runningForNode) || stoppingForNode || (!runningForNode && Boolean(node?.running));
+    cascadeRunBtn.classList.toggle('is-stop', runningForNode);
     cascadeRunBtn.title = summary;
     cascadeRunBtn.setAttribute('aria-label', summary);
     cascadeRunBtn.innerHTML = runningForNode
-        ? `<i data-lucide="loader-circle"></i><span>${escapeHtml(label)}</span>`
+        ? `<i data-lucide="square"></i><span>${escapeHtml(displayLabel)}</span>`
         : `<i data-lucide="workflow"></i><span>${escapeHtml(label)}</span>`;
     refreshIcons();
 }
@@ -20559,6 +20569,57 @@ function smartAncestorRunErrorMessage(plan){
     if(plan?.invalid === 'target-not-runnable') return '当前节点不是画布生成节点';
     return '没有可运行的上游节点';
 }
+function smartAncestorStoppedError(){
+    const error = new Error('已停止一键运行');
+    error.smartAncestorStopped = true;
+    return error;
+}
+function isSmartAncestorStoppedError(error){
+    return Boolean(error?.smartAncestorStopped);
+}
+function smartAncestorRunContainsNode(nodeId='', runState=smartAncestorCascadeRun){
+    if(!nodeId || !runState?.plan?.stepIds) return false;
+    if(runState.plan.stepIds.includes(nodeId)) return true;
+    const context = smartRunContextForNode(nodeId);
+    return Boolean(context?.sourceNodeId && runState.plan.stepIds.includes(context.sourceNodeId));
+}
+function throwIfSmartAncestorStopRequested(runState=smartAncestorCascadeRun){
+    if(runState?.stopRequested) throw smartAncestorStoppedError();
+}
+function requestSmartAncestorCascadeStop(nodeId=''){
+    const runState = smartAncestorCascadeRun;
+    if(!runState || (nodeId && !smartAncestorRunContainsNode(nodeId, runState))) return Promise.resolve(false);
+    if(runState.stopRequested) return runState.stopPromise || Promise.resolve(true);
+    runState.stopRequested = true;
+    runState.status = 'stopping';
+    runState.stopOriginId = nodeId || '';
+    runState.cancelledIds ||= new Set();
+    const runningIds = new Set(runState.runningIds || []);
+    (runState.plan?.stepIds || []).forEach(stepId => {
+        if(!runState.completedIds?.has(stepId) && !runState.failedIds?.has(stepId) && !runningIds.has(stepId)){
+            runState.cancelledIds.add(stepId);
+        }
+    });
+    Object.keys(runState.runPath?.states || {}).forEach(edgeKey => {
+        if(runState.runPath.states[edgeKey] === 'wait') runState.runPath.states[edgeKey] = 'cancelled';
+    });
+    const generationTargets = new Set();
+    for(const context of activeSmartGenerationRuns.values()){
+        if(runningIds.has(context?.nodeId) || runningIds.has(context?.sourceNodeId)) generationTargets.add(context.nodeId);
+    }
+    const stops = [...generationTargets].map(targetId =>
+        cancelSmartNodeGeneration(targetId, {skipAncestorStop:true, silent:true})
+    );
+    runningIds.forEach(stepId => {
+        const node = nodes.find(candidate => candidate.id === stepId);
+        if(node?.type === 'smart-prompt') stopPromptLLMNode(stepId, {skipAncestorStop:true});
+    });
+    toast('正在停止整条链路…');
+    render();
+    syncCascadeRunButton();
+    runState.stopPromise = Promise.allSettled(stops).then(() => true);
+    return runState.stopPromise;
+}
 function setSmartAncestorStepEdgeState(runState, nodeId, state){
     if(!runState?.runPath?.states) return;
     (runState.plan?.connections || [])
@@ -20567,22 +20628,26 @@ function setSmartAncestorStepEdgeState(runState, nodeId, state){
     scheduleConnectionLayerRefresh();
 }
 async function executeSmartAncestorPlanNode(nodeId){
+    const runState = smartAncestorCascadeRun;
+    throwIfSmartAncestorStopRequested(runState);
     const node = nodes.find(candidate => candidate.id === nodeId);
     const kind = smartAncestorRunnableKind(node);
     if(kind === 'llm'){
         const result = await runPromptLLMNode(nodeId, {throwOnError:true, silent:true});
+        if(result?.status === 'stopped') throw smartAncestorStoppedError();
         if(result?.status !== 'completed') throw new Error('提示词节点未完成');
         return result;
     }
     if(kind === 'generation'){
         const result = await runGeneration(null, {
             nodeId,
-            runSettings:smartAncestorCascadeRun?.settingsByNode?.get(nodeId),
+            runSettings:runState?.settingsByNode?.get(nodeId),
             skipUndo:true,
             preserveComposer:true,
             throwOnError:true,
             silent:true
         });
+        if(result?.status === 'cancelled') throw smartAncestorStoppedError();
         if(result?.status !== 'completed') throw new Error(result?.status === 'pending' ? '节点任务仍在排队，已停止后续运行' : '节点未完成');
         return result;
     }
@@ -20621,12 +20686,17 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
             .map(node => [node.id, cloneSmartSettings(smartSettingsForNode(node))])),
         runningIds:new Set(),
         completedIds:new Set(),
-        failedIds:new Set()
+        failedIds:new Set(),
+        cancelledIds:new Set(),
+        stopRequested:false,
+        status:'running',
+        stopPromise:null
     };
     smartAncestorCascadeRun = runState;
     render();
     try {
         for(const layer of plan.layers){
+            if(runState.stopRequested) break;
             runState.runningIds = new Set(layer);
             layer.forEach(nodeId => setSmartAncestorStepEdgeState(runState, nodeId, 'active'));
             render();
@@ -20634,7 +20704,15 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
             runState.runningIds.clear();
             results.forEach((result, index) => {
                 const nodeId = layer[index];
-                if(result.status === 'fulfilled'){
+                const completed = result.status === 'fulfilled' && result.value?.status === 'completed';
+                const cancelled = !completed && (runState.stopRequested
+                    || (result.status === 'rejected' && (isSmartAncestorStoppedError(result.reason) || isSmartCancelledError(result.reason)))
+                    || result.value?.status === 'cancelled'
+                    || result.value?.status === 'stopped');
+                if(cancelled){
+                    runState.cancelledIds.add(nodeId);
+                    setSmartAncestorStepEdgeState(runState, nodeId, 'cancelled');
+                } else if(completed){
                     runState.completedIds.add(nodeId);
                     setSmartAncestorStepEdgeState(runState, nodeId, 'done');
                 } else {
@@ -20644,9 +20722,15 @@ async function runSmartAncestorCascade(targetNode=selectedNode()){
             });
             render();
             syncCascadeRunButton();
-            if(runState.failedIds.size) break;
+            if(runState.stopRequested || runState.failedIds.size) break;
         }
-        if(runState.failedIds.size){
+        if(runState.stopRequested){
+            if(runState.stopPromise) await runState.stopPromise;
+            plan.stepIds.forEach(nodeId => {
+                if(!runState.completedIds.has(nodeId) && !runState.failedIds.has(nodeId)) runState.cancelledIds.add(nodeId);
+            });
+            toast(`一键运行已停止：${runState.completedIds.size} 个节点已完成`);
+        } else if(runState.failedIds.size){
             toast(`运行中断：${runState.completedIds.size} 成功 · ${runState.failedIds.size} 失败`);
             smartBackgroundNotify('一键运行失败', `${runState.completedIds.size} 个节点完成，${runState.failedIds.size} 个节点失败`, 'failure');
         } else {
@@ -22414,7 +22498,11 @@ function smartCancellationRunForNode(node, context=null){
     const kind = node?.outputKind || (isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image');
     return smartRunSnapshot(node, prompt, [], kind, null, runSettings);
 }
-async function cancelSmartNodeGeneration(nodeId){
+async function cancelSmartNodeGeneration(nodeId, options=null){
+    options ||= {};
+    if(!options.skipAncestorStop && smartAncestorRunContainsNode(nodeId)){
+        return requestSmartAncestorCascadeStop(nodeId);
+    }
     const node = nodes.find(candidate => candidate.id === nodeId);
     if(!node || !nodeHasLiveRunState(node)) return;
     let context = smartRunContextForNode(node.id);
@@ -22464,6 +22552,10 @@ async function cancelSmartNodeGeneration(nodeId){
     }
     render();
     scheduleSave();
+    if(options.silent){
+        if(runningHubCancels.length) await Promise.allSettled(runningHubCancels);
+        return;
+    }
     toast(runningHubCancels.length ? '正在取消 RunningHub 任务…' : '任务已取消');
     if(runningHubCancels.length){
         const remoteResults = await Promise.allSettled(runningHubCancels);
@@ -24138,6 +24230,11 @@ runBtn.onclick = event => {
     return result;
 };
 cascadeRunBtn.onclick = () => {
+    if(smartAncestorCascadeRun){
+        requestSmartAncestorCascadeStop(smartAncestorCascadeRun.targetId);
+        if(composerExpanded) setComposerExpanded(false);
+        return;
+    }
     setSmartAncestorCascadePreview(false);
     runSmartAncestorCascade();
     if(composerExpanded) setComposerExpanded(false);

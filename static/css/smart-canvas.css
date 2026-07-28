@@ -4,14 +4,14 @@
     --text:#111827; --muted:#64748b; --faint:#94a3b8; --line:#e8edf3; --soft:#f8fafc;
     --shadow:rgba(15,23,42,.08); --strong:#111827; --strong-text:#fff; --connection-flow:#3b82f6;
     --cascade-pin:#d97706; --cascade-pin-soft:rgba(217,119,6,.16);
-    --ancestor-route-wait:rgba(59,130,246,.38); --ancestor-route-active:#2563eb; --ancestor-route-done:rgba(37,99,235,.62); --ancestor-route-failed:#dc2626; --ancestor-route-source:rgba(100,116,139,.58); --ancestor-route-preview:rgba(59,130,246,.44); --ancestor-route-skipped:rgba(217,119,6,.38);
+    --ancestor-route-wait:rgba(59,130,246,.38); --ancestor-route-active:#2563eb; --ancestor-route-done:rgba(37,99,235,.62); --ancestor-route-failed:#dc2626; --ancestor-route-cancelled:#ea580c; --ancestor-route-source:rgba(100,116,139,.58); --ancestor-route-preview:rgba(59,130,246,.44); --ancestor-route-skipped:rgba(217,119,6,.38);
 }
 .theme-dark {
     --page:#0f141d; --grid:rgba(148,163,184,.18); --panel:rgba(23,29,41,.92); --card:#171d29;
     --text:#e5e9f0; --muted:#8f9aab; --faint:#657286; --line:#2a3444; --soft:#111722;
     --shadow:rgba(0,0,0,.28); --strong:#d8dee9; --strong-text:#10141d; --connection-flow:#60a5fa;
     --cascade-pin:#f59e0b; --cascade-pin-soft:rgba(245,158,11,.18);
-    --ancestor-route-wait:rgba(96,165,250,.38); --ancestor-route-active:#60a5fa; --ancestor-route-done:rgba(96,165,250,.62); --ancestor-route-failed:#f87171; --ancestor-route-source:rgba(148,163,184,.52); --ancestor-route-preview:rgba(96,165,250,.46); --ancestor-route-skipped:rgba(245,158,11,.34);
+    --ancestor-route-wait:rgba(96,165,250,.38); --ancestor-route-active:#60a5fa; --ancestor-route-done:rgba(96,165,250,.62); --ancestor-route-failed:#f87171; --ancestor-route-cancelled:#fb923c; --ancestor-route-source:rgba(148,163,184,.52); --ancestor-route-preview:rgba(96,165,250,.46); --ancestor-route-skipped:rgba(245,158,11,.34);
 }
 * { box-sizing:border-box; }
 body { margin:0; height:100vh; overflow:hidden; color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--page); }
@@ -238,6 +238,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.ancestor-run-active::before { border:1.5px solid var(--ancestor-route-active); box-shadow:0 0 0 3px color-mix(in srgb, var(--ancestor-route-active) 16%, transparent), 0 0 22px color-mix(in srgb, var(--ancestor-route-active) 24%, transparent); animation:ancestor-node-breathe 1.35s ease-in-out infinite; animation-delay:var(--ancestor-node-delay, 0ms); }
 .image-node.ancestor-run-done::before { border:1px solid var(--ancestor-route-done); box-shadow:0 0 0 2px color-mix(in srgb, var(--ancestor-route-done) 18%, transparent); }
 .image-node.ancestor-run-failed::before { border:1.5px solid var(--ancestor-route-failed); box-shadow:0 0 0 3px color-mix(in srgb, var(--ancestor-route-failed) 16%, transparent); }
+.image-node.ancestor-run-cancelled::before { border:1px dashed color-mix(in srgb, var(--ancestor-route-cancelled) 72%, transparent); box-shadow:0 0 0 2px color-mix(in srgb, var(--ancestor-route-cancelled) 12%, transparent); }
 @keyframes ancestor-node-breathe {
     0%,100% { opacity:.72; }
     50% { opacity:1; box-shadow:0 0 0 4px color-mix(in srgb, var(--ancestor-route-active) 20%, transparent), 0 0 28px color-mix(in srgb, var(--ancestor-route-active) 32%, transparent); }
@@ -802,6 +803,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .connection-layer .conn-ancestor-active.conn-ancestor-selected { stroke:var(--ancestor-route-active); opacity:1; }
 .connection-layer .conn-ancestor-done.conn-ancestor-selected { stroke:var(--ancestor-route-done); opacity:.92; }
 .connection-layer .conn-ancestor-failed.conn-ancestor-selected { stroke:var(--ancestor-route-failed); opacity:1; }
+.connection-layer .conn-ancestor-cancelled.conn-ancestor-selected { stroke:var(--ancestor-route-cancelled); opacity:.9; }
 .connection-layer .conn-selection-flow-ancestor {
     stroke:color-mix(in srgb, var(--ancestor-route-active) 76%, var(--card));
     stroke-width:3;
@@ -816,6 +818,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .connection-layer .conn-ancestor-active { opacity:1; filter:drop-shadow(0 0 3px color-mix(in srgb, var(--ancestor-route-active) 32%, transparent)); }
 .connection-layer .conn-ancestor-done { opacity:.82; }
 .connection-layer .conn-ancestor-failed { opacity:1; }
+.connection-layer .conn-ancestor-cancelled { stroke-dasharray:4 6; opacity:.76; }
 .connection-layer .conn-ancestor-flow {
     stroke:var(--ancestor-route-active);
     stroke-width:4.2;
