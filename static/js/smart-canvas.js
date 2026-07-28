@@ -6493,8 +6493,11 @@ function captureVideoSettingsPopoverPosition(ctrl){
     const popover = ctrl?.querySelector?.('.video-settings-popover');
     if(!popover) return null;
     clearVideoSettingsPopoverPosition(ctrl);
+    // Measure the final resting position, not the hidden 4px entrance offset.
+    popover.style.translate = 'none';
     const popoverRect = popover.getBoundingClientRect();
     const ctrlRect = ctrl.getBoundingClientRect();
+    popover.style.removeProperty('translate');
     const scaleX = ctrl.offsetWidth > 0 ? ctrlRect.width / ctrl.offsetWidth : 1;
     const scaleY = ctrl.offsetHeight > 0 ? ctrlRect.height / ctrl.offsetHeight : 1;
     ctrl._videoPopoverPosition = {
@@ -6533,6 +6536,9 @@ function openVideoSettingsControl(ctrl, position=null){
         const captured = captureVideoSettingsPopoverPosition(ctrl);
         if(captured) applyVideoSettingsPopoverPosition(ctrl, captured);
     }
+    // Commit the hidden vertical offset before opening so only the Y entrance
+    // motion animates; fixed left/top never participate in the transition.
+    popover.getBoundingClientRect();
     ctrl.classList.add('is-open');
     ctrl.querySelector('.video-settings-pill')?.setAttribute('aria-expanded', 'true');
 }

@@ -1512,11 +1512,11 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .video-settings-pill .video-settings-audio-icon { width:11px !important; height:11px !important; opacity:.82; }
 .video-settings-pill .video-settings-audio-icon[hidden] { display:none !important; }
 .video-settings-pill .pill-caret { margin-left:auto; }
-.smart-popover.video-settings-popover { width:300px; max-width:min(300px, calc(100vw - 40px)); padding:8px; overflow:visible; background:var(--card); -webkit-backdrop-filter:none; backdrop-filter:none; box-shadow:0 16px 38px rgba(2,6,23,.22); transition:opacity .14s ease, visibility 0s linear .14s; }
+.smart-popover.video-settings-popover { bottom:calc(100% + 12px); width:300px; max-width:min(300px, calc(100vw - 40px)); padding:8px; overflow:visible; background:var(--card); -webkit-backdrop-filter:none; backdrop-filter:none; box-shadow:0 16px 38px rgba(2,6,23,.22); translate:0 4px; transition:opacity .14s ease, translate .14s ease, visibility 0s linear .14s; }
 .video-settings-control .video-settings-popover { left:50%; right:auto; transform:translate(-50%,0); }
 .composer.expanded .video-settings-control .video-settings-popover { left:0; right:auto; transform:none; }
 .smart-control.video-settings-control:not(.is-open) .video-settings-popover { opacity:0; visibility:hidden; pointer-events:none; }
-.smart-control.video-settings-control.is-open .video-settings-popover { opacity:1; visibility:visible; pointer-events:auto; transition-delay:0s; }
+.smart-control.video-settings-control.is-open .video-settings-popover { opacity:1; visibility:visible; pointer-events:auto; translate:0 0; transition-delay:0s; }
 .video-settings-section { display:flex; flex-direction:column; gap:5px; }
 .video-settings-section + .video-settings-section { margin-top:7px; padding-top:7px; border-top:1px solid color-mix(in srgb, var(--line) 72%, transparent); }
 .video-settings-section:empty { display:none; }
