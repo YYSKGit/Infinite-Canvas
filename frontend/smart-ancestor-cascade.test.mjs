@@ -278,6 +278,21 @@ test('node resize owns the cursor and clears magnetic port state', () => {
     assert.match(bindSource, /resetMagneticPort\(\);[\s\S]*classList\.add\('smart-node-resize',\s*'smart-node-box-resize'\)/);
     assert.match(cssSource, /body\.smart-node-box-resize \.shell \* \{\s*cursor:nwse-resize !important;/);
     assert.match(cssSource, /body\.smart-node-box-resize \.node-port \{\s*pointer-events:none !important;/);
+    assert.match(cssSource, /\.node-resize-handle::before\s*\{[^}]*width:6px;[^}]*height:6px;[^}]*border-right:1\.5px solid currentColor;[^}]*border-bottom:1\.5px solid currentColor;/);
+});
+
+test('selected nodes retain their corner actions after the pointer leaves', () => {
+    assert.match(
+        cssSource,
+        /\.image-node:hover \.floating-node-actions,\s*\.image-node\.selected \.floating-node-actions\s*\{\s*opacity:1;\s*pointer-events:auto;\s*\}/
+    );
+    assert.match(cssSource, /\.image-resolution-badge\s*\{[^}]*height:26px;/);
+    assert.match(cssSource, /\.image-resolution-badge\s*\{[^}]*transition:opacity \.14s ease;/);
+    assert.doesNotMatch(cssSource, /\.image-resolution-badge\s*\{[^}]*transition:[^;}]*transform/);
+    assert.match(
+        cssSource,
+        /\.image-node:has\(\.run-time-pill\.done\):is\(:hover,\.selected\) \.run-time-pill\.done,/
+    );
 });
 
 test('unselected paused video actions retain a transparent hit area and normal auto-hide', () => {
@@ -316,7 +331,7 @@ test('image and video node borders remain highlighted while hovering floating ac
     );
     assert.match(
         cssSource,
-        /\.image-node:not\(\.node-generating\):not\(:has\(\.node-port\.is-magnetic\)\):has\(>\s*\.floating-node-actions:hover,\s*>\s*\.node-resize-handle:hover\)\s+\.image-wrap\s*>\s*\.image-resolution-badge\s*\{\s*opacity:1;\s*transform:translateY\(0\);\s*\}/
+        /\.image-node:not\(\.node-generating\):not\(:has\(\.node-port\.is-magnetic\)\):has\(>\s*\.floating-node-actions:hover,\s*>\s*\.node-resize-handle:hover\)\s+\.image-wrap\s*>\s*\.image-resolution-badge\s*\{\s*opacity:1;\s*\}/
     );
 });
 
@@ -378,11 +393,12 @@ test('single-media nodes never stack image and node delete shadows', () => {
     assert.match(bindNodeSource, /querySelectorAll\('\.node-media-clear'\)[\s\S]*clearNodeMediaBeforeDelete\(id\)/);
 });
 
-test('magnetic ports hide all other node chrome and resize hover extends video presence', () => {
+test('magnetic ports hide unselected corner chrome while selected badges persist', () => {
     assert.match(
         cssSource,
-        /\.image-node:not\(\.node-generating\):has\(\.node-port:is\(:hover,\.is-magnetic\)\) \.floating-node-actions,[\s\S]*?\.mini-x,[\s\S]*?\.image-resolution-badge,[\s\S]*?\.node-resize-handle,[\s\S]*?\{[^}]*opacity:0 !important;[^}]*pointer-events:none !important;/
+        /\.image-node:not\(\.node-generating\):not\(\.selected\):has\(\.node-port:is\(:hover,\.is-magnetic\)\) \.floating-node-actions,[\s\S]*?:not\(\.selected\)[\s\S]*?\.mini-x,[\s\S]*?:not\(\.selected\)[\s\S]*?\.image-resolution-badge,[\s\S]*?:not\(\.selected\)[\s\S]*?\.node-resize-handle,[\s\S]*?\{[^}]*opacity:0 !important;[^}]*pointer-events:none !important;/
     );
+    assert.match(cssSource, /\.image-node\.selected \.floating-node-actions\s*\{\s*opacity:1;\s*pointer-events:auto;\s*\}/);
     assert.match(cssSource, /\.image-node:not\(\.node-generating\):has\(\.node-port:hover\) \.node-port:not\(:hover\),/);
     const bindVideoSource = extractFunction('bindSmartCanvasVideo');
     assert.match(bindVideoSource, /\.floating-node-actions,\.image-resolution-badge,\.node-resize-handle/);
@@ -443,7 +459,8 @@ test('hover preview marks the complete ancestor chain before execution', () => {
 
 test('ancestor route keeps normal selection flow except on the actively moving edge', () => {
     const connectionRenderer = extractFunction('renderConnections');
-    assert.match(connectionRenderer, /hasSelectionFlow = isSelectedLine && !\(isAncestorCascade && ancestorState === 'active'\)/);
+    assert.match(connectionRenderer, /suppressPortHoverFlow = isPortHoveredLine && !selectedConnIds\.has\(hoveredConnectionPortNodeId\)/);
+    assert.match(connectionRenderer, /hasSelectionFlow = isSelectedLine && !suppressPortHoverFlow && !\(isAncestorCascade && ancestorState === 'active'\)/);
     assert.match(connectionRenderer, /conn-ancestor-flow/);
     assert.match(connectionRenderer, /conn-ancestor-preview/);
     assert.match(connectionRenderer, /conn-ancestor-skipped/);
@@ -452,4 +469,14 @@ test('ancestor route keeps normal selection flow except on the actively moving e
     assert.match(connectionRenderer, /conn-ancestor-selected/);
     assert.match(connectionRenderer, /conn-ancestor-flow-selected/);
     assert.match(connectionRenderer, /cutControl = !isAncestorContextLine/);
+});
+
+test('hovering an unselected connection port suppresses line flow and group hover borders', () => {
+    const bindNodeSource = extractFunction('bindNodeEvents');
+    assert.match(bindNodeSource, /querySelectorAll\('\.node-port'\)[\s\S]*?hoveredConnectionPortNodeId = id;[\s\S]*?hoveredConnectionNodeId = ''/);
+    assert.match(bindNodeSource, /port\.addEventListener\('mouseleave'[\s\S]*?relatedNode === el && !relatedPort[\s\S]*?hoveredConnectionNodeId = id/);
+    assert.match(
+        cssSource,
+        /\.smart-group-node:not\(\.selected\):has\(\.node-port:hover\)\s*\{[^}]*border-color:rgba\(148,163,184,\.35\);[^}]*box-shadow:0 10px 30px rgba\(15,23,42,\.06\);/
+    );
 });

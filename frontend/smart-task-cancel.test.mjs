@@ -71,6 +71,7 @@ test('timer and cancel corner controls do not overlap, and the composer run butt
     assert.match(cssSource, /\.smart-task-cancel\s*\{[^}]*width:26px;[^}]*height:26px;[^}]*border-radius:10px;/);
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*right:7px;[^}]*top:7px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
     assert.match(cssSource, /\.run-time-pill\.done\s*\{[^}]*background:rgba\(6,95,70,\.86\);/);
+    assert.match(cssSource, /\.image-node:has\(\.node-port:is\(:hover,\.is-magnetic,\.is-active,\.is-caught\)\) \.run-time-pill:is\(\.done,\.failed,\.cancelled\)\s*\{\s*opacity:0;/);
     assert.match(cssSource, /\.run-btn\.is-stop\s*\{/);
     const syncButton = extractFunction('syncRunButtonState');
     assert.match(syncButton, /smartRunButtonCancelTarget\(node\)/);

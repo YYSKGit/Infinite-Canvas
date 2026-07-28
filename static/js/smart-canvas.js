@@ -159,6 +159,7 @@ let selectedIds = [];
 let selectedImage = {nodeId:'', index:-1};
 let selectedConnectionKey = '';
 let hoveredConnectionNodeId = '';
+let hoveredConnectionPortNodeId = '';
 let hoveredConnectionKey = '';
 let dragState = null;
 let loopInsertPreview = null;
@@ -3379,6 +3380,7 @@ function resetSmartCanvasTransientStateForSwitch(){
     selectedImage = {nodeId:'', index:-1};
     selectedConnectionKey = '';
     hoveredConnectionNodeId = '';
+    hoveredConnectionPortNodeId = '';
     hoveredConnectionKey = '';
     dragState = null;
     selectionState = null;
@@ -10383,6 +10385,11 @@ function renderConnections(){
             hoveredConnectionNodeId === item.toId ||
             item.targets.includes(hoveredConnectionNodeId)
         ));
+        const isPortHoveredLine = Boolean(hoveredConnectionPortNodeId && (
+            hoveredConnectionPortNodeId === item.from ||
+            hoveredConnectionPortNodeId === item.toId ||
+            item.targets.includes(hoveredConnectionPortNodeId)
+        ));
         const isConnectionHoveredLine = hoveredConnectionKey === connectionSelectionKey;
         const isNodeLinkedLine = selectedConnIds.size > 0 && (
             selectedConnIds.has(item.from) ||
@@ -10392,12 +10399,13 @@ function renderConnections(){
         const isPersistentlySelectedLine = selectedConnectionKey === connectionSelectionKey;
         const isSelectedLine = isPersistentlySelectedLine || isConnectionHoveredLine || isNodeHoveredLine || isNodeLinkedLine;
         const isAncestorSelectedLine = isSelectedLine && isAncestorContextLine;
+        const suppressPortHoverFlow = isPortHoveredLine && !selectedConnIds.has(hoveredConnectionPortNodeId);
         // Pending edges use the same selected treatment as the other dashed
         // relations while keeping their own animation in the unselected state.
         // Static ancestor-route colors are only the unselected treatment. Keep the
         // canvas' normal selection flow; only an actively moving runner edge owns
         // the animation exclusively so two moving highlights do not overlap.
-        const hasSelectionFlow = isSelectedLine && !(isAncestorCascade && ancestorState === 'active');
+        const hasSelectionFlow = isSelectedLine && !suppressPortHoverFlow && !(isAncestorCascade && ancestorState === 'active');
         const hasDashedSelectionFlow = isDashedRelation || isPendingLine;
         if(hasSelectionFlow) selectedFlowCount += 1;
         const fx = isHistory ? fr.x + fr.width / 2 : fr.x + fr.width;
@@ -12994,6 +13002,20 @@ function bindNodeEvents(){
             hoveredConnectionNodeId = '';
             scheduleConnectionLayerRefresh();
         });
+        el.querySelectorAll('.node-port').forEach(port => {
+            port.addEventListener('mouseenter', () => {
+                hoveredConnectionPortNodeId = id;
+                if(hoveredConnectionNodeId === id) hoveredConnectionNodeId = '';
+                scheduleConnectionLayerRefresh();
+            });
+            port.addEventListener('mouseleave', event => {
+                if(hoveredConnectionPortNodeId === id) hoveredConnectionPortNodeId = '';
+                const relatedNode = event.relatedTarget?.closest?.('.image-node');
+                const relatedPort = event.relatedTarget?.closest?.('.node-port');
+                if(relatedNode === el && !relatedPort) hoveredConnectionNodeId = id;
+                scheduleConnectionLayerRefresh();
+            });
+        });
         if(nodeForControls?.type === 'smart-prompt') bindPromptNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-group') {
@@ -13543,6 +13565,7 @@ function deleteNode(id){
     selectedConnectionKey = '';
     hoveredConnectionKey = '';
     if(deleteIds.has(hoveredConnectionNodeId)) hoveredConnectionNodeId = '';
+    if(deleteIds.has(hoveredConnectionPortNodeId)) hoveredConnectionPortNodeId = '';
     render();
     scheduleSave();
 }
