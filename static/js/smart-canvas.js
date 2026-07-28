@@ -5479,8 +5479,8 @@ function renderVideoModelControl(models){
     </div>`;
 }
 function renderVideoDurationControl(){
-    const v = Math.max(1, Math.min(15, Number(settings.videoDuration) || 5));
-    const quick = [3, 4, 5, 6, 8, 10, 12, 15];
+    const v = Math.max(4, Math.min(15, Number(settings.videoDuration) || 5));
+    const quick = [4, 5, 6, 8, 10, 12, 15];
     return `<div class="smart-control duration-control" title="${escapeHtml(tr('smart.videoDurationTip'))}">
         <button class="smart-pill" type="button"><i data-lucide="timer"></i><span>${v}s</span></button>
         <div class="smart-popover compact-popover">
@@ -5490,7 +5490,7 @@ function renderVideoDurationControl(){
             </div>
             <label class="duration-custom">
                 <span>${escapeHtml(tr('smart.custom'))}</span>
-                <input type="number" min="1" max="15" step="1" data-param="videoDuration" value="${v}">
+                <input type="number" min="4" max="15" step="1" data-param="videoDuration" value="${v}">
             </label>
         </div>
     </div>`;
@@ -5547,7 +5547,7 @@ function videoCapabilitiesFor(source=settings){
     const base = {
         aspects:['16:9','9:16','1:1','4:3','3:4','21:9'],
         resolutions:['480p','720p','1080p'],
-        duration:{min:1,max:15},
+        duration:{min:4,max:15},
         generateAudio:false,
         enhancePrompt:false,
         enableUpsample:false,
@@ -5566,7 +5566,7 @@ function videoCapabilitiesFor(source=settings){
     if(descriptor.protocol === 'jimeng'){
         const seedanceVip = descriptor.model.includes('seedance2.0_vip') || descriptor.model.includes('seedance2.0fast_vip');
         const duration = descriptor.model.includes('3.5') ? {min:4,max:12}
-            : (descriptor.model.includes('3.0') ? {min:3,max:10} : {min:4,max:15});
+            : (descriptor.model.includes('3.0') ? {min:4,max:10} : {min:4,max:15});
         return {...base, resolutions:seedanceVip ? ['720p','1080p'] : ['720p'], duration, multimodal:true, frameRoles:true};
     }
     if(descriptor.protocol === 'volcengine' || descriptor.id === 'volcengine'){
@@ -5578,7 +5578,7 @@ function videoCapabilitiesFor(source=settings){
             ...base,
             aspects:veo31 ? ['16:9','9:16'] : base.aspects,
             resolutions:veo31 ? ['720p','1080p','4k'] : base.resolutions,
-            duration:veo31 ? {min:4,max:8} : {min:1,max:15},
+            duration:veo31 ? {min:4,max:8} : {min:4,max:15},
             generateAudio:!veo31,
             multimodal:!veo31,
             frameRoles:!veo31,
@@ -5591,7 +5591,7 @@ function videoCapabilitiesFor(source=settings){
         return {...base, generateAudio:true, watermark:true};
     }
     if(isYuli){
-        return {...base, aspects:['16:9','9:16'], resolutions:[], duration:{min:1,max:15}, enableUpsample:true};
+        return {...base, aspects:['16:9','9:16'], resolutions:[], duration:{min:4,max:15}, enableUpsample:true};
     }
     if(isAgnes){
         return {...base};
@@ -5605,7 +5605,7 @@ function normalizeVideoSettingsForCapabilities(target=settings){
     if(!caps.aspects.includes(String(target.videoAspect || ''))) target.videoAspect = fallbackAspect;
     const resolution = String(target.videoResolution || '').trim().toLowerCase();
     if(resolution && !caps.resolutions.includes(resolution)) target.videoResolution = '';
-    const minDuration = Math.max(1, Number(caps.duration?.min) || 1);
+    const minDuration = Math.max(4, Number(caps.duration?.min) || 4);
     const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
     target.videoDuration = Math.max(minDuration, Math.min(maxDuration, Number(target.videoDuration) || 5));
     if(!caps.frameRoles) target.videoUseFrameRoles = false;
@@ -5661,7 +5661,7 @@ function syncVideoSettingsSelection(ctrl){
     const caps = videoCapabilitiesFor(settings);
     const summaryParts = [String(settings.videoAspect || '16:9')];
     if(caps.resolutions.length) summaryParts.push(videoResolutionLabel(settings.videoResolution));
-    summaryParts.push(`${Math.max(1, Number(settings.videoDuration) || 5)}s`);
+    summaryParts.push(`${Math.max(4, Number(settings.videoDuration) || 5)}s`);
     const summary = ctrl.querySelector('.video-settings-summary');
     if(summary) summary.textContent = summaryParts.join(' · ');
     const audioIcon = ctrl.querySelector('.video-settings-audio-icon');
@@ -5674,9 +5674,10 @@ function renderVideoSettingsControl(){
     const hasMedia = imageCount > 0 || refs.videos.length > 0 || refs.audios.length > 0;
     const aspect = String(settings.videoAspect || '16:9');
     const resolution = String(settings.videoResolution || '');
-    const minDuration = Math.max(1, Number(caps.duration?.min) || 1);
+    const minDuration = Math.max(4, Number(caps.duration?.min) || 4);
     const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
     const duration = Math.max(minDuration, Math.min(maxDuration, Number(settings.videoDuration) || 5));
+    const durationProgress = maxDuration > minDuration ? ((duration - minDuration) / (maxDuration - minDuration)) * 100 : 100;
     const summaryParts = [aspect];
     if(caps.resolutions.length) summaryParts.push(videoResolutionLabel(resolution));
     summaryParts.push(`${duration}s`);
@@ -5691,7 +5692,7 @@ function renderVideoSettingsControl(){
         ${resolutionOptions.map(value => `<button type="button" class="${value === resolution.toLowerCase() ? 'active' : ''}" data-video-setting-param="videoResolution" data-video-setting-value="${escapeHtml(value)}">${escapeHtml(value ? value.toUpperCase() : tr('smart.videoResAuto'))}</button>`).join('')}
     </div>` : '';
     const durationHtml = `<div class="video-duration-editor">
-        <input type="range" min="${minDuration}" max="${maxDuration}" step="1" value="${duration}" data-video-duration-slider aria-label="${escapeHtml(tr('smart.videoDuration'))}">
+        <input type="range" min="${minDuration}" max="${maxDuration}" step="1" value="${duration}" style="--video-duration-progress:${durationProgress}%" data-video-duration-slider aria-label="${escapeHtml(tr('smart.videoDuration'))}">
         <output class="video-duration-value">${duration}</output><span class="video-duration-unit">s</span>
     </div>`;
     const generalHtml = caps.generateAudio
@@ -6345,7 +6346,7 @@ function syncVeniceVideoQuote(){
     const payload = {
         provider_id:String(settings.videoProvider || 'venice'),
         model:String(settings.videoModel || ''),
-        duration:Math.max(1, Math.min(15, Number(settings.videoDuration) || 5)),
+        duration:Math.max(4, Math.min(15, Number(settings.videoDuration) || 5)),
         resolution:String(settings.videoResolution || '480p'),
         generate_audio:Boolean(settings.videoGenerateAudio),
         has_media_input:Array.isArray(request.refs) && request.refs.some(ref => ['image','video','audio'].includes(mediaKindForItem(ref)))
@@ -7996,10 +7997,11 @@ function bindDynamicParams(){
         const preview = () => {
             const ctrl = input.closest('.video-settings-control');
             const caps = videoCapabilitiesFor(settings);
-            const min = Math.max(1, Number(caps.duration?.min) || 1);
+            const min = Math.max(4, Number(caps.duration?.min) || 4);
             const max = Math.min(15, Math.max(min, Number(caps.duration?.max) || 15));
             const value = Math.max(min, Math.min(max, Number(input.value) || 5));
             input.value = String(value);
+            input.style.setProperty('--video-duration-progress', `${max > min ? ((value - min) / (max - min)) * 100 : 100}%`);
             ctrl?.querySelector('.video-duration-value')?.replaceChildren(document.createTextNode(String(value)));
             markControlInteracting(input);
             settings.videoDuration = value;
@@ -22588,7 +22590,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
             prompt: veniceProvider ? venicePrompt : prompt,
             provider_id: runSettings.videoProvider || 'comfly',
             model: runSettings.videoModel || 'veo3-fast',
-            duration: Math.max(1, Math.min(15, Number(runSettings.videoDuration) || 5)),
+            duration: Math.max(4, Math.min(15, Number(runSettings.videoDuration) || 5)),
             aspect_ratio: veniceProvider ? normalizeVeniceVideoAspect(runSettings.videoAspect || '16:9', uploadedRefs) : (runSettings.videoAspect || '16:9'),
             resolution: runSettings.videoResolution || '',
             images: refImages,

@@ -245,7 +245,7 @@ for(const priorRunFailed of [false, true]){
         await loaded.runApiVideoGeneration('prompt', refs, {
             videoProvider:'custom-api',
             videoModel:'seedance-2-0-enhanced-reference-to-video',
-            videoDuration:55,
+            videoDuration:1,
             videoAspect:'9:16',
             videoResolution:'480p'
         }, {});
@@ -255,7 +255,7 @@ for(const priorRunFailed of [false, true]){
         const body = JSON.parse(capturedRequests[0].options.body);
         assert.deepEqual(body.images.map(image => image.url), ['/a.png']);
         assert.equal(body.images.length, 1);
-        assert.equal(body.duration, 15);
+        assert.equal(body.duration, 4);
     });
 }
 
@@ -277,7 +277,7 @@ test('Venice video capabilities expose only parameters consumed by its request a
         volcengineProvider:() => ({id:'volcengine', protocol:'volcengine'})
     });
     const caps = loaded.videoCapabilitiesFor({videoProvider:'venice-test', videoModel:'seedance'});
-    assert.deepEqual({...caps.duration}, {min:1, max:15});
+    assert.deepEqual({...caps.duration}, {min:4, max:15});
     assert.equal(caps.generateAudio, true);
     assert.equal(caps.enhancePrompt, false);
     assert.equal(caps.enableUpsample, false);
