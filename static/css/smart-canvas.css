@@ -1010,7 +1010,7 @@ body.smart-node-box-resize .node-port { pointer-events:none !important; }
 .composer-expand-backdrop { position:fixed; inset:0; z-index:81; display:none; background:rgba(3,7,18,.58); backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); pointer-events:none; touch-action:none; overscroll-behavior:none; }
 .composer-expand-backdrop.open { display:block; pointer-events:auto; }
 .composer-expand-btn.active { background:var(--card); border-color:var(--line); color:var(--text); }
-.composer-card { position:relative; background:var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:0 20px 56px var(--shadow); backdrop-filter:blur(20px); padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"head head" "thumbs thumbs" "prompt-preview prompt-preview" "prompt prompt" "params run"; gap:9px; align-items:start; cursor:default; }
+.composer-card { position:relative; background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 20px 56px var(--shadow); backdrop-filter:none; -webkit-backdrop-filter:none; padding:10px; display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"head head" "thumbs thumbs" "prompt-preview prompt-preview" "prompt prompt" "params run"; gap:9px; align-items:start; cursor:default; }
 .composer-workspace { grid-area:prompt; display:grid; grid-template-rows:minmax(0, 1fr); min-width:0; min-height:60px; }
 .composer-workspace > .prompt-row { grid-area:auto; }
 .composer.expanded .composer-workspace { grid-template-rows:minmax(150px, 1fr) 12px; }
@@ -1567,6 +1567,8 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .theme-dark .smart-control:hover .smart-pill { border-color:rgba(248,250,252,.22); }
 .theme-dark .smart-control.pinned .smart-pill { border-color:var(--strong); }
 .smart-popover { position:absolute; left:50%; bottom:calc(100% + 8px); z-index:50; min-width:190px; max-width:min(380px, calc(100vw - 40px)); padding:8px; border-radius:13px; background:var(--panel); border:1px solid var(--line); color:var(--text); box-shadow:0 14px 40px var(--shadow); backdrop-filter:blur(20px); transform:translate(-50%, 4px); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .14s ease, transform .14s ease, visibility .14s ease; }
+.composer .smart-popover { background:var(--card); backdrop-filter:none; -webkit-backdrop-filter:none; }
+.dynamic-params.switching-smart-popovers .smart-popover { transition:none; }
 .smart-popover svg,.smart-popover i { width:var(--ctrl-pop-icon) !important; height:var(--ctrl-pop-icon) !important; stroke-width:2; }
 .smart-control::before { content:""; position:absolute; left:-6px; right:-6px; bottom:100%; height:10px; display:block; pointer-events:none; }
 .composer .param-row .smart-control::before { height:8px; }

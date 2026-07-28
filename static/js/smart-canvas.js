@@ -7896,14 +7896,39 @@ function rememberPickerScroll(list){
     list._hasRememberedScroll = true;
     pickerScrollMemory.set(memoryKey, {top:list.scrollTop || 0, left:list.scrollLeft || 0});
 }
-function centerCurrentPickerOption(ctrl){
+function visiblePickerOptionScrollTop(list, active){
+    const listRect = list.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    const maxTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    const clampTop = value => Math.min(maxTop, Math.max(0, value));
+    const style = getComputedStyle(list);
+    const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+    const viewportTop = listRect.top + paddingTop;
+    const viewportBottom = listRect.bottom - paddingBottom;
+    const currentTop = list.scrollTop;
+
+    // Explorer-style positioning: keep the current viewport whenever possible and
+    // scroll only the minimum distance needed to reveal the complete active option.
+    if(activeRect.height > viewportBottom - viewportTop){
+        return clampTop(currentTop + activeRect.top - viewportTop);
+    }
+    if(activeRect.top < viewportTop){
+        return clampTop(currentTop + activeRect.top - viewportTop);
+    }
+    if(activeRect.bottom > viewportBottom){
+        return clampTop(currentTop + activeRect.bottom - viewportBottom);
+    }
+    return currentTop;
+}
+function revealCurrentPickerOption(ctrl){
     if(!ctrl) return;
     const list = ctrl.classList.contains('size-picker-control')
         ? ctrl.querySelector('.size-picker-list')
         : (ctrl.classList.contains('model-control') ? ctrl.querySelector('.model-list') : null);
     if(!list || list._pickerPositionApplied) return;
     if(list.clientHeight <= 0){
-        requestAnimationFrame(() => centerCurrentPickerOption(ctrl));
+        requestAnimationFrame(() => revealCurrentPickerOption(ctrl));
         return;
     }
     const memoryKey = pickerScrollMemoryKey(list);
@@ -7917,10 +7942,45 @@ function centerCurrentPickerOption(ctrl){
     const active = list.querySelector('.active');
     if(!active) return;
     list._pickerPositionApplied = true;
-    const activeTop = active.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
-    applyAutomaticPickerScroll(list, {top:activeTop - (list.clientHeight - active.offsetHeight) / 2});
+    applyAutomaticPickerScroll(list, {top:visiblePickerOptionScrollTop(list, active)});
 }
 function bindDynamicParams(){
+    if(!dynamicParams._smartPopoverSwitchingBound){
+        dynamicParams._smartPopoverSwitchingBound = true;
+        let switchingFrame = 0;
+        dynamicParams.addEventListener('mouseout', event => {
+            const previousControl = event.target?.closest?.('.smart-control');
+            const nextControl = event.relatedTarget?.closest?.('.smart-control');
+            if(!previousControl || previousControl === nextControl) return;
+            const staysInParamRow = event.relatedTarget instanceof Node && dynamicParams.contains(event.relatedTarget);
+            if(!staysInParamRow) return;
+
+            // Crossing a gap or entering another control is an in-row handoff.
+            // Keep transitions disabled until the pointer reaches the next control.
+            if(switchingFrame) cancelAnimationFrame(switchingFrame);
+            switchingFrame = 0;
+            dynamicParams.classList.add('switching-smart-popovers');
+            void dynamicParams.offsetWidth;
+        }, true);
+        dynamicParams.addEventListener('mouseover', event => {
+            const nextControl = event.target?.closest?.('.smart-control');
+            if(!nextControl || !dynamicParams.classList.contains('switching-smart-popovers')) return;
+            if(switchingFrame) cancelAnimationFrame(switchingFrame);
+            switchingFrame = requestAnimationFrame(() => {
+                // The video settings control applies .is-open from mouseenter,
+                // after this capture handler. Wait for that state before restoring
+                // transitions so its opacity/translate handoff is instantaneous too.
+                void dynamicParams.offsetWidth;
+                dynamicParams.classList.remove('switching-smart-popovers');
+                switchingFrame = 0;
+            });
+        }, true);
+        dynamicParams.addEventListener('mouseleave', () => {
+            if(switchingFrame) cancelAnimationFrame(switchingFrame);
+            switchingFrame = 0;
+            dynamicParams.classList.remove('switching-smart-popovers');
+        });
+    }
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
@@ -7929,11 +7989,11 @@ function bindDynamicParams(){
         };
         ctrl.onmouseenter = () => {
             if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
-            centerCurrentPickerOption(ctrl);
+            revealCurrentPickerOption(ctrl);
         };
-        ctrl.onmouseover = () => centerCurrentPickerOption(ctrl);
+        ctrl.onmouseover = () => revealCurrentPickerOption(ctrl);
         ctrl.onfocusin = () => {
-            centerCurrentPickerOption(ctrl);
+            revealCurrentPickerOption(ctrl);
             if(ctrl.classList.contains('video-settings-control')){
                 requestAnimationFrame(() => syncVideoSettingsOpenState(ctrl));
             }
@@ -7954,7 +8014,7 @@ function bindDynamicParams(){
             if(!wasPinned){
                 ctrl.classList.add('pinned');
                 if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
-                centerCurrentPickerOption(ctrl);
+                revealCurrentPickerOption(ctrl);
             }
         };
     });
@@ -8243,7 +8303,7 @@ function bindDynamicParams(){
     // 节点重新选中时控件可能直接在静止的鼠标下方重建，此时不会重新触发 mouseenter。
     requestAnimationFrame(() => dynamicParams.querySelectorAll('.model-control, .size-picker-control').forEach(ctrl => {
         if(ctrl.matches(':hover') || ctrl.classList.contains('pinned') || ctrl.classList.contains('interacting')){
-            centerCurrentPickerOption(ctrl);
+            revealCurrentPickerOption(ctrl);
         }
     }));
 }
