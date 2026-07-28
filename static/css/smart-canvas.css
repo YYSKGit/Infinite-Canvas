@@ -622,11 +622,17 @@ body.smart-node-resize .smart-node-floating-menu,
 .image-node .floating-node-actions .mini-x.cascade-pin-btn.active { background:#fef3c7; color:#b45309; border-color:#f59e0b; }
 .image-node .floating-node-actions .mini-x.cascade-pin-btn.active svg { fill:currentColor; }
 .image-node .floating-node-actions .mini-x.cascade-pin-btn:disabled { cursor:not-allowed; opacity:.55; transform:none; }
+.image-node .floating-node-actions .mini-x.smart-node-run-btn { background:rgba(255,255,255,.92); border:1px solid #e8edf3; color:#64748b; }
+.image-node .floating-node-actions .mini-x.smart-node-run-btn:hover { background:#dbeafe; color:#1d4ed8; border-color:#93c5fd; }
+.image-node .floating-node-actions .mini-x.smart-node-run-btn:disabled { cursor:not-allowed; opacity:.55; transform:none; }
+.image-node .floating-node-actions .mini-x.smart-node-run-btn svg { fill:currentColor; }
 .theme-dark .image-node .floating-node-actions .mini-x:is(.node-delete,.node-media-clear) { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .theme-dark .image-node .floating-node-actions .mini-x:is(.node-delete,.node-media-clear):hover { background:rgba(220,38,38,.85); color:#fff; border-color:rgba(220,38,38,.6); }
 .theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
 .theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn:hover,
 .theme-dark .image-node .floating-node-actions .mini-x.cascade-pin-btn.active { background:rgba(146,64,14,.9); color:#fef3c7; border-color:#f59e0b; }
+.theme-dark .image-node .floating-node-actions .mini-x.smart-node-run-btn { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }
+.theme-dark .image-node .floating-node-actions .mini-x.smart-node-run-btn:hover { background:rgba(30,64,175,.86); color:#dbeafe; border-color:#60a5fa; }
 .image-wrap { position:relative; width:100%; border-radius:13px; overflow:visible; }
 .image-wrap .mini-x, .thumb-item .mini-x { position:absolute; right:7px; top:7px; z-index:6; opacity:0; pointer-events:none; }
 .theme-dark .image-wrap .mini-x, .theme-dark .thumb-item .mini-x { background:rgba(15,23,42,.86); color:#cbd5e1; border-color:rgba(148,163,184,.28); box-shadow:0 8px 18px rgba(0,0,0,.3); }

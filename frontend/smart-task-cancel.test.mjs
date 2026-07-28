@@ -90,6 +90,15 @@ test('timer and cancel corner controls do not overlap, and the composer run butt
     );
 });
 
+test('generated nodes expose a quick run button that reuses single-node generation', () => {
+    assert.match(jsSource, /const floatingActions = `\$\{floatingCancelBtn\}\$\{floatingPinBtn\}\$\{floatingRunBtn\}\$\{floatingDeleteBtn\}`/);
+    assert.match(jsSource, /data-smart-node-run=/);
+    assert.match(jsSource, /runSmartNodeQuick\(btn\.dataset\.smartNodeRun \|\| id\)/);
+    const quickRun = extractFunction('runSmartNodeQuick');
+    assert.match(quickRun, /runGeneration\(null,\s*\{nodeId\}\)/);
+    assert.match(cssSource, /\.mini-x\.smart-node-run-btn\s*\{/);
+});
+
 test('cancelled polling cannot turn retained pre-run images into a success log', () => {
     const start = jsSource.indexOf('async function runGeneration(');
     const end = jsSource.indexOf('async function runPromptLLMNode(', start);

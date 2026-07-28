@@ -3151,6 +3151,13 @@ function isSmartRunnableNode(node){
     const historySingleItem = isHistoryGroupNode(node) && (node.images || []).filter(img => img?.url).length === 1;
     return Boolean((isSmartImageNode(node) && (!isHistoryGroupNode(node) || historySingleItem)) || isSmartGroupNode(node));
 }
+function smartNodeRunDisabled(node){
+    const queuedInAncestorRun = Boolean(node?.id && smartAncestorCascadeRun?.plan?.stepIds?.includes(node.id));
+    return !isSmartRunnableNode(node)
+        || smartNodeInFlight(node)
+        || smartCascadeIsLoopRunning(node?.id)
+        || queuedInAncestorRun;
+}
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
 }
@@ -9407,8 +9414,7 @@ function syncRunButtonState(node=selectedNode()){
     runBtn.setAttribute('aria-label', runLabel);
     // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
-    const queuedInAncestorRun = Boolean(node?.id && smartAncestorCascadeRun?.plan?.stepIds?.includes(node.id));
-    runBtn.disabled = stopping ? false : (!isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id) || queuedInAncestorRun);
+    runBtn.disabled = stopping ? false : smartNodeRunDisabled(node);
 }
 function mergeSmartNode(local, remote){
     const images = mergeSmartImageLists(local.images, remote.images);
@@ -12753,10 +12759,11 @@ function render(){
                 ? `<button class="mini-x node-media-clear" type="button" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`
                 : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`)
             : '';
+        const floatingRunBtn = floatingPinBtn && floatingDeleteBtn ? smartNodeQuickRunButtonHtml(node) : '';
         const floatingCancelBtn = isGenerating && !isPrompt
             ? `<button class="smart-task-cancel" type="button" data-smart-task-cancel="${escapeAttr(node.id)}" title="取消任务" aria-label="取消任务"><i data-lucide="square"></i></button>`
             : '';
-        const floatingActions = `${floatingCancelBtn}${floatingPinBtn}${floatingDeleteBtn}`;
+        const floatingActions = `${floatingCancelBtn}${floatingPinBtn}${floatingRunBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             ${runningHubProgressBorderHtml(node, layout)}
@@ -13720,6 +13727,17 @@ function bindNodeEvents(){
                 e.preventDefault();
                 e.stopPropagation();
                 toggleSmartAncestorPin(btn.dataset.cascadePin || id);
+            });
+        });
+        el.querySelectorAll('[data-smart-node-run]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                runSmartNodeQuick(btn.dataset.smartNodeRun || id);
             });
         });
         el.querySelectorAll('[data-smart-node-action]').forEach(btn => {
@@ -20684,6 +20702,16 @@ function smartAncestorPinButtonHtml(node){
     const disabled = Boolean(smartNodeInFlight(node) || (smartAncestorCascadeRun?.plan?.activeIds || []).includes(node.id));
     const title = pinned ? '取消固定' : '固定结果并跳过上游';
     return `<button class="mini-x cascade-pin-btn ${pinned ? 'active' : ''}" type="button" data-cascade-pin="${escapeAttr(node.id)}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}" ${disabled ? 'disabled' : ''}><i data-lucide="pin"></i></button>`;
+}
+function smartNodeQuickRunButtonHtml(node){
+    if(!isSmartRunnableNode(node)) return '';
+    const label = tr('smart.run');
+    return `<button class="mini-x smart-node-run-btn" type="button" data-smart-node-run="${escapeAttr(node.id)}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" ${smartNodeRunDisabled(node) ? 'disabled' : ''}><i data-lucide="play"></i></button>`;
+}
+function runSmartNodeQuick(nodeId){
+    const node = nodes.find(candidate => candidate.id === nodeId);
+    if(!node || smartNodeRunDisabled(node)) return {status:'skipped'};
+    return runGeneration(null, {nodeId});
 }
 function toggleSmartAncestorPin(nodeId){
     const node = nodes.find(candidate => candidate.id === nodeId);
