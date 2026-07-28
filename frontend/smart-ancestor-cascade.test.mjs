@@ -601,6 +601,12 @@ test('hover preview marks the complete ancestor chain before execution', () => {
         sandbox
     );
     assert.deepEqual([...sandbox.states], ['', 'source', 'preview', 'boundary', 'skipped', 'preview']);
+    assert.match(source, /const SMART_ANCESTOR_PREVIEW_HOVER_DELAY_MS = 500;/);
+    assert.match(source, /cascadeRunBtn\.addEventListener\('pointerenter', scheduleSmartAncestorCascadePreview\)/);
+    const schedulePreview = extractFunction('scheduleSmartAncestorCascadePreview');
+    assert.match(schedulePreview, /setTimeout\([\s\S]*SMART_ANCESTOR_PREVIEW_HOVER_DELAY_MS/);
+    assert.match(schedulePreview, /cascadeRunBtn\.matches\(':hover'\)/);
+    assert.match(source, /cascadeRunBtn\.addEventListener\('pointerleave',[\s\S]*?clearSmartAncestorCascadePreviewTimer\(\)/);
 });
 
 test('ancestor route keeps normal selection flow except on the actively moving edge', () => {

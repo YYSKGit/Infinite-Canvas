@@ -251,6 +251,8 @@ let smartCascadeRunPath = null;
 const smartCascadeRuns = new Map();
 let smartAncestorCascadeRun = null;
 let smartAncestorCascadePreview = null;
+let smartAncestorCascadePreviewTimer = null;
+const SMART_ANCESTOR_PREVIEW_HOVER_DELAY_MS = 500;
 let smartLoopContext = null;
 let transientSmartCloudLinks = [];
 let runBtnCooldownToken = 0;
@@ -21143,6 +21145,18 @@ function setSmartAncestorCascadePreview(enabled){
     smartAncestorCascadePreview = nextPlan;
     render();
 }
+function clearSmartAncestorCascadePreviewTimer(){
+    if(!smartAncestorCascadePreviewTimer) return;
+    clearTimeout(smartAncestorCascadePreviewTimer);
+    smartAncestorCascadePreviewTimer = null;
+}
+function scheduleSmartAncestorCascadePreview(){
+    clearSmartAncestorCascadePreviewTimer();
+    smartAncestorCascadePreviewTimer = setTimeout(() => {
+        smartAncestorCascadePreviewTimer = null;
+        if(cascadeRunBtn.matches(':hover')) setSmartAncestorCascadePreview(true);
+    }, SMART_ANCESTOR_PREVIEW_HOVER_DELAY_MS);
+}
 function smartAncestorRunErrorMessage(plan){
     if(plan?.invalid === 'cycle') return '无法运行：存在循环连线';
     if(plan?.invalid === 'loop') return '该链路包含循环节点，暂未接入新运行模式';
@@ -25337,6 +25351,7 @@ runBtn.onclick = event => {
     return result;
 };
 cascadeRunBtn.onclick = () => {
+    clearSmartAncestorCascadePreviewTimer();
     if(smartAncestorCascadeRun){
         requestSmartAncestorCascadeStop(smartAncestorCascadeRun.targetId);
         if(composerExpanded) setComposerExpanded(false);
@@ -25346,12 +25361,17 @@ cascadeRunBtn.onclick = () => {
     runSmartAncestorCascade();
     if(composerExpanded) setComposerExpanded(false);
 };
-cascadeRunBtn.addEventListener('pointerenter', () => setSmartAncestorCascadePreview(true));
+cascadeRunBtn.addEventListener('pointerenter', scheduleSmartAncestorCascadePreview);
 cascadeRunBtn.addEventListener('pointerleave', () => {
+    clearSmartAncestorCascadePreviewTimer();
     if(document.activeElement !== cascadeRunBtn) setSmartAncestorCascadePreview(false);
 });
-cascadeRunBtn.addEventListener('focus', () => setSmartAncestorCascadePreview(true));
+cascadeRunBtn.addEventListener('focus', () => {
+    clearSmartAncestorCascadePreviewTimer();
+    setSmartAncestorCascadePreview(true);
+});
 cascadeRunBtn.addEventListener('blur', () => {
+    clearSmartAncestorCascadePreviewTimer();
     if(!cascadeRunBtn.matches(':hover')) setSmartAncestorCascadePreview(false);
 });
 fileInput.onchange = () => {
