@@ -359,6 +359,26 @@ test('selected nodes retain their corner actions after the pointer leaves', () =
     );
 });
 
+test('every selected node type rises above overlaps while smart-group members stay above their group', () => {
+    assert.match(cssSource, /\.image-node\s*\{\s*z-index:3;\s*\}/);
+    assert.match(cssSource, /\.image-node\.history-group-node\s*\{\s*z-index:1;\s*\}/);
+    assert.match(cssSource, /\.image-node\.smart-group-node\s*\{\s*z-index:2;\s*\}/);
+    assert.match(cssSource, /\.image-node\.selected\s*\{\s*z-index:10;\s*\}/);
+    assert.doesNotMatch(cssSource, /\.image-node\.selected:not\(\.smart-group-node\)/);
+    assert.match(cssSource, /\.image-node\.selected-group-member\s*\{\s*z-index:11;\s*\}/);
+    assert.match(cssSource, /\.image-node\.smart-group-node\.dragging\s*\{\s*z-index:12;\s*\}/);
+    assert.match(cssSource, /\.image-node\.dragging:not\(\.smart-group-node\)\s*\{\s*z-index:13;\s*\}/);
+    assert.match(source, /classList\.toggle\('selected-group-member', selectedGroupMembers\.has\(id\)\)/);
+    assert.match(source, /\$\{isSelectedGroupMember \? 'selected-group-member' : ''\}/);
+});
+
+test('history and multi-output groups share the same surface color', () => {
+    assert.match(cssSource, /\.image-node\.group-node\s*\{[^}]*background:#fbfcfd;/);
+    assert.match(cssSource, /\.image-node\.history-group-node\s*\{[^}]*background:#fbfcfd;/);
+    assert.match(cssSource, /\.theme-dark \.image-node\.group-node\s*\{[^}]*background:#0f151f;/);
+    assert.match(cssSource, /\.theme-dark \.image-node\.history-group-node\s*\{[^}]*background:#0f151f;/);
+});
+
 test('unselected paused video actions retain a transparent hit area and normal auto-hide', () => {
     assert.match(
         cssSource,

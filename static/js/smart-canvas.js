@@ -4006,11 +4006,13 @@ function clearImageClickTimer(){
 }
 function syncSelectionUi(){
     const ids = selectedNodeIds();
+    const selectedGroupMembers = selectedSmartGroupMemberIds();
     world.classList.toggle('smart-multi-selected', ids.length > 1);
     smartArrangeBtn?.classList.toggle('visible', ids.length > 0);
     world.querySelectorAll('.image-node').forEach(el => {
         const id = el.dataset.id || '';
         el.classList.toggle('selected', isNodeSelected(id));
+        el.classList.toggle('selected-group-member', selectedGroupMembers.has(id));
         el.querySelectorAll('.thumb-item,.image-wrap').forEach(item => {
             const index = Number(item.dataset.imageIndex || 0);
             item.classList.toggle('image-selected', selectedImage.nodeId === id && selectedImage.index === index);
@@ -4025,6 +4027,14 @@ function isNodeSelected(id){
 }
 function selectedNodeIds(){
     return selectedIds.length ? selectedIds.slice() : (selectedId ? [selectedId] : []);
+}
+function selectedSmartGroupMemberIds(){
+    const memberIds = new Set();
+    nodes.forEach(group => {
+        if(!isSmartGroupNode(group) || !isNodeSelected(group.id)) return;
+        smartGroupMembers(group).forEach(member => memberIds.add(member.id));
+    });
+    return memberIds;
 }
 function isEditableTarget(target){
     const el = target || document.activeElement;
@@ -12755,6 +12765,7 @@ function render(){
     const mediaStates = captureMediaPlaybackStates();
     const thumbScrollStates = captureThumbScrollStates();
     const promptTextareaScrollStates = capturePromptNodeTextareaScrollStates();
+    const selectedGroupMemberIds = selectedSmartGroupMemberIds();
     // 用户正在提示词框(contenteditable)输入时,本次重渲染不要移动 composer:
     // 移动 DOM 节点会打断输入法合成会话,导致输入中断(即使保留焦点描边也接不上)。
     const promptHadFocus = Boolean(promptEditor?.hasFocus?.() || promptInput?.contains?.(document.activeElement));
@@ -12778,6 +12789,7 @@ function render(){
         const isLoop = node.type === 'smart-loop';
         const isSmartGroup = node.type === 'smart-group';
         const isCompactMember = isSmartGroupCompactMember(node);
+        const isSelectedGroupMember = selectedGroupMemberIds.has(node.id);
         const isImageNode = node.type === 'smart-image' || !node.type;
         const isJimengPending = Boolean(node.jimengPending && node.jimengPending.submitId && imgs.length === 0);
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
@@ -12804,7 +12816,7 @@ function render(){
             : '';
         const floatingActions = `${floatingCancelBtn}${floatingPinBtn}${floatingRunBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             ${runningHubProgressBorderHtml(node, layout)}
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}

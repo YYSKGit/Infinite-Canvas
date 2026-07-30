@@ -249,8 +249,8 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .image-node.empty-node { background:var(--card); border:1px solid var(--line); box-shadow:0 12px 34px var(--shadow); overflow:visible; display:flex; flex-direction:column; }
 .image-node.group-node { padding:14px; background:#fbfcfd; border:1px solid rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); backdrop-filter:blur(12px); }
 .theme-dark .image-node.group-node { background:#0f151f; border-color:rgba(148,163,184,.28); }
-.image-node.history-group-node { border-color:rgba(148,163,184,.34); background:#f8fafc; }
-.theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:#131a23; }
+.image-node.history-group-node { border-color:rgba(148,163,184,.34); background:#fbfcfd; }
+.theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:#0f151f; }
 .image-node.selected { outline:0; }
 .image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.smart-group-node) { box-shadow:none; border-radius:12px; }
 .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img, .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
@@ -893,11 +893,19 @@ video.node-img { object-fit:cover; background:#0f172a; }
     .connection-layer .conn-ancestor-flow,
     .image-node.ancestor-run-active::before { animation:none; stroke-dashoffset:0; }
 }
-.image-node { z-index:2; }
-.image-node.smart-group-node { z-index:1; }
-.image-node.selected:not(.smart-group-node) { z-index:10; }
-.image-node.dragging:not(.smart-group-node) { z-index:12; }
-.image-node.smart-group-node.dragging { z-index:3; }
+/* Default semantic layers: auto-generated history sits at the back, manually
+   created smart-group surfaces take precedence, and current working nodes stay
+   in front. Selection and dragging still override every default layer below. */
+.image-node { z-index:3; }
+.image-node.history-group-node { z-index:1; }
+.image-node.smart-group-node { z-index:2; }
+.image-node.selected { z-index:10; }
+/* Smart-group members are separate world children rather than DOM children of
+   the group surface. Raise them with a selected group so its own background
+   cannot cover them while the whole group sits above unrelated nodes. */
+.image-node.selected-group-member { z-index:11; }
+.image-node.smart-group-node.dragging { z-index:12; }
+.image-node.dragging:not(.smart-group-node) { z-index:13; }
 .node-resize-handle { position:absolute; right:7px; bottom:7px; width:18px; height:18px; border-radius:8px; cursor:nwse-resize; touch-action:none; background:rgba(255,255,255,.86); border:1px solid #e8edf3; display:flex; align-items:center; justify-content:center; color:#94a3b8; opacity:0; transition:all .18s ease; z-index:5; }
 .node-resize-handle::before { content:""; width:6px; height:6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; }
 .node-resize-handle:hover { color:#111827; border-color:#cbd5e1; background:#fff; }
