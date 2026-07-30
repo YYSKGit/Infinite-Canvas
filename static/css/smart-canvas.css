@@ -247,10 +247,10 @@ body.smart-node-drag .thumb-item:hover .image-resolution-badge,
 body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !important; pointer-events:none !important; }
 .image-node:not(.empty-node) { min-height:0; }
 .image-node.empty-node { background:var(--card); border:1px solid var(--line); box-shadow:0 12px 34px var(--shadow); overflow:visible; display:flex; flex-direction:column; }
-.image-node.group-node { padding:14px; background:rgba(255,255,255,.46); border:1px solid rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); backdrop-filter:blur(12px); }
-.theme-dark .image-node.group-node { background:rgba(15,23,42,.28); border-color:rgba(148,163,184,.28); }
-.image-node.history-group-node { border-color:rgba(148,163,184,.34); background:rgba(248,250,252,.66); }
-.theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:rgba(30,41,59,.28); }
+.image-node.group-node { padding:14px; background:#fbfcfd; border:1px solid rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); backdrop-filter:blur(12px); }
+.theme-dark .image-node.group-node { background:#0f151f; border-color:rgba(148,163,184,.28); }
+.image-node.history-group-node { border-color:rgba(148,163,184,.34); background:#f8fafc; }
+.theme-dark .image-node.history-group-node { border-color:rgba(148,163,184,.28); background:#131a23; }
 .image-node.selected { outline:0; }
 .image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.smart-group-node) { box-shadow:none; border-radius:12px; }
 .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img, .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
@@ -894,7 +894,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
     .image-node.ancestor-run-active::before { animation:none; stroke-dashoffset:0; }
 }
 .image-node { z-index:2; }
-.image-node.smart-group-node { z-index:0; }
+.image-node.smart-group-node { z-index:1; }
 .image-node.selected:not(.smart-group-node) { z-index:10; }
 .image-node.dragging:not(.smart-group-node) { z-index:12; }
 .image-node.smart-group-node.dragging { z-index:3; }
@@ -2088,8 +2088,12 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 @media (max-width:760px) { .composer { width:min(540px, calc(100vw - 28px)); } .composer-card { grid-template-columns:minmax(0, 1fr) auto; } .smart-minimap { width:148px; height:98px; } }
 /* 分组外框：不论是空态摘要还是图片缩略图网格，都由容器统一提供边框/背景/内边距。
    内边距 16px 与图片网格布局里预留的 PAD=32（每边 16px）一致。 */
-.smart-group-node { box-sizing:border-box; padding:14px; border-radius:16px; background:rgba(255,255,255,.46); border:1px solid rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); backdrop-filter:blur(12px); pointer-events:auto; }
-.theme-dark .smart-group-node { background:rgba(15,23,42,.28); border-color:rgba(148,163,184,.28); }
+/* Group surfaces must be opaque. At non-1:1 canvas zoom backdrop-filter is
+   intentionally disabled; translucent group backgrounds would then expose the
+   SVG connections below. These colors are the opaque equivalents of the
+   previous translucent surfaces over the canvas background. */
+.smart-group-node { box-sizing:border-box; padding:14px; border-radius:16px; background:#fbfcfd; border:1px solid rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); backdrop-filter:blur(12px); pointer-events:auto; }
+.theme-dark .smart-group-node { background:#0f151f; border-color:rgba(148,163,184,.28); }
 .smart-group-node:not(.node-generating):hover { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .smart-group-node:not(.selected):has(.node-port:hover) { border-color:rgba(148,163,184,.35); box-shadow:0 10px 30px rgba(15,23,42,.06); }
 .theme-dark .smart-group-node:not(.selected):has(.node-port:hover) { border-color:rgba(148,163,184,.28); }
