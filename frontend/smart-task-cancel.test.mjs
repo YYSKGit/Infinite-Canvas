@@ -154,7 +154,7 @@ test('ordinary media groups reuse the smart-group summary header and reserve its
     assert.match(jsSource, /height = visibleRows \* cell - 8 \+ PAD \+ MEDIA_GROUP_SUMMARY_SPACE/);
     assert.match(jsSource, /h:visibleRows \* cell - 8 \+ pad \+ MEDIA_GROUP_SUMMARY_SPACE/);
     assert.match(cssSource, /\.image-node\.group-node \.node-body\s*\{[^}]*padding:0/);
-    assert.match(cssSource, /\.smart-group-card\.media-group-card \.thumb-grid\s*\{/);
+    assert.match(cssSource, /\.smart-group-card\.media-group-card \.thumb-grid:not\(\.media-group-layout-grid\)\s*\{/);
 });
 
 test('multi-task generation uses the same media-group summary without resetting progress cells', () => {
@@ -165,8 +165,26 @@ test('multi-task generation uses the same media-group summary without resetting 
     assert.match(jsSource, /if\(currentGrid\)\{[\s\S]*?patchSmartProgressTaskGrid\(currentGrid, freshGrid\)/);
     assert.match(jsSource, /class="smart-group-card media-group-card smart-pending-group-card has-thumbs"/);
     assert.match(jsSource, /Number\(node\.pending\) > 1/);
-    assert.match(cssSource, /\.smart-progress-group-card \.smart-progress-task-grid\s*\{[^}]*flex:1 1 auto/);
-    assert.match(cssSource, /\.smart-pending-group-card \.loading-skeleton\s*\{[^}]*width:100% !important/);
+    assert.match(jsSource, /smart-progress-task-grid media-group-layout-grid/);
+    assert.match(jsSource, /thumb-grid media-group-layout-grid/);
+    assert.match(jsSource, /loading-skeleton media-group-layout-grid/);
+    assert.match(cssSource, /\.media-group-card > \.media-group-layout-grid\s*\{[^}]*grid-template-columns:repeat\(var\(--thumb-cols, 2\), minmax\(0, 1fr\)\) !important/);
+    assert.match(cssSource, /\.media-group-card > \.media-group-layout-grid > :is\(\.thumb-item,\.smart-progress-task-cell,\.loading-cell\)/);
+    assert.match(jsSource, /updateNodeElementDuringResize[\s\S]*?classList\.contains\('media-group-layout-grid'\)[\s\S]*?--media-group-row-height/);
+    assert.match(jsSource, /function alignMediaGroupGridGeometry\(root\)[\s\S]*?grid\.clientHeight - paddingTop - paddingBottom - rowGap \* \(visibleRows - 1\)/);
+    assert.doesNotMatch(jsSource, /scrollEdgeGuard/);
+    assert.match(cssSource, /\.media-group-card > \.media-group-layout-grid:not\(\.is-scrollable\)\s*\{[^}]*overflow-y/);
+    assert.match(cssSource, /\.media-group-card > \.media-group-layout-grid\.is-scrollable\s*\{[^}]*row-gap:10px;[^}]*overflow-y:auto/);
+    assert.match(cssSource, /\.media-group-card > \.media-group-layout-grid\s*\{[^}]*overflow-anchor:none/);
+    assert.match(cssSource, /\.smart-group-summary\s*\{[^}]*font-size:11px;[^}]*line-height:14px;[^}]*transform:translateY\(-1px\)/);
+    assert.match(cssSource, /\.smart-group-summary i,\.smart-group-summary svg\s*\{[^}]*width:14px;[^}]*height:14px;[^}]*flex:0 0 14px/);
+    const renderStart = jsSource.indexOf('function render(){');
+    const renderEnd = jsSource.indexOf('function measureSmartNodeImages()', renderStart);
+    const renderSource = jsSource.slice(renderStart, renderEnd);
+    assert.ok(
+        renderSource.indexOf('alignMediaGroupGridGeometry(world)') < renderSource.indexOf('restoreThumbScrollStates(thumbScrollStates)'),
+        'media-group row geometry must settle before restoring scrollTop'
+    );
 });
 
 test('re-generation archives the current batch before dispatch and never restores it on failure', () => {

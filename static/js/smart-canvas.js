@@ -11108,10 +11108,15 @@ function updateNodeElementDuringResize(node){
             const count = Math.max(1, Number(node.pending) || 1);
             const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
             const rows = Math.ceil(count / cols);
+            const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows));
             loadingGrid.style.width = `${layout.width}px`;
             loadingGrid.style.height = `${layout.height}px`;
             loadingGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
             loadingGrid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+            if(loadingGrid.classList.contains('media-group-layout-grid')){
+                const rowHeight = Math.max(28, (Number(layout.height || 0) - 30 - 21 - 16 - 8 * (visibleRows - 1)) / visibleRows);
+                loadingGrid.style.setProperty('--media-group-row-height', `${Number(rowHeight.toFixed(3))}px`);
+            }
         }
         const maxVisibleRows = isSmartGroupNode(node)
             ? (smartGroupCompactMembers(node).length ? Number(layout.rows || 1) : SMART_GROUP_MAX_VISIBLE_ROWS)
@@ -11123,6 +11128,10 @@ function updateNodeElementDuringResize(node){
             const visibleRows = Math.max(1, Math.min(maxVisibleRows, Number(layout.visibleRows || layout.rows || 1)));
             const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
             grid.style.setProperty('--thumb-max-height', `${maxHeight}px`);
+            if(grid.classList.contains('media-group-layout-grid')){
+                const rowHeight = Math.max(28, (Number(layout.height || 0) - 30 - 21 - 16 - 8 * (visibleRows - 1)) / visibleRows);
+                grid.style.setProperty('--media-group-row-height', `${Number(rowHeight.toFixed(3))}px`);
+            }
             grid.querySelectorAll('.thumb-item').forEach((itemEl, index) => {
                 applyThumbDisplaySizeToElement(itemEl, imgs[index], layout.thumb);
             });
@@ -11146,6 +11155,8 @@ function updateNodeElementDuringResize(node){
             media.style.width = `${mediaW}px`;
             media.style.height = `${mediaH}px`;
         }
+        alignMediaGroupGridGeometry(body);
+        alignSmartProgressTaskGridGeometry(body);
     }
     const active = selectedNode();
     if(active?.id === node.id) positionComposerForNode(active);
@@ -12550,10 +12561,16 @@ function smartProgressTaskGridHtml(node, layout=null){
     const total = tasks.length;
     const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(total))));
     const rows = Math.ceil(total / cols);
+    const visibleRows = Math.max(1, Math.min(3, rows));
     const gridPadding = 8;
     const gridGap = 8;
     const cellWidth = Math.max(2, (width - gridPadding * 2 - gridGap * (cols - 1)) / cols);
     const cellHeight = Math.max(2, (height - gridPadding * 2 - gridGap * (rows - 1)) / rows);
+    // The media group itself owns 14px padding and a 1px border on each side.
+    // Its summary occupies a stable 13px row plus the shared 8px card gap.
+    // Use the remaining height for the same visible-row tracks that completed
+    // media cards use, so swapping progress cells for results cannot move them.
+    const layoutRowHeight = Math.max(28, (height - 30 - 21 - gridPadding * 2 - gridGap * (visibleRows - 1)) / visibleRows);
     const pathWidth = Number(cellWidth.toFixed(3));
     const pathHeight = Number(cellHeight.toFixed(3));
     const pathInset = 1;
@@ -12602,7 +12619,7 @@ function smartProgressTaskGridHtml(node, layout=null){
             <span class="smart-progress-task-status" title="${escapeAttr(statusText)}">${statusHtml}</span>
         </div>`;
     }).join('');
-    return `<div class="smart-progress-task-grid" data-progress-task-count="${total}" style="grid-template-columns:repeat(${cols},minmax(0,1fr));grid-template-rows:repeat(${rows},minmax(0,1fr))">${cells}</div>`;
+    return `<div class="smart-progress-task-grid media-group-layout-grid ${rows > visibleRows ? 'is-scrollable' : ''}" data-progress-task-count="${total}" data-grid-rows="${rows}" data-grid-visible-rows="${visibleRows}" style="--thumb-cols:${cols};--media-group-visible-rows:${visibleRows};--media-group-row-height:${Number(layoutRowHeight.toFixed(3))}px">${cells}</div>`;
 }
 function syncSmartProgressTaskSvgGeometry(svg, width, height){
     if(!svg) return;
@@ -12633,6 +12650,18 @@ function alignSmartProgressTaskGridGeometry(root){
             cell.clientWidth,
             cell.clientHeight
         );
+    });
+}
+function alignMediaGroupGridGeometry(root){
+    root?.querySelectorAll?.('.media-group-layout-grid.is-scrollable').forEach(grid => {
+        const visibleRows = Math.max(1, Number(grid.dataset.gridVisibleRows || 1));
+        const style = getComputedStyle(grid);
+        const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+        const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+        const rowGap = Number.parseFloat(style.rowGap) || 0;
+        const availableHeight = grid.clientHeight - paddingTop - paddingBottom - rowGap * (visibleRows - 1);
+        if(!(availableHeight > 0)) return;
+        grid.style.setProperty('--media-group-row-height', `${Number((availableHeight / visibleRows).toFixed(3))}px`);
     });
 }
 function runningHubProgressBorderHtml(node, layout=null){
@@ -12783,7 +12812,9 @@ function nodeBodyHtml(node, layout){
         if(count <= 1) return `<div class="loading-cell single" style="width:${layout.width}px;height:${layout.height}px"></div>`;
         const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
         const rows = Math.ceil(count / cols);
-        const skeleton = `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows));
+        const rowHeight = Math.max(28, (Number(layout.height || 0) - 30 - 21 - 16 - 8 * (visibleRows - 1)) / visibleRows);
+        const skeleton = `<div class="loading-skeleton media-group-layout-grid ${rows > visibleRows ? 'is-scrollable' : ''}" data-grid-rows="${rows}" data-grid-visible-rows="${visibleRows}" style="--thumb-cols:${cols};--media-group-visible-rows:${visibleRows};--media-group-row-height:${Number(rowHeight.toFixed(3))}px">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
         return `<div class="smart-group-card media-group-card smart-pending-group-card has-thumbs">${mediaGroupSummaryHtml([], count, smartProgressTaskMediaKind(node))}${skeleton}</div>`;
     }
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
@@ -12795,7 +12826,9 @@ function nodeBodyHtml(node, layout){
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${smartHistoryPreviousBadgeHtml(node, i)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        const rowHeight = Math.max(28, (Number(layout.height || 0) - 30 - 21 - 16 - 8 * (visibleRows - 1)) / visibleRows);
+        const totalRows = Math.max(visibleRows, Number(layout.rows || visibleRows));
+        const gridContent = `<div class="thumb-grid media-group-layout-grid ${totalRows > visibleRows ? 'is-scrollable' : ''} ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" data-grid-rows="${totalRows}" data-grid-visible-rows="${visibleRows}" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px; --media-group-visible-rows:${visibleRows}; --media-group-row-height:${Number(rowHeight.toFixed(3))}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${smartHistoryPreviousBadgeHtml(node, i)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
         const groupContent = `<div class="smart-group-card media-group-card has-thumbs">${mediaGroupSummaryHtml(imgs)}${gridContent}</div>`;
         return isRunning ? `<div class="thumb-grid-wrapper">${groupContent}${loadingOverlay}</div>` : groupContent;
     }
@@ -13152,9 +13185,10 @@ function render(){
     });
     applyDetachedVideoDomHandoff();
     restoreMediaPlaybackStates(mediaStates);
+    alignMediaGroupGridGeometry(world);
+    alignSmartProgressTaskGridGeometry(world);
     restoreThumbScrollStates(thumbScrollStates);
     restorePromptNodeTextareaScrollStates(promptTextareaScrollStates);
-    alignSmartProgressTaskGridGeometry(world);
     bindNodeEvents();
     bindConnectionEvents();
     syncSmartCanvasVideoSelection();
@@ -23841,6 +23875,8 @@ function scheduleRunningHubProgressRefresh(node){
         if(!freshGrid) return;
         if(currentGrid){
             patchSmartProgressTaskGrid(currentGrid, freshGrid);
+            alignMediaGroupGridGeometry(currentGrid.closest('.media-group-card') || currentGrid);
+            alignSmartProgressTaskGridGeometry(currentGrid);
             const currentSummary = nodeEl.querySelector(':scope > .node-body .smart-progress-group-card > .media-group-summary');
             const summaryTemplate = document.createElement('template');
             summaryTemplate.innerHTML = mediaGroupSummaryHtml([], runningHubProgressTasks(current).length, smartProgressTaskMediaKind(current)).trim();
@@ -23855,6 +23891,7 @@ function scheduleRunningHubProgressRefresh(node){
             const freshGroup = groupTemplate.content.firstElementChild;
             if(!freshGroup) return;
             nodeEl.querySelector(':scope > .node-body')?.replaceChildren(freshGroup);
+            alignMediaGroupGridGeometry(freshGroup);
             alignSmartProgressTaskGridGeometry(freshGroup);
             if(window.lucide) lucide.createIcons();
         }
