@@ -12684,6 +12684,20 @@ function smartHistoryPreviousBadgeHtml(node, imageIndex){
     if(!latestBatchId || String(images[imageIndex]?.historyBatchId || '') !== latestBatchId) return '';
     return `<span class="history-previous-badge">${escapeHtml(tr('smart.historyPreviousRun'))}</span>`;
 }
+function isHistoricalRunningSnapshotNode(node){
+    if(!node || (node.type !== 'smart-image' && node.type)) return false;
+    if((node.images || []).some(item => item?.url)) return false;
+    return node.runStatus === 'running' && !nodeHasLiveRunState(node);
+}
+function historicalRunningSnapshotBodyHtml(){
+    return `<div class="historical-running-snapshot">
+        <span class="historical-running-snapshot-icon"><i data-lucide="history"></i></span>
+        <div class="historical-running-snapshot-copy">
+            <span class="historical-running-snapshot-title">${escapeHtml(tr('smart.historyRunSnapshotTitle'))}</span>
+            <span class="historical-running-snapshot-sub">${escapeHtml(tr('smart.historyRunSnapshotSub'))}</span>
+        </div>
+    </div>`;
+}
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
@@ -12711,6 +12725,7 @@ function nodeBodyHtml(node, layout){
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
         return smartTerminalRunBodyHtml(node, layout);
     }
+    if(isHistoricalRunningSnapshotNode(node)) return historicalRunningSnapshotBodyHtml();
     const showSingleImageName = !isHistoryGroupNode(node);
     const isRunning = Boolean(node.running || node.pending || node.jimengPending);
     const loadingOverlay = isRunning && imgs.length > 0 ? `<div class="node-loading-overlay"><div class="loading-spinner" style="--spinner-rotation:${spinnerRotation}deg"></div></div>` : '';
@@ -12985,6 +13000,7 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
+        const isHistoricalRunningSnapshot = isHistoricalRunningSnapshotNode(node);
         const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
@@ -13022,9 +13038,9 @@ function render(){
             : '';
         const floatingActions = `${floatingCancelBtn}${floatingPinBtn}${floatingRunBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isRunFailed ? 'node-run-failed' : ''} ${isRunCancelled ? 'node-run-cancelled' : ''} ${isRunPartial ? 'node-run-partial' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistoricalRunningSnapshot ? 'historical-running-snapshot-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isRunFailed ? 'node-run-failed' : ''} ${isRunCancelled ? 'node-run-cancelled' : ''} ${isRunPartial ? 'node-run-partial' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             ${runningHubProgressBorderHtml(node, layout)}
-            <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
+            <div class="node-head">${isHistoricalRunningSnapshot ? '' : `<div class="node-title">${title}</div>`}<div class="node-actions">${deleteBtn}</div></div>
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}

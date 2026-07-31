@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 const jsSource = readFileSync(fileURLToPath(new URL('../static/js/smart-canvas.js', import.meta.url)), 'utf8');
 const cssSource = readFileSync(fileURLToPath(new URL('../static/css/smart-canvas.css', import.meta.url)), 'utf8');
+const i18nSource = readFileSync(fileURLToPath(new URL('../static/js/i18n/smart-canvas.js', import.meta.url)), 'utf8');
 const backendSource = readFileSync(fileURLToPath(new URL('../main.py', import.meta.url)), 'utf8');
 
 function extractFunction(name){
@@ -218,8 +219,44 @@ test('history keeps its original flat grid and only marks media from the previou
     assert.match(jsSource, /historyBatchStatus/);
     assert.match(jsSource, /class="history-previous-badge"/);
     assert.match(cssSource, /\.history-previous-badge\s*\{/);
+    assert.match(i18nSource, /"smart\.historyPreviousRun":\s*\{\s*zh:\s*"NEW",\s*en:\s*"NEW"\s*\}/);
+    assert.match(cssSource, /:has\(> \.image-resolution-badge\):is\(:hover,\.image-selected\) > \.history-previous-badge\s*,/);
     assert.doesNotMatch(jsSource, /class="history-batch-label"/);
     assert.doesNotMatch(cssSource, /\.history-batch-label/);
+});
+
+test('undo snapshots captured during generation render as history state instead of an upload node', () => {
+    const sandbox = vm.createContext({
+        nodeHasLiveRunState:node => Boolean(node?.running || node?.pending)
+    });
+    vm.runInContext(`
+        ${extractFunction('isHistoricalRunningSnapshotNode')}
+        globalThis.historical = isHistoricalRunningSnapshotNode({
+            type:'smart-image',
+            images:[],
+            runStatus:'running',
+            running:false,
+            pending:0
+        });
+        globalThis.live = isHistoricalRunningSnapshotNode({
+            type:'smart-image',
+            images:[],
+            runStatus:'running',
+            pending:1
+        });
+        globalThis.blank = isHistoricalRunningSnapshotNode({
+            type:'smart-image',
+            images:[],
+            runStatus:''
+        });
+    `, sandbox);
+    assert.equal(sandbox.historical, true);
+    assert.equal(sandbox.live, false);
+    assert.equal(sandbox.blank, false);
+    assert.match(extractFunction('nodeBodyHtml'), /isHistoricalRunningSnapshotNode\(node\).*historicalRunningSnapshotBodyHtml\(\)/s);
+    assert.match(jsSource, /class="node-head">\$\{isHistoricalRunningSnapshot \? '' :/);
+    assert.doesNotMatch(jsSource, /smart\.historyRunSnapshotNodeTitle/);
+    assert.match(cssSource, /\.historical-running-snapshot\s*\{/);
 });
 
 test('cancelled polling cannot turn the archived empty current slot into a success log', () => {
