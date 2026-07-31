@@ -76,6 +76,7 @@
         "smart.uploadNodeRefHint": { zh: "可接入上游参考，也可上传素材", en: "Connect upstream references or upload media" },
         "smart.createImportNode": { zh: "空白画布", en: "Upload Node" },
         "smart.createImportNodeSub": { zh: "支持图片/音频/视频/批量上传", en: "Images, audio, video, batch upload" },
+        "smart.historyRunSnapshotNodeTitle": { zh: "历史状态", en: "History State" },
         "smart.historyRunSnapshotTitle": { zh: "当时正在生成", en: "Generation was in progress" },
         "smart.historyRunSnapshotSub": { zh: "继续撤销可回到生成前", en: "Undo again to return to the pre-run state" },
         "smart.createExportNode": { zh: "导出节点", en: "Export Node" },

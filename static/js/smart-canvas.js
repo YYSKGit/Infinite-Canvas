@@ -4080,6 +4080,13 @@ const ZOOM_PREVIEW_NODE_DEFAULT_SCALE = 1;
 const ZOOM_PREVIEW_NODE_MAX_SCALE = 1.15;
 const MEDIA_GROUP_THUMB_BASE = 224;
 const MEDIA_GROUP_MAX_VISIBLE_ROWS = 3;
+// The thumbnail scroller uses a 4px scrollbar plus 2px trailing breathing room.
+// Reserve that width in automatic group sizing instead of shifting or clipping
+// the fixed-width thumbnail columns after overflow begins.
+const MEDIA_GROUP_SCROLLBAR_SPACE = 6;
+function mediaGroupScrollbarSpace(rows, visibleRows){
+    return Number(rows || 0) > Number(visibleRows || 0) ? MEDIA_GROUP_SCROLLBAR_SPACE : 0;
+}
 // 智能分组卡片内的图片网格：超过这么多排就出现纵向滚动（区别于多图节点的 3 排）。
 const SMART_GROUP_MAX_VISIBLE_ROWS = 4;
 const EMPTY_UPLOAD_NODE_WIDTH = 260;
@@ -4304,7 +4311,7 @@ function smartGroupThumbLayout(node){
         rows,
         visibleRows,
         thumb,
-        width:Math.max(SMART_GROUP_MIN_WIDTH, Math.round(gridW + outerPad)),
+        width:Math.max(SMART_GROUP_MIN_WIDTH, Math.round(gridW + outerPad + mediaGroupScrollbarSpace(rows, visibleRows))),
         height:Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(gridH + outerPad + summarySpace))
     };
 }
@@ -4338,7 +4345,7 @@ function fitSmartGroupAfterMediaRemoval(group, cellSize){
     const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(remainingCount))));
     const rows = Math.ceil(remainingCount / cols);
     const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
-    group.w = Math.round(cols * cell + Math.max(0, cols - 1) * 8 + 32);
+    group.w = Math.round(cols * cell + Math.max(0, cols - 1) * 8 + 32 + mediaGroupScrollbarSpace(rows, visibleRows));
     group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(visibleRows * cell + Math.max(0, visibleRows - 1) * 8 + 60));
     return true;
 }
@@ -4693,7 +4700,7 @@ function smartGroupImageGridLayout(node){
         const fitted = groupImageGridLayout(count, explicitW, explicitH, 100000, PAD, 8, SMART_GROUP_MAX_VISIBLE_ROWS);
         return {cols:fitted.cols, rows:fitted.rows, visibleRows:fitted.visibleRows, width:Math.round(explicitW), height:fitted.visibleRows * (fitted.thumb + 8) - 8 + PAD, thumb:fitted.thumb};
     }
-    const width = Math.max(Math.round(226 * s), cols * cell + PAD);
+    const width = Math.max(Math.round(226 * s), cols * cell + PAD + mediaGroupScrollbarSpace(rows, visibleRows));
     const height = visibleRows * cell - 8 + PAD;
     return {cols, rows, visibleRows, width, height, thumb:baseThumb};
 }
@@ -4744,7 +4751,7 @@ function imageLayout(images, scale=1, node=null){
             const fittedThumb = Math.max(28, Math.floor(Math.min((explicitW - PAD - (cols - 1) * 8) / cols, (explicitH - PAD - (visibleRows - 1) * 8) / visibleRows)));
             return {cols, rows, visibleRows, width:Math.round(explicitW), height:visibleRows * (fittedThumb + 8) - 8 + PAD, thumb:fittedThumb};
         }
-        return {cols, rows, visibleRows, width:Math.max(Math.round(226*s), cols * cell + PAD), height:visibleRows * cell - 8 + PAD, thumb};
+        return {cols, rows, visibleRows, width:Math.max(Math.round(226*s), cols * cell + PAD + mediaGroupScrollbarSpace(rows, visibleRows)), height:visibleRows * cell - 8 + PAD, thumb};
     }
     const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
     const rows = Math.ceil(count / cols);
@@ -4753,7 +4760,7 @@ function imageLayout(images, scale=1, node=null){
         const fitted = groupImageGridLayout(count, explicitW, explicitH, thumb, PAD, 8);
         return {cols:fitted.cols, rows:fitted.rows, visibleRows:fitted.visibleRows, width:Math.round(explicitW), height:fitted.visibleRows * (fitted.thumb + 8) - 8 + PAD, thumb:fitted.thumb};
     }
-    const width = Math.max(Math.round(226*s), cols * cell + PAD);
+    const width = Math.max(Math.round(226*s), cols * cell + PAD + mediaGroupScrollbarSpace(rows, visibleRows));
     const height = visibleRows * cell - 8 + PAD;
     return {cols, rows, visibleRows, width, height, thumb};
 }
@@ -12689,6 +12696,10 @@ function isHistoricalRunningSnapshotNode(node){
     if((node.images || []).some(item => item?.url)) return false;
     return node.runStatus === 'running' && !nodeHasLiveRunState(node);
 }
+function isHistoricalRunningSnapshotGroupNode(node){
+    if(!isHistoricalRunningSnapshotNode(node)) return false;
+    return Math.max(Number(node?.runExpectedCount || 0), runningHubProgressTasks(node).length) > 1;
+}
 function historicalRunningSnapshotBodyHtml(){
     return `<div class="historical-running-snapshot">
         <span class="historical-running-snapshot-icon"><i data-lucide="history"></i></span>
@@ -12702,6 +12713,7 @@ function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
+    if(isHistoricalRunningSnapshotNode(node)) return historicalRunningSnapshotBodyHtml();
     const progressTaskGrid = smartProgressTaskGridHtml(node, layout);
     if(progressTaskGrid) return progressTaskGrid;
     const imgs = (node.images || []).map(imageForDisplay);
@@ -12725,7 +12737,6 @@ function nodeBodyHtml(node, layout){
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
         return smartTerminalRunBodyHtml(node, layout);
     }
-    if(isHistoricalRunningSnapshotNode(node)) return historicalRunningSnapshotBodyHtml();
     const showSingleImageName = !isHistoryGroupNode(node);
     const isRunning = Boolean(node.running || node.pending || node.jimengPending);
     const loadingOverlay = isRunning && imgs.length > 0 ? `<div class="node-loading-overlay"><div class="loading-spinner" style="--spinner-rotation:${spinnerRotation}deg"></div></div>` : '';
@@ -13001,7 +13012,8 @@ function render(){
         .map(node => {
         const imgs = node.images || [];
         const isHistoricalRunningSnapshot = isHistoricalRunningSnapshotNode(node);
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr('smart.createImportNode')));
+        const isHistoricalRunningSnapshotGroup = isHistoricalRunningSnapshotGroupNode(node);
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : (imgs.length > 1 ? 'Group' : imgs.length ? 'Image' : escapeHtml(tr(isHistoricalRunningSnapshotGroup ? 'smart.historyRunSnapshotNodeTitle' : 'smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -13040,7 +13052,7 @@ function render(){
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistoricalRunningSnapshot ? 'historical-running-snapshot-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isRunFailed ? 'node-run-failed' : ''} ${isRunCancelled ? 'node-run-cancelled' : ''} ${isRunPartial ? 'node-run-partial' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             ${runningHubProgressBorderHtml(node, layout)}
-            <div class="node-head">${isHistoricalRunningSnapshot ? '' : `<div class="node-title">${title}</div>`}<div class="node-actions">${deleteBtn}</div></div>
+            <div class="node-head">${isHistoricalRunningSnapshot && !isHistoricalRunningSnapshotGroup ? '' : `<div class="node-title">${title}</div>`}<div class="node-actions">${deleteBtn}</div></div>
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
@@ -19214,7 +19226,7 @@ function pendingBoxSize(count, options={}){
     const cell = thumb + 8;
     const pad = 32;
     return {
-        w:Math.max(Math.round(226 * MEDIA_GROUP_DEFAULT_SCALE), cols * cell + pad),
+        w:Math.max(Math.round(226 * MEDIA_GROUP_DEFAULT_SCALE), cols * cell + pad + mediaGroupScrollbarSpace(rows, visibleRows)),
         h:visibleRows * cell - 8 + pad
     };
 }
@@ -24939,7 +24951,7 @@ function addDraggedNodesToSmartGroup(draggedNodes, group){
         const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(itemCount))));
         const rows = Math.ceil(itemCount / cols);
         const visibleRows = Math.min(SMART_GROUP_MAX_VISIBLE_ROWS, rows);
-        preservedWidth = Math.round(cols * preservedCell + Math.max(0, cols - 1) * 8 + 32);
+        preservedWidth = Math.round(cols * preservedCell + Math.max(0, cols - 1) * 8 + 32 + mediaGroupScrollbarSpace(rows, visibleRows));
         group.w = preservedWidth;
         group.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(visibleRows * preservedCell + Math.max(0, visibleRows - 1) * 8 + 60));
     }

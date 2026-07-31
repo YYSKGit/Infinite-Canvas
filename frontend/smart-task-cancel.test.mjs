@@ -225,6 +225,21 @@ test('history keeps its original flat grid and only marks media from the previou
     assert.doesNotMatch(cssSource, /\.history-batch-label/);
 });
 
+test('automatic media group widths reserve room only when a vertical scrollbar is needed', () => {
+    const sandbox = vm.createContext({});
+    vm.runInContext(`
+        const MEDIA_GROUP_SCROLLBAR_SPACE = 6;
+        ${extractFunction('mediaGroupScrollbarSpace')}
+        globalThis.withoutScroll = mediaGroupScrollbarSpace(3, 3);
+        globalThis.withScroll = mediaGroupScrollbarSpace(4, 3);
+    `, sandbox);
+    assert.equal(sandbox.withoutScroll, 0);
+    assert.equal(sandbox.withScroll, 6);
+    assert.match(extractFunction('imageLayout'), /cols \* cell \+ PAD \+ mediaGroupScrollbarSpace\(rows, visibleRows\)/);
+    assert.match(extractFunction('smartGroupThumbLayout'), /gridW \+ outerPad \+ mediaGroupScrollbarSpace\(rows, visibleRows\)/);
+    assert.match(jsSource, /function pendingBoxSize\([\s\S]*?cols \* cell \+ pad \+ mediaGroupScrollbarSpace\(rows, visibleRows\)/);
+});
+
 test('undo snapshots captured during generation render as history state instead of an upload node', () => {
     const sandbox = vm.createContext({
         nodeHasLiveRunState:node => Boolean(node?.running || node?.pending)
@@ -254,8 +269,26 @@ test('undo snapshots captured during generation render as history state instead 
     assert.equal(sandbox.live, false);
     assert.equal(sandbox.blank, false);
     assert.match(extractFunction('nodeBodyHtml'), /isHistoricalRunningSnapshotNode\(node\).*historicalRunningSnapshotBodyHtml\(\)/s);
-    assert.match(jsSource, /class="node-head">\$\{isHistoricalRunningSnapshot \? '' :/);
-    assert.doesNotMatch(jsSource, /smart\.historyRunSnapshotNodeTitle/);
+    const nodeBody = extractFunction('nodeBodyHtml');
+    assert.ok(
+        nodeBody.indexOf('isHistoricalRunningSnapshotNode(node)') < nodeBody.indexOf('smartProgressTaskGridHtml(node, layout)'),
+        'historical snapshots must replace stale multi-task progress grids'
+    );
+    const groupSandbox = vm.createContext({
+        isHistoricalRunningSnapshotNode:() => true,
+        runningHubProgressTasks:node => node?.tasks || []
+    });
+    vm.runInContext(`
+        ${extractFunction('isHistoricalRunningSnapshotGroupNode')}
+        globalThis.single = isHistoricalRunningSnapshotGroupNode({runExpectedCount:1});
+        globalThis.group = isHistoricalRunningSnapshotGroupNode({runExpectedCount:2});
+        globalThis.progressGroup = isHistoricalRunningSnapshotGroupNode({tasks:[{}, {}]});
+    `, groupSandbox);
+    assert.equal(groupSandbox.single, false);
+    assert.equal(groupSandbox.group, true);
+    assert.equal(groupSandbox.progressGroup, true);
+    assert.match(jsSource, /isHistoricalRunningSnapshot && !isHistoricalRunningSnapshotGroup \? '' :/);
+    assert.match(i18nSource, /"smart\.historyRunSnapshotNodeTitle":\s*\{\s*zh:\s*"历史状态",\s*en:\s*"History State"\s*\}/);
     assert.match(cssSource, /\.historical-running-snapshot\s*\{/);
 });
 
