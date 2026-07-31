@@ -12427,7 +12427,9 @@ function smartProgressTaskStatusParts(task){
 }
 function smartProgressTaskStatusText(task){
     const {name, detail} = smartProgressTaskStatusParts(task);
-    return name && detail ? `${name} · ${detail}` : name || detail;
+    const status = name && detail ? `${name} · ${detail}` : name || detail;
+    const error = String(task?.error || '').trim();
+    return error ? `${status || '任务失败'}：${error}` : status;
 }
 function smartProgressTaskValuePath(percent, width=100, height=100, inset=1, preferredRadius=10){
     const fraction = Math.max(0, Math.min(1, Number(percent) / 100 || 0));
@@ -12505,10 +12507,9 @@ function smartProgressTaskGridHtml(node, layout=null){
     const pathInset = 1;
     const pathRadius = Math.max(0, Math.min(11, Math.min(pathWidth, pathHeight) / 2 - pathInset));
     // Start at the lower-left and travel clockwise: up the left edge, across
-    // the top, down the right edge, then back along the bottom. Deliberately
-    // leave the subpath open even though its endpoints meet geometrically:
-    // browsers centre dash patterns around a closed seam, which makes a
-    // determinate stroke appear to grow in both directions from the start.
+    // the top, down the right edge, then back along the bottom. Keep the 100%
+    // geometry on the same open, single-direction path as every partial value,
+    // so completing the task never changes its endpoint or interpolation model.
     const taskBorderPath = smartProgressTaskValuePath(100, pathWidth, pathHeight, pathInset, pathRadius);
     let resultCursor = 0;
     const cells = tasks.map((task, taskIndex) => {
@@ -12538,7 +12539,7 @@ function smartProgressTaskGridHtml(node, layout=null){
         const statusText = smartProgressTaskStatusText(task);
         const statusHtml = `${statusParts.name ? `<span class="smart-progress-task-status-name">${escapeHtml(statusParts.name)}</span>` : ''}${statusParts.name && statusParts.detail ? '<span class="smart-progress-task-status-separator">·</span>' : ''}${statusParts.detail ? `<span class="smart-progress-task-status-detail">${escapeHtml(statusParts.detail)}</span>` : ''}`;
         const valuePath = smartProgressTaskValuePath(amount, pathWidth, pathHeight, pathInset, pathRadius);
-        return `<div class="smart-progress-task-cell ${queued ? 'is-queued' : ''} ${indeterminate ? 'is-running' : ''} ${determinate ? 'is-determinate' : ''} ${complete ? 'is-complete' : ''} ${terminal ? 'is-terminal' : ''} ${status === 'failed' ? 'is-failed' : ''}" data-progress-task-index="${index}" style="--smart-task-pulse-delay:${pulseDelay}ms">
+        return `<div class="smart-progress-task-cell ${queued ? 'is-queued' : ''} ${indeterminate ? 'is-running' : ''} ${determinate ? 'is-determinate' : ''} ${complete ? 'is-complete' : ''} ${terminal ? 'is-terminal' : ''}" data-progress-task-index="${index}" style="--smart-task-pulse-delay:${pulseDelay}ms">
             <svg class="smart-progress-task-border" viewBox="0 0 ${pathWidth} ${pathHeight}" preserveAspectRatio="none" data-progress-path-width="${pathWidth}" data-progress-path-height="${pathHeight}" data-progress-path-inset="${pathInset}" data-progress-path-radius="${pathRadius}" aria-hidden="true">
                 <path class="smart-progress-task-track" d="${taskBorderPath}"></path>
                 <path class="smart-progress-task-breathe ${indeterminate ? '' : 'is-layer-hidden'}" d="${taskBorderPath}"></path>
@@ -12549,7 +12550,7 @@ function smartProgressTaskGridHtml(node, layout=null){
             <span class="smart-progress-task-status" title="${escapeAttr(statusText)}">${statusHtml}</span>
         </div>`;
     }).join('');
-    return `<div class="smart-progress-task-grid" data-progress-task-count="${total}" style="grid-template-columns:repeat(${cols},minmax(0,1fr));grid-template-rows:repeat(${rows},minmax(0,1fr))" data-progress-layout-width="${width}" data-progress-layout-height="${height}">${cells}</div>`;
+    return `<div class="smart-progress-task-grid" data-progress-task-count="${total}" style="grid-template-columns:repeat(${cols},minmax(0,1fr));grid-template-rows:repeat(${rows},minmax(0,1fr))">${cells}</div>`;
 }
 function syncSmartProgressTaskSvgGeometry(svg, width, height){
     if(!svg) return;
@@ -21870,7 +21871,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
                 delete history.h;
                 outputSlot.images = [];
             }
-            outputSlot.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:taskResult.providerId, model:taskResult.model}));
+            outputSlot.pendingTasks = taskIds.map((taskId, progressIndex) => ({taskId, progressIndex, kind:'image', providerId:taskResult.providerId, model:taskResult.model}));
             outputSlot.pending = Math.max(taskIds.length, Number(outputSlot.pending || 0) || taskIds.length);
             outputSlot.running = false;
             render();
@@ -22416,7 +22417,7 @@ async function runGeneration(event=null, options={}){
         if(isApiLikeEngine(activeSettings.engine)){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
-            pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
+            pendingNode.pendingTasks = taskIds.map((taskId, progressIndex) => ({taskId, progressIndex, kind:'image', providerId:outImages.providerId, model:outImages.model}));
             pendingNode.pending = Math.max(taskIds.length, Number(pendingNode.pending || 0) || taskIds.length);
             pendingNode.runStartedAt = nowMs();
             pendingNode.runTimerHidden = false;
@@ -23523,13 +23524,20 @@ function smartProgressTaskCellHasActiveHalo(cell){
 function patchSmartProgressTaskGrid(currentGrid, freshGrid){
     const currentCells = [...(currentGrid?.querySelectorAll(':scope > .smart-progress-task-cell') || [])];
     const freshCells = [...(freshGrid?.querySelectorAll(':scope > .smart-progress-task-cell') || [])];
-    if(!currentGrid || !freshGrid || currentCells.length !== freshCells.length){
+    const taskKey = cell => String(cell?.dataset?.progressTaskIndex ?? '');
+    const currentCellsByKey = new Map(currentCells.map(cell => [taskKey(cell), cell]));
+    if(
+        !currentGrid
+        || !freshGrid
+        || currentCells.length !== freshCells.length
+        || freshCells.some(cell => !currentCellsByKey.has(taskKey(cell)))
+    ){
         currentGrid?.replaceWith(freshGrid);
         return freshGrid;
     }
     syncRunningHubProgressElement(currentGrid, freshGrid);
-    currentCells.forEach((cell, index) => {
-        const freshCell = freshCells[index];
+    freshCells.forEach(freshCell => {
+        const cell = currentCellsByKey.get(taskKey(freshCell));
         const preserveHaloPhase = smartProgressTaskCellHasActiveHalo(cell)
             && smartProgressTaskCellHasActiveHalo(freshCell);
         syncRunningHubProgressElement(cell, freshCell, preserveHaloPhase ? ['style'] : []);
@@ -23634,9 +23642,10 @@ function finishRunningHubProgressTask(context, index, status='succeeded', error=
     }
     const tasks = runningHubProgressTasks(node);
     if(tasks.length && tasks.every(task => ['succeeded','failed','cancelled'].includes(task.status))){
+        const completedRunId = node.runningHubProgress?.runId;
         setTimeout(() => {
             const current = nodes.find(item => item.id === node.id);
-            if(!current?.runningHubProgress) return;
+            if(!current?.runningHubProgress || current.runningHubProgress.runId !== completedRunId) return;
             if(!runningHubProgressTasks(current).every(task => ['succeeded','failed','cancelled'].includes(task.status))) return;
             delete current.runningHubProgress;
             scheduleRunningHubProgressRefresh(current);
@@ -24242,7 +24251,8 @@ async function querySmartImageTaskNow(nodeId, localTaskId){
         if(data.status === 'succeeded'){
             task.failed = false;
             task.querying = false;
-            const taskIndex = smartPendingTasks(node).findIndex(item => item.taskId === task.taskId);
+            const fallbackIndex = smartPendingTasks(node).findIndex(item => item.taskId === task.taskId);
+            const taskIndex = Number.isFinite(Number(task.progressIndex)) ? Number(task.progressIndex) : fallbackIndex;
             const additions = finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(data.image_items?.length ? data.image_items : (data.images?.length ? data.images : data)), task.kind || 'image');
             if(taskIndex >= 0) setSmartProgressTaskResults(node, taskIndex, additions);
             render();
@@ -24328,7 +24338,11 @@ async function pollSmartCanvasTask(taskId, runContext=null, veniceProgressIndex=
         const result = await promise;
         const upstreamTaskId = smartUpstreamTaskIdFromResult(result, taskId);
         if(upstreamTaskId) rememberSmartRunTaskId(runContext, upstreamTaskId);
-        if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'succeeded');
+        if(veniceProgressIndex !== null){
+            const resultItems = resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result));
+            setSmartProgressTaskResults(runningHubProgressNodeForContext(runContext), veniceProgressIndex, resultItems);
+            finishVeniceProgressTask(runContext, veniceProgressIndex, 'succeeded');
+        }
         return result;
     } catch(error) {
         if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'failed', error);
@@ -24361,7 +24375,8 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         seen.add(key);
         return true;
     });
-    node.images = [...existing, ...embedGenPromptIntoImages(additions, node)];
+    const embeddedAdditions = embedGenPromptIntoImages(additions, node);
+    node.images = [...existing, ...embeddedAdditions];
     if(additions.length) node.outputKind = kind;
     if(!node.pending && smartPendingTasks(node).length === 0){
         clearSmartNodePreRunBox(node);
@@ -24382,7 +24397,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         notifySmartTaskSuccess(kind, node.images.length);
     }
     if(isVeniceProviderId(taskProviderId)) scheduleVeniceCreditsRefresh(taskProviderId, 120);
-    return additions;
+    return embeddedAdditions;
 }
 async function resumeSmartPendingNode(node, logContext={}){
     const tasks = smartPendingTasks(node);
@@ -24416,10 +24431,11 @@ async function resumeSmartPendingNode(node, logContext={}){
     const failures = [];
     await Promise.all(tasks.map(async (task, index) => {
         if(task.failed && task.recoverTaskId) return;
+        const progressIndex = Number.isFinite(Number(task.progressIndex)) ? Number(task.progressIndex) : index;
         try {
-            const result = await pollSmartCanvasTask(task.taskId, runContext, index);
+            const result = await pollSmartCanvasTask(task.taskId, runContext, progressIndex);
             const additions = finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)), task.kind || 'image');
-            setSmartProgressTaskResults(node, index, additions);
+            setSmartProgressTaskResults(node, progressIndex, additions);
             render();
             scheduleSave();
         } catch(e) {

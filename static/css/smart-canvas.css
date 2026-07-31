@@ -238,6 +238,7 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 }
 .smart-progress-task-track {
     stroke:color-mix(in srgb, var(--strong) 19%, transparent);
+    stroke-linecap:butt;
     transition:stroke .2s ease,opacity .2s ease;
 }
 .smart-progress-task-cell.is-queued .smart-progress-task-track {
@@ -255,14 +256,19 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     filter:drop-shadow(0 0 3px color-mix(in srgb, var(--strong) 18%, transparent));
 }
 .smart-progress-task-breathe {
+    stroke-opacity:1;
+    stroke-linecap:butt;
+    transition:stroke-opacity .36s cubic-bezier(.22,1,.36,1);
     animation:smart-task-border-breathe 1.8s ease-in-out infinite;
     animation-delay:var(--smart-task-pulse-delay, 0ms);
 }
+.smart-progress-task-breathe.is-layer-hidden { stroke-opacity:0; }
 .smart-progress-task-value {
     transition:opacity .2s ease,stroke .2s ease;
 }
 .smart-progress-task-value.is-complete {
     stroke:#34d399;
+    stroke-linecap:butt;
     animation:rh-progress-complete .46s ease-out both;
 }
 .smart-progress-task-border .is-layer-hidden { opacity:0 !important; animation:none !important; }
@@ -295,7 +301,16 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     flex:0 0 auto;
     width:52cqmin;
     height:52cqmin;
+    position:relative;
     border-radius:999px;
+    opacity:1;
+    transition:opacity .36s cubic-bezier(.22,1,.36,1),filter .36s ease;
+}
+.smart-progress-task-placeholder-dot::before {
+    content:"";
+    position:absolute;
+    inset:0;
+    border-radius:inherit;
     background:radial-gradient(circle,
         var(--smart-task-halo-core) 0%,
         color-mix(in srgb, var(--smart-task-halo-core) 54%, transparent) 27%,
@@ -306,7 +321,7 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     transform:scale(.96);
     transform-origin:center;
 }
-.smart-progress-task-cell:not(.is-queued):not(.is-complete):not(.is-terminal) .smart-progress-task-placeholder-dot {
+.smart-progress-task-cell:not(.is-queued):not(.is-complete):not(.is-terminal) .smart-progress-task-placeholder-dot::before {
     animation:smart-task-halo-breathe 1.8s ease-in-out infinite;
     animation-delay:var(--smart-task-pulse-delay, 0ms);
 }
@@ -411,9 +426,12 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     .image-node.first-pending-transition .node-head,
     .image-node.first-pending-transition .node-hint,
     .rh-progress-stroke,
+    .smart-progress-task-cell,
+    .smart-progress-task-track,
     .smart-progress-task-breathe,
     .smart-progress-task-value,
-    .smart-progress-task-placeholder-dot { animation:none !important; transition:none !important; }
+    .smart-progress-task-placeholder-dot,
+    .smart-progress-task-placeholder-dot::before { animation:none !important; transition:none !important; }
 }
 body.smart-node-drag * { user-select:none !important; }
 body.smart-node-drag .image-node textarea,
@@ -421,6 +439,7 @@ body.smart-node-drag .image-node input,
 body.smart-node-drag .image-node select,
 body.smart-node-drag .image-node .node-body { pointer-events:none !important; }
 body.smart-node-drag .floating-node-actions,
+body.smart-node-drag .run-time-pill,
 body.smart-node-drag .mini-x,
 body.smart-node-drag .node-port,
 body.smart-node-drag .node-resize-handle,
@@ -443,6 +462,7 @@ body.smart-node-chrome-settling .image-wrap,
 body.smart-node-chrome-settling .image-wrap > img,
 body.smart-node-chrome-settling .image-wrap > .media-video-card { transition:none !important; }
 body.smart-node-drag .image-node:hover .floating-node-actions,
+body.smart-node-drag .image-node .run-time-pill,
 body.smart-node-drag .thumb-item:hover .mini-x,
 body.smart-node-drag .image-wrap:hover .mini-x,
 body.smart-node-drag .image-node:hover .node-port,

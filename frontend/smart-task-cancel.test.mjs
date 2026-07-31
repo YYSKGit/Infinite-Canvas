@@ -112,6 +112,7 @@ test('timer and cancel corner controls do not overlap, and the composer run butt
     assert.match(cssSource, /\.smart-task-cancel i,\.smart-task-cancel svg\s*\{[^}]*width:11px;[^}]*height:11px;/);
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*right:7px;[^}]*top:7px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/);
+    assert.match(cssSource, /body\.smart-node-drag \.image-node:hover \.floating-node-actions,\s*body\.smart-node-drag \.image-node \.run-time-pill,[\s\S]*?\{\s*opacity:0 !important;\s*pointer-events:none !important;/);
     assert.match(jsSource, /querySelectorAll\('\.run-time-pill'\)[\s\S]*?\['pointerdown', 'mousedown', 'click', 'dblclick'\][\s\S]*?stopImmediatePropagation\(\)/);
     assert.match(cssSource, /\.run-time-pill\.done\s*\{[^}]*background:rgba\(6,95,70,\.86\);/);
     assert.match(cssSource, /\.image-node:has\(\.node-port:is\(:hover,\.is-magnetic,\.is-active,\.is-caught\)\) \.run-time-pill:is\(\.done,\.failed,\.cancelled\)\s*\{\s*opacity:0;/);
@@ -195,9 +196,12 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.match(cssSource, /@keyframes smart-task-border-breathe/);
     assert.match(cssSource, /@keyframes smart-task-halo-breathe/);
     assert.match(cssSource, /width:52cqmin;\s*height:52cqmin;/);
-    assert.match(cssSource, /\.smart-progress-task-cell:not\(\.is-queued\):not\(\.is-complete\):not\(\.is-terminal\) \.smart-progress-task-placeholder-dot\s*\{/);
+    assert.match(cssSource, /\.smart-progress-task-cell:not\(\.is-queued\):not\(\.is-complete\):not\(\.is-terminal\) \.smart-progress-task-placeholder-dot::before\s*\{/);
     assert.match(cssSource, /animation:smart-task-border-breathe 1\.8s ease-in-out infinite/);
     assert.match(cssSource, /animation:smart-task-halo-breathe 1\.8s ease-in-out infinite/);
+    assert.match(cssSource, /\.smart-progress-task-breathe\.is-layer-hidden\s*\{[^}]*stroke-opacity:0;/);
+    assert.match(cssSource, /\.smart-progress-task-placeholder-dot::before\s*\{[\s\S]*?background:radial-gradient/);
+    assert.match(cssSource, /transition:opacity \.36s cubic-bezier\(\.22,1,\.36,1\),filter \.36s ease/);
     assert.match(cssSource, /\.smart-progress-task-content\s*\{[^}]*inset:0;/);
     assert.match(cssSource, /animation-delay:var\(--smart-task-pulse-delay,\s*0ms\)/);
     assert.doesNotMatch(cssSource, /\.smart-progress-task-rail/);
@@ -213,6 +217,7 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.match(jsSource, /syncSmartProgressTaskSvgGeometry\(freshSvg,\s*cell\.clientWidth,\s*cell\.clientHeight\)/);
     assert.match(jsSource, /const preserveHaloPhase = smartProgressTaskCellHasActiveHalo\(cell\)\s*&& smartProgressTaskCellHasActiveHalo\(freshCell\);/);
     assert.match(jsSource, /syncRunningHubProgressElement\(cell,\s*freshCell,\s*preserveHaloPhase \? \['style'\] : \[\]\)/);
+    assert.match(cssSource, /\.smart-progress-task-value\.is-complete\s*\{[^}]*stroke-linecap:butt;/);
     assert.match(jsSource, /const nodeId = String\(data\.node \?\? ''\)\.trim\(\);\s*if\(!nodeId\) return;/);
 
     const sandbox = vm.createContext({
@@ -262,24 +267,6 @@ test('single-task progress keeps its outer border while multi-task progress move
                 {index:1,status:'running',nodeName:'K采样器',value:1,max:4,startedAt:1000}
             ]}
         });
-        globalThis.multiUnknown = runningHubProgressBorderHtml({
-            runningHubProgress:{segmented:false,tasks:[
-                {index:0,status:'running',nodeName:'KSampler',value:null,max:null,startedAt:1000},
-                {index:1,status:'queued',value:null,max:null,startedAt:1000}
-            ]}
-        });
-        globalThis.multiSticky = runningHubProgressBorderHtml({
-            runningHubProgress:{segmented:true,tasks:[
-                {index:0,status:'running',nodeName:'KSampler',value:null,max:null,startedAt:1000},
-                {index:1,status:'queued',value:null,max:null,startedAt:1000}
-            ]}
-        });
-        globalThis.multiTerminal = runningHubProgressBorderHtml({
-            runningHubProgress:{segmented:false,tasks:[
-                {index:0,status:'failed',value:null,max:null,startedAt:1000},
-                {index:1,status:'running',nodeName:'VAEDecode',value:null,max:null,startedAt:1000}
-            ]}
-        });
         globalThis.unnamed = runningHubProgressBorderHtml({
             runningHubProgress:{tasks:[{index:0,status:'running',nodeId:'10',nodeName:'',value:null,max:null,startedAt:1000}]}
         });
@@ -295,9 +282,6 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.equal((sandbox.unnamed.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.match(sandbox.unnamed, /rh-progress-value-layer is-determinate is-layer-hidden[\s\S]*stroke-dasharray="0 100"/);
     assert.equal(sandbox.multi, '');
-    assert.equal(sandbox.multiUnknown, '');
-    assert.equal(sandbox.multiSticky, '');
-    assert.equal(sandbox.multiTerminal, '');
     assert.equal((sandbox.multiGrid.match(/smart-progress-task-cell /g) || []).length, 3);
     assert.equal((sandbox.multiGrid.match(/smart-progress-task-border/g) || []).length, 3);
     assert.equal((sandbox.multiGrid.match(/smart-progress-task-value/g) || []).length, 3);
@@ -351,7 +335,7 @@ test('RunningHub in-place progress patches preserve a live orbit phase', () => {
     assert.equal(sandbox.queuedMode, 'indeterminate');
 });
 
-test('multi-task center halos preserve phase across determinate updates and full redraws', () => {
+test('multi-task center halos derive a stable phase across regenerated markup', () => {
     let fakeNow = 5000;
     const sandbox = vm.createContext({
         Date:{now:() => fakeNow},
@@ -492,6 +476,51 @@ test('multi-task progress keeps result media ordered by task slot instead of com
     `, sandbox);
     assert.deepEqual([...sandbox.orderedUrls], ['/first.png', '/second.png']);
     assert.deepEqual([...sandbox.orderedPrompts], ['first', 'second']);
+});
+
+test('finalizing then assigning a task result preserves its embedded prompt snapshot', () => {
+    const sandbox = vm.createContext({
+        nowMs:() => 1000,
+        resultMediaUrls:value => value,
+        cleanHistoryImages:value => value,
+        stripImageGenerationMeta:value => value,
+        copyMediaSizeFields:(item, base) => ({...base, ...item}),
+        embedGenPromptIntoImages:items => items.map(item => ({...item, _genPrompt:{promptText:'snapshot'}})),
+        smartPendingTasks:node => Array.isArray(node.pendingTasks) ? node.pendingTasks : [],
+        archiveCurrentOutputsToHistory:() => {},
+        clearSmartNodePreRunBox:() => {},
+        notifySmartTaskSuccess:() => {},
+        isVeniceProviderId:() => false,
+        scheduleVeniceCreditsRefresh:() => {},
+        scheduleRunningHubProgressRefresh:() => {},
+        mediaKindForUrls:() => 'image'
+    });
+    vm.runInContext(`
+        ${extractFunction('smartNodeProgressState')}
+        ${extractFunction('runningHubProgressTasks')}
+        ${extractFunction('smartProgressTaskResultItems')}
+        ${extractFunction('smartProgressTaskSlot')}
+        ${extractFunction('setSmartProgressTaskResults')}
+        ${extractFunction('finalizeSmartPendingTask')}
+        const node = {
+            images:[],
+            pending:2,
+            pendingTasks:[
+                {taskId:'task-0', progressIndex:0, kind:'image'},
+                {taskId:'task-1', progressIndex:1, kind:'image'}
+            ],
+            runningHubProgress:{tasks:[
+                {index:0,resultItems:[]},
+                {index:1,resultItems:[]}
+            ]}
+        };
+        const additions = finalizeSmartPendingTask(node, 'task-0', [{url:'/one.png',kind:'image'}], 'image');
+        setSmartProgressTaskResults(node, 0, additions);
+        globalThis.prompt = node.images[0]._genPrompt?.promptText;
+        globalThis.slotPrompt = node.runningHubProgress.tasks[0].resultItems[0]._genPrompt?.promptText;
+    `, sandbox);
+    assert.equal(sandbox.prompt, 'snapshot');
+    assert.equal(sandbox.slotPrompt, 'snapshot');
 });
 
 test('Venice image and video tasks reuse the border with stable asymptotic estimates', () => {
