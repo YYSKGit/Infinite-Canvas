@@ -634,6 +634,10 @@ function restoreNodesPreservingLiveRuns(snapshotNodes){
             runFinishedAt:liveNode.runFinishedAt,
             runElapsedMs:liveNode.runElapsedMs,
             runFailed:liveNode.runFailed,
+            runStatus:liveNode.runStatus,
+            runError:liveNode.runError,
+            runRetrySnapshot:liveNode.runRetrySnapshot,
+            runExpectedCount:liveNode.runExpectedCount,
             runTimerHidden:liveNode.runTimerHidden,
             _undoPreRunBox:liveNode._undoPreRunBox
         };
@@ -2854,6 +2858,11 @@ function clearSmartNodeTransientRunState(node, options={}){
         delete node.runFailed;
         delete node.runCancelled;
         delete node.runTimerHidden;
+        delete node.runStatus;
+        delete node.runError;
+        delete node.runRetrySnapshot;
+        delete node.runExpectedCount;
+        delete node._replaceExistingOutputsOnNextResult;
     }
     return node;
 }
@@ -2883,6 +2892,7 @@ function serializableSmartNode(node){
     if(Array.isArray(copy.images)) copy.images = copy.images.map(img => mediaItemForStorage(stripImageGenerationMeta(img))).filter(Boolean);
     if(copy.runSettings) copy.runSettings = settingsForStorage(copy.runSettings);
     if(copy.runSnapshotSettings) copy.runSnapshotSettings = settingsForStorage(copy.runSnapshotSettings);
+    if(copy.runRetrySnapshot?.settings) copy.runRetrySnapshot.settings = settingsForStorage(copy.runRetrySnapshot.settings);
     clearSmartNodeTransientRunState(copy);
     delete copy._dom;
     return copy;
@@ -9268,6 +9278,32 @@ function clearSmartNodeBusyState(node){
     delete node.pendingTasks;
     return node;
 }
+function smartRunErrorMessage(error, fallback=''){
+    const raw = String(error?.message || error || fallback || tr('smart.errRunFailed')).trim();
+    return raw
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+        .replace(/([?&](?:api[_-]?key|token|signature|sig)=)[^&\s]+/gi, '$1[redacted]')
+        .replace(/\s+/g, ' ')
+        .slice(0, 320);
+}
+function cloneSmartRetrySnapshot(snapshot){
+    if(!snapshot || typeof snapshot !== 'object') return null;
+    try { return JSON.parse(JSON.stringify(snapshot)); } catch(_error) { return null; }
+}
+function smartRetrySnapshotForRun(prompt, request, runSettings, kind='image'){
+    return {
+        prompt:String(prompt || ''),
+        displayPrompt:String(request?.displayPrompt || prompt || ''),
+        refs:(request?.refs || []).map(ref => ({...ref})),
+        providerPrompts:request?.providerPrompts && typeof request.providerPrompts === 'object'
+            ? {...request.providerPrompts}
+            : {},
+        settings:cloneSmartSettings(runSettings || {}),
+        kind,
+        createdAt:nowMs()
+    };
+}
 function markSmartNodeComplete(node, meta=null){
     if(!node) return node;
     clearSmartNodePreRunBox(node);
@@ -9287,6 +9323,9 @@ function markSmartNodeComplete(node, meta=null){
     }
     delete node.runFailed;
     delete node.runCancelled;
+    delete node.runError;
+    delete node.runRetrySnapshot;
+    node.runStatus = 'completed';
     node.runTimerHidden = meta?.hideTimer === true || keepHidden;
     return node;
 }
@@ -9305,6 +9344,8 @@ function markSmartNodeRunFailed(node, options={}){
         if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
         node.runFailed = true;
+        node.runStatus = 'failed';
+        node.runError = smartRunErrorMessage(options.error);
         node.runTimerHidden = false;
     }
     return node;
@@ -10469,6 +10510,7 @@ async function saveCanvas(){
     nodes.forEach(node => {
         node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
         if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
+        if(node.runRetrySnapshot?.settings) node.runRetrySnapshot.settings = settingsForStorage(node.runRetrySnapshot.settings);
     });
     canvas.nodes = nodes;
     canvas.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
@@ -12620,6 +12662,28 @@ function runningHubProgressBorderHtml(node, layout=null){
         ${label ? `<span class="image-resolution-badge rh-progress-node-badge" role="status">${escapeHtml(label)}</span>` : ''}
     </div>`;
 }
+function smartTerminalRunBodyHtml(node, layout){
+    const cancelled = node.runStatus === 'cancelled' || node.runCancelled === true;
+    const reason = smartRunErrorMessage(
+        node.runError,
+        cancelled ? tr('smart.taskCancelled') : tr('smart.errRunFailed')
+    );
+    const action = cancelled ? tr('smart.generateAgain') : tr('smart.retry');
+    return `<div class="smart-run-terminal ${cancelled ? 'is-cancelled' : 'is-failed'}" style="width:${layout.width}px;height:${layout.height}px">
+        <button class="smart-run-retry" type="button" data-smart-retry="${escapeAttr(node.id)}" title="${escapeAttr(action)}">
+            <i data-lucide="refresh-cw"></i>
+            <span>${escapeHtml(action)}</span>
+        </button>
+        <div class="smart-run-terminal-reason" title="${escapeAttr(reason)}">${escapeHtml(reason)}</div>
+    </div>`;
+}
+function smartHistoryPreviousBadgeHtml(node, imageIndex){
+    if(!isHistoryGroupNode(node)) return '';
+    const images = node.images || [];
+    const latestBatchId = String(images.find(item => item?.historyBatchId)?.historyBatchId || '');
+    if(!latestBatchId || String(images[imageIndex]?.historyBatchId || '') !== latestBatchId) return '';
+    return `<span class="history-previous-badge">${escapeHtml(tr('smart.historyPreviousRun'))}</span>`;
+}
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
@@ -12644,16 +12708,19 @@ function nodeBodyHtml(node, layout){
         const rows = Math.ceil(count / cols);
         return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
     }
+    if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
+        return smartTerminalRunBodyHtml(node, layout);
+    }
     const showSingleImageName = !isHistoryGroupNode(node);
     const isRunning = Boolean(node.running || node.pending || node.jimengPending);
     const loadingOverlay = isRunning && imgs.length > 0 ? `<div class="node-loading-overlay"><div class="loading-spinner" style="--spinner-rotation:${spinnerRotation}deg"></div></div>` : '';
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${smartHistoryPreviousBadgeHtml(node, i)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
         return isRunning ? `<div class="thumb-grid-wrapper">${gridContent}${loadingOverlay}</div>` : gridContent;
     }
-    if(imgs[0]) return `<div class="image-wrap ${showSingleImageName ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showSingleImageName ? imageNameBadgeHtml(imgs[0], {outside:true, node}) : ''}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
+    if(imgs[0]) return `<div class="image-wrap ${showSingleImageName ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showSingleImageName ? imageNameBadgeHtml(imgs[0], {outside:true, node}) : ''}${smartHistoryPreviousBadgeHtml(node, 0)}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
     return `<div class="empty-upload-node">
         <div class="empty-upload-copy">
             <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
@@ -12934,6 +13001,9 @@ function render(){
         const isGroup = isImageNode && (imgs.length > 1 || runningHubProgressTasks(node).length > 1);
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const isGenerating = nodeHasLiveRunState(node);
+        const isRunFailed = !isGenerating && (node.runStatus === 'failed' || node.runFailed === true);
+        const isRunCancelled = !isGenerating && (node.runStatus === 'cancelled' || node.runCancelled === true);
+        const isRunPartial = !isGenerating && node.runStatus === 'partial' && imgs.length > 0;
         const ancestorRunState = smartAncestorNodeVisualState(node.id);
         const shimmerDelay = continuousAnimationDelay(1500, node.runStartedAt);
         const pendingSpinDelay = continuousAnimationDelay(1000, node.runStartedAt);
@@ -12952,13 +13022,14 @@ function render(){
             : '';
         const floatingActions = `${floatingCancelBtn}${floatingPinBtn}${floatingRunBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isRunFailed ? 'node-run-failed' : ''} ${isRunCancelled ? 'node-run-cancelled' : ''} ${isRunPartial ? 'node-run-partial' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             ${runningHubProgressBorderHtml(node, layout)}
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
+            ${isRunPartial ? `<div class="smart-run-partial-note" title="${escapeAttr(node.runError || tr('smart.partialComplete'))}">${escapeHtml(tr('smart.partialComplete'))}</div>` : ''}
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             ${hint ? `<div class="node-hint">${hint}</div>` : ''}
             ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
@@ -13926,6 +13997,17 @@ function bindNodeEvents(){
                 e.preventDefault();
                 e.stopPropagation();
                 runSmartNodeQuick(btn.dataset.smartNodeRun || id);
+            });
+        });
+        el.querySelectorAll('[data-smart-retry]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                runSmartNodeRetry(btn.dataset.smartRetry || id);
             });
         });
         el.querySelectorAll('[data-smart-node-action]').forEach(btn => {
@@ -20399,16 +20481,25 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
     selectedImage = {nodeId:'', index:-1};
     return output;
 }
-function markReplaceExistingOutputsOnNextResult(node){
-    if(node && isSmartImageNode(node) && !isHistoryGroupNode(node) && cleanHistoryImages(node.images || []).length) node._replaceExistingOutputsOnNextResult = true;
-}
-function archiveCurrentOutputsToHistory(node, kind='image'){
+function archiveCurrentOutputsToHistory(node, kind='image', options=null){
     if(!node) return false;
+    options ||= {};
     node = liveSmartNode(node);
     const existing = cleanHistoryImages(node.images || []);
     if(!existing.length) return false;
+    const batchId = String(options.batchId || uid('history_batch'));
+    const batchCreatedAt = Number(options.createdAt || nowMs());
+    const batchStatus = String(options.status || node.runStatus || 'completed');
+    const batchExpectedCount = Math.max(existing.length, Number(options.expectedCount || node.runExpectedCount || 0));
+    const archivedExisting = existing.map(item => ({
+        ...item,
+        historyBatchId:batchId,
+        historyBatchCreatedAt:batchCreatedAt,
+        historyBatchStatus:batchStatus,
+        historyBatchExpectedCount:batchExpectedCount
+    }));
     const history = ensureHistoryGroupForNode(node);
-    history.images = cleanHistoryImages([...existing, ...(history.images || [])]);
+    history.images = cleanHistoryImages([...archivedExisting, ...(history.images || [])]);
     history.title = '历史分组';
     history.outputKind = kind;
     history.scale = MEDIA_GROUP_DEFAULT_SCALE;
@@ -20900,6 +20991,12 @@ function runSmartNodeQuick(nodeId){
     const node = nodes.find(candidate => candidate.id === nodeId);
     if(!node || smartNodeRunDisabled(node)) return {status:'skipped'};
     return runGeneration(null, {nodeId});
+}
+function runSmartNodeRetry(nodeId){
+    const node = nodes.find(candidate => candidate.id === nodeId);
+    if(!node || smartNodeRunDisabled(node)) return {status:'skipped'};
+    const retrySnapshot = cloneSmartRetrySnapshot(node.runRetrySnapshot);
+    return runGeneration(null, {nodeId, retrySnapshot});
 }
 function toggleSmartAncestorPin(nodeId){
     const node = nodes.find(candidate => candidate.id === nodeId);
@@ -22252,7 +22349,10 @@ async function runGeneration(event=null, options={}){
         return {status:'busy', error};
     }
     if(activeComposerNode()?.id === node.id) savePromptDraftForCurrent();
-    const runSettings = options.runSettings
+    const retrySnapshot = cloneSmartRetrySnapshot(options.retrySnapshot);
+    const runSettings = retrySnapshot?.settings
+        ? cloneSmartSettings(retrySnapshot.settings)
+        : options.runSettings
         ? cloneSmartSettings(options.runSettings)
         : smartSettingsForNode(node);
     let activeSettings = cloneSmartSettings(runSettings || {});
@@ -22271,13 +22371,23 @@ async function runGeneration(event=null, options={}){
     }
     // Execution owns an immutable settings snapshot. The composer-level `settings`
     // object is UI state and must never be mutated by background or concurrent runs.
-    const request = buildPromptRequest(
-        node,
-        generationReferenceImagesForRun(node, true, smartLoopContext),
-        true,
-        smartLoopContext,
-        activeSettings
-    );
+    const request = retrySnapshot
+        ? {
+            prompt:String(retrySnapshot.prompt || ''),
+            displayPrompt:String(retrySnapshot.displayPrompt || retrySnapshot.prompt || ''),
+            refs:(retrySnapshot.refs || []).map(ref => ({...ref})),
+            providerPrompts:retrySnapshot.providerPrompts && typeof retrySnapshot.providerPrompts === 'object'
+                ? {...retrySnapshot.providerPrompts}
+                : {},
+            mentioned:Boolean((retrySnapshot.refs || []).length)
+        }
+        : buildPromptRequest(
+            node,
+            generationReferenceImagesForRun(node, true, smartLoopContext),
+            true,
+            smartLoopContext,
+            activeSettings
+        );
     const prompt = request.prompt.trim();
     const refs = request.refs;
     if(!prompt && smartRunNeedsPrompt(activeSettings)){
@@ -22286,9 +22396,16 @@ async function runGeneration(event=null, options={}){
         toast(error.message);
         return {status:'failed', error};
     }
+    const preflightError = smartGenerationPreflightError(activeSettings, refs);
+    if(preflightError){
+        if(options.throwOnError) throw preflightError;
+        toast(preflightError.message);
+        return {status:'failed', error:preflightError};
+    }
     const meta = snapshotRunMeta(node, prompt, request.displayPrompt, refs, activeSettings);
     const logKind = isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video' ? 'video' : 'image';
     const runLog = smartRunSnapshot(node, prompt, refs, logKind, request, activeSettings);
+    const nextRetrySnapshot = smartRetrySnapshotForRun(prompt, request, activeSettings, logKind);
     rememberRecentSmartSettings(activeSettings, node);
     const runLogStart = nowMs();
     const expectedCount = smartExpectedGenerationTaskCount(refs, activeSettings);
@@ -22307,27 +22424,37 @@ async function runGeneration(event=null, options={}){
     if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
-    if(!branchNode) markReplaceExistingOutputsOnNextResult(pendingNode);
+    const previousRunStatus = pendingNode.runStatus || '';
+    const previousExpectedCount = Number(pendingNode.runExpectedCount || 0);
+    pendingNode.runRetrySnapshot = nextRetrySnapshot;
+    pendingNode.runExpectedCount = Math.max(1, Number(expectedCount) || 1);
+    pendingNode.runStatus = 'running';
+    delete pendingNode.runError;
+    delete pendingNode.runFailed;
+    delete pendingNode.runCancelled;
+    delete pendingNode._replaceExistingOutputsOnNextResult;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
+        const currentOutputs = cleanHistoryImages(pendingNode.images || []);
+        rememberSmartNodePreRunBox(pendingNode);
+        const pendingBox = pendingBoxSize(Math.max(1, Number(expectedCount) || 1), {sourceNode:node, refs, settings:activeSettings});
+        pendingNode.w = pendingBox.w;
+        pendingNode.h = pendingBox.h;
+        if(currentOutputs.length){
+            // Freeze the previous result's own prompt before the node adopts
+            // the new request metadata, then commit it to history immediately.
+            pendingNode.images = embedGenPromptIntoImages(pendingNode.images, pendingNode);
+            archiveCurrentOutputsToHistory(pendingNode, pendingNode.outputKind || logKind, {
+                status:previousRunStatus === 'partial' ? 'partial' : 'completed',
+                expectedCount:previousExpectedCount || currentOutputs.length,
+                createdAt:Number(pendingNode.runFinishedAt || pendingNode.runAt || 0) || nowMs()
+            });
+        }
         pendingNode.pending = Math.max(1, Number(expectedCount) || 1);
         pendingNode.runStartedAt = nowMs();
         delete pendingNode.runFinishedAt;
         delete pendingNode.runElapsedMs;
-        delete pendingNode.runFailed;
-        delete pendingNode.runCancelled;
         pendingNode.runTimerHidden = false;
-        if(expectedCount > 1 || !cleanHistoryImages(pendingNode.images || []).length){
-            rememberSmartNodePreRunBox(pendingNode);
-            const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs, settings:activeSettings});
-            pendingNode.w = pendingBox.w;
-            pendingNode.h = pendingBox.h;
-        }
-        // 在覆盖节点提示词之前，把当前提示词快照嵌入已有图片，
-        // 这样图片归档到历史分组时携带的就是它实际生成时的提示词。
-        if(cleanHistoryImages(pendingNode.images || []).length){
-            pendingNode.images = embedGenPromptIntoImages(pendingNode.images, pendingNode);
-        }
         attachRunMeta(pendingNode, pendingMeta);
     }
     if(apiConcurrentRun){
@@ -22342,10 +22469,11 @@ async function runGeneration(event=null, options={}){
         run:runLog,
         runLogStart,
         settings:activeSettings,
-        cleanupNodeOnCancel:Boolean(branchNode)
+        cleanupNodeOnCancel:false
     });
     const runSignal = runContext.controller.signal;
     render();
+    scheduleSave();
     if(wasEmptyFirstRun && !branchNode && (logKind === 'image' || logKind === 'video')){
         animateFirstPendingNode(pendingNode.id, emptyNodeRect && {width:emptyNodeRect.width, height:emptyNodeRect.height});
     }
@@ -22401,6 +22529,10 @@ async function runGeneration(event=null, options={}){
             render();
             if(failures.length){
                 const message = failures[0]?.error?.message || tr('smart.errRunFailed');
+                pendingNode.runStatus = 'partial';
+                pendingNode.runError = smartRunErrorMessage(message);
+                pendingNode.runRetrySnapshot = cloneSmartRetrySnapshot(nextRetrySnapshot);
+                pendingNode.runExpectedCount = Math.max(expectedCount, pendingNode.images.length);
                 notifySmartTaskFailure(message);
                 toast(`${outImages.length}/${expectedCount} ${tr('smart.countUnit') || ''} · ${message}`.slice(0, 160));
             }
@@ -22464,17 +22596,8 @@ async function runGeneration(event=null, options={}){
             return {status:'pending', nodeId:node.id, error:e};
         }
         pendingNode.pending = 0;
-        if(branchNode){
-            nodes = nodes.filter(n => n.id !== branchNode.id);
-            canvas.connections = (canvas.connections || []).filter(c => c.from !== branchNode.id && c.to !== branchNode.id);
-            selectedId = node.id;
-        } else {
-            pendingNode.pending = 0;
-            delete pendingNode._replaceExistingOutputsOnNextResult;
-            clearSmartNodePreRunBox(pendingNode, true);
-        }
-        markSmartNodeRunFailed(pendingNode, {keepRecoverableTasks:true});
-        if(extracted) restoreFromExtraction(node, extracted);
+        clearSmartNodePreRunBox(pendingNode, true);
+        markSmartNodeRunFailed(pendingNode, {keepRecoverableTasks:true, error:e});
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
         if(!e?.smartGenerationLogged && !options.silent) notifySmartTaskFailure(e.message || tr('smart.errRunFailed'));
@@ -22717,6 +22840,31 @@ function smartExpectedGenerationTaskCount(refs, runSettings=settings){
     if(isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind === 'video') return 1;
     if(sourceSettings.engine === 'comfy') return 1;
     return smartImageGenerationJobs(refs, sourceSettings).length;
+}
+function smartGenerationPreflightError(runSettings=settings, refs=[]){
+    const sourceSettings = runSettings || settings;
+    if(isApiLikeEngine(sourceSettings.engine)){
+        if(sourceSettings.apiKind === 'video' && !sourceSettings.videoModel) return new Error(tr('smart.errNoVideoModel'));
+        if(sourceSettings.apiKind !== 'video' && (!sourceSettings.provider_id || !sourceSettings.model)) return new Error(tr('smart.errNoApiModel'));
+    }
+    if(sourceSettings.engine === 'runninghub'){
+        if(!selectedRunningHubRef(sourceSettings)) return new Error(tr('smart.rhNeedConfig'));
+        if(!rhActiveFields(sourceSettings).length) return new Error(tr('smart.rhNeedFields'));
+    }
+    if(sourceSettings.engine === 'modelscope'){
+        const modelKey = sourceSettings.msgenModel || 'zimage';
+        const msModel = MS_GEN_MODELS[modelKey] || MS_GEN_MODELS.zimage;
+        if(msModel.supportsImage && !imageRefsOnly(refs).length) return new Error(tr('smart.errMsNeedRefs'));
+    }
+    if(sourceSettings.engine === 'comfy'){
+        const mode = sourceSettings.comfyMode || 'text';
+        if(mode === 'enhance' && !imageRefsOnly(refs).length) return new Error(tr('smart.errEnhanceNeedRefs'));
+        if(mode === 'edit' && !imageRefsOnly(refs).length) return new Error(tr('smart.errEditNeedRefs'));
+        if(!['text','enhance','edit'].includes(mode) && !(sourceSettings.comfyWorkflow || comfyWorkflows[0]?.name)){
+            return new Error(tr('smart.errNeedWorkflow'));
+        }
+    }
+    return null;
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null, runContext=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
@@ -24056,13 +24204,10 @@ async function cancelSmartNodeGeneration(nodeId, options=null){
     node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
     delete node.runFailed;
     node.runCancelled = true;
+    node.runStatus = 'cancelled';
+    node.runError = tr('smart.taskCancelled') || '任务已取消';
     node.runTimerHidden = false;
     delete node._replaceExistingOutputsOnNextResult;
-    if(context.cleanupNodeOnCancel && !(node.images || []).length){
-        nodes = nodes.filter(candidate => candidate.id !== node.id);
-        if(canvas) canvas.connections = (canvas.connections || []).filter(connection => connection.from !== node.id && connection.to !== node.id);
-        if(selectedId === node.id) selectedId = context.sourceNodeId || '';
-    }
     render();
     scheduleSave();
     if(options.silent){
@@ -24180,6 +24325,8 @@ function applyJimengQueryResult(node, data){
         delete node.jimengPending;
         node.running = false;
         node.pending = 0;
+        clearSmartNodePreRunBox(node, true);
+        markSmartNodeRunFailed(node, {error:data.error || '即梦任务失败'});
         notifySmartTaskFailure(data.error || '即梦任务失败');
         toast((data.error || '即梦任务失败').slice(0, 160));
         render();
@@ -24359,10 +24506,6 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     node.pending = Math.max(0, Number(node.pending || 0) - 1);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
     const mediaItems = resultMediaUrls(images);
-    if(node._replaceExistingOutputsOnNextResult && mediaItems.length){
-        archiveCurrentOutputsToHistory(node, kind);
-        delete node._replaceExistingOutputsOnNextResult;
-    }
     const existing = cleanHistoryImages(node.images || []);
     const seen = new Set(existing.map(img => `${img.kind || ''}|${img.url || ''}`));
     const additions = cleanHistoryImages((mediaItems || []).map((item, i) => {
@@ -24381,12 +24524,14 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     if(!node.pending && smartPendingTasks(node).length === 0){
         clearSmartNodePreRunBox(node);
         delete node.pendingTasks;
-        delete node._replaceExistingOutputsOnNextResult;
         node.runFinishedAt = nowMs();
         if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
         delete node.runFailed;
         delete node.runCancelled;
+        delete node.runError;
+        delete node.runRetrySnapshot;
+        node.runStatus = 'completed';
         node.runTimerHidden = false;
         node.running = false;
         node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : 'Image');
@@ -24402,6 +24547,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
 async function resumeSmartPendingNode(node, logContext={}){
     const tasks = smartPendingTasks(node);
     if(!node || !tasks.length) return;
+    const retrySnapshot = cloneSmartRetrySnapshot(node.runRetrySnapshot);
     let runContext = logContext.runContext || smartRunContextForNode(node.id);
     const ownsRunContext = !runContext;
     if(!runContext){
@@ -24425,7 +24571,10 @@ async function resumeSmartPendingNode(node, logContext={}){
     const activeTaskCount = tasks.filter(task => !task.failed).length;
     node.pending = activeTaskCount;
     node.running = false;
-    if(!activeTaskCount) markSmartNodeRunFailed(node, {keepRecoverableTasks:true});
+    if(!activeTaskCount) markSmartNodeRunFailed(node, {
+        keepRecoverableTasks:true,
+        error:tasks.find(task => task.failed)?.error
+    });
     if(!firstPendingTransitionActive(node.id)) render();
     else refreshRunTimerPills();
     const failures = [];
@@ -24453,7 +24602,7 @@ async function resumeSmartPendingNode(node, logContext={}){
                 task.recoverTaskId = e.recoverTaskId;
                 task.providerId = e.providerId || task.providerId || providerIdForSmartTask(node, task);
                 task.error = e.message || tr('smart.errRunFailed');
-                markSmartNodeRunFailed(node, {keepRecoverableTasks:true});
+                markSmartNodeRunFailed(node, {keepRecoverableTasks:true, error:task.error});
                 logTaskFailure(task.error, task);
                 notifySmartTaskFailure(task.error || '任务未丢失，可稍后手动查询结果');
                 if(isVeniceProviderId(task.providerId || '')) scheduleVeniceCreditsRefresh(task.providerId || '', 120);
@@ -24466,7 +24615,7 @@ async function resumeSmartPendingNode(node, logContext={}){
             node.pending = Math.max(0, Number(node.pending || 0) - 1);
             if(!node.pending && smartPendingTasks(node).length === 0){
                 delete node.pendingTasks;
-                markSmartNodeRunFailed(node);
+                markSmartNodeRunFailed(node, {error:e});
                 if(!(node.images || []).length){
                     clearSmartNodePreRunBox(node, true);
                 }
@@ -24481,6 +24630,12 @@ async function resumeSmartPendingNode(node, logContext={}){
             scheduleSave();
         }
     }));
+    if(failures.length && (node.images || []).length){
+        node.runStatus = 'partial';
+        node.runError = smartRunErrorMessage(failures[0]);
+        if(retrySnapshot) node.runRetrySnapshot = retrySnapshot;
+        node.runExpectedCount = Math.max(Number(node.runExpectedCount || 0), tasks.length);
+    }
     if(failures.length && (failures.length === tasks.length || !(node.images || []).length)){
         if(ownsRunContext && activeSmartGenerationRuns.get(node.id) === runContext) activeSmartGenerationRuns.delete(node.id);
         throw failures[0];

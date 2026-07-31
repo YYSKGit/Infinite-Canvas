@@ -138,7 +138,90 @@ test('generated nodes expose a quick run button that reuses single-node generati
     assert.match(cssSource, /\.mini-x\.smart-node-run-btn\s*\{/);
 });
 
-test('cancelled polling cannot turn retained pre-run images into a success log', () => {
+test('re-generation archives the current batch before dispatch and never restores it on failure', () => {
+    const start = jsSource.indexOf('async function runGeneration(');
+    const end = jsSource.indexOf('async function runPromptLLMNode(', start);
+    const runGeneration = jsSource.slice(start, end);
+    assert.match(
+        runGeneration,
+        /archiveCurrentOutputsToHistory\(pendingNode,[\s\S]*?registerSmartGenerationRun\(pendingNode/
+    );
+    assert.doesNotMatch(runGeneration, /markReplaceExistingOutputsOnNextResult/);
+    assert.doesNotMatch(
+        runGeneration,
+        /catch\(e\)[\s\S]*?restoreFromExtraction\(node,\s*extracted\)/
+    );
+    assert.doesNotMatch(
+        runGeneration,
+        /if\(branchNode\)\s*\{\s*nodes = nodes\.filter/
+    );
+});
+
+test('archived media share a stable batch id and stay ahead of older history', () => {
+    const history = {images:[{url:'/older.png', kind:'image', historyBatchId:'older'}]};
+    const sandbox = vm.createContext({
+        history,
+        nowMs:() => 2000,
+        uid:() => 'history_batch_new',
+        liveSmartNode:node => node,
+        cleanHistoryImages:items => items.map(item => ({...item})),
+        ensureHistoryGroupForNode:() => history,
+        syncHistoryNodePromptFromImages:() => {},
+        MEDIA_GROUP_DEFAULT_SCALE:0.82
+    });
+    vm.runInContext(`
+        ${extractFunction('archiveCurrentOutputsToHistory')}
+        const node = {
+            images:[{url:'/one.png', kind:'image'}, {url:'/two.png', kind:'image'}],
+            runStatus:'partial',
+            runExpectedCount:3
+        };
+        globalThis.archived = archiveCurrentOutputsToHistory(node, 'image');
+        globalThis.node = node;
+        globalThis.history = history;
+    `, sandbox);
+    assert.equal(sandbox.archived, true);
+    assert.deepEqual([...sandbox.node.images], []);
+    assert.deepEqual(
+        [...sandbox.history.images.map(item => item.url)],
+        ['/one.png', '/two.png', '/older.png']
+    );
+    assert.equal(sandbox.history.images[0].historyBatchId, 'history_batch_new');
+    assert.equal(sandbox.history.images[1].historyBatchId, 'history_batch_new');
+    assert.equal(sandbox.history.images[0].historyBatchStatus, 'partial');
+    assert.equal(sandbox.history.images[0].historyBatchExpectedCount, 3);
+});
+
+test('failed and cancelled empty slots expose an in-node retry using the saved request snapshot', () => {
+    assert.match(jsSource, /data-smart-retry=/);
+    assert.match(jsSource, /runSmartNodeRetry\(btn\.dataset\.smartRetry \|\| id\)/);
+    assert.match(cssSource, /\.smart-run-terminal\s*\{/);
+    assert.match(cssSource, /\.smart-run-retry\s*\{/);
+    const sandbox = vm.createContext({
+        nodes:[{id:'node-1', runRetrySnapshot:{prompt:'saved', settings:{engine:'api'}}}],
+        smartNodeRunDisabled:() => false,
+        cloneSmartRetrySnapshot:value => structuredClone(value),
+        runGeneration:(_event, options) => options
+    });
+    vm.runInContext(`
+        ${extractFunction('runSmartNodeRetry')}
+        globalThis.options = runSmartNodeRetry('node-1');
+    `, sandbox);
+    assert.equal(sandbox.options.nodeId, 'node-1');
+    assert.equal(sandbox.options.retrySnapshot.prompt, 'saved');
+});
+
+test('history keeps its original flat grid and only marks media from the previous run', () => {
+    assert.match(jsSource, /historyBatchId/);
+    assert.match(jsSource, /historyBatchExpectedCount/);
+    assert.match(jsSource, /historyBatchStatus/);
+    assert.match(jsSource, /class="history-previous-badge"/);
+    assert.match(cssSource, /\.history-previous-badge\s*\{/);
+    assert.doesNotMatch(jsSource, /class="history-batch-label"/);
+    assert.doesNotMatch(cssSource, /\.history-batch-label/);
+});
+
+test('cancelled polling cannot turn the archived empty current slot into a success log', () => {
     const start = jsSource.indexOf('async function runGeneration(');
     const end = jsSource.indexOf('async function runPromptLLMNode(', start);
     const runGeneration = jsSource.slice(start, end);
