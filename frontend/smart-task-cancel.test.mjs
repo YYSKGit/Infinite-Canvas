@@ -112,7 +112,7 @@ test('timer and cancel corner controls do not overlap, and the composer run butt
     assert.match(cssSource, /\.smart-task-cancel i,\.smart-task-cancel svg\s*\{[^}]*width:11px;[^}]*height:11px;/);
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*right:7px;[^}]*top:7px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/);
-    assert.match(cssSource, /body\.smart-node-drag \.image-node:hover \.floating-node-actions,\s*body\.smart-node-drag \.image-node \.run-time-pill,[\s\S]*?\{\s*opacity:0 !important;\s*pointer-events:none !important;/);
+    assert.match(cssSource, /body\.smart-node-drag \.image-node:hover \.floating-node-actions,\s*body\.smart-node-drag \.image-node \.run-time-pill,\s*body\.smart-node-drag \.image-node\.node-generating \.rh-progress-node-badge\.image-resolution-badge,[\s\S]*?\{\s*opacity:0 !important;\s*pointer-events:none !important;/);
     assert.match(jsSource, /querySelectorAll\('\.run-time-pill'\)[\s\S]*?\['pointerdown', 'mousedown', 'click', 'dblclick'\][\s\S]*?stopImmediatePropagation\(\)/);
     assert.match(cssSource, /\.run-time-pill\.done\s*\{[^}]*background:rgba\(6,95,70,\.86\);/);
     assert.match(cssSource, /\.image-node:has\(\.node-port:is\(:hover,\.is-magnetic,\.is-active,\.is-caught\)\) \.run-time-pill:is\(\.done,\.failed,\.cancelled\)\s*\{\s*opacity:0;/);
@@ -189,6 +189,7 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.match(jsSource, /\$\{runningHubProgressBorderHtml\(node,\s*layout\)\}/);
     assert.match(cssSource, /\.rh-progress-border-host\s*\{[^}]*position:absolute;[^}]*pointer-events:none;/);
     assert.match(cssSource, /\.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
+    assert.doesNotMatch(cssSource, /\.image-node\.dragging \.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
     assert.match(cssSource, /@keyframes rh-progress-orbit/);
     assert.match(cssSource, /\.smart-progress-task-grid\s*\{/);
     assert.match(cssSource, /\.smart-progress-task-breathe\s*\{/);

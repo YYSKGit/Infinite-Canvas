@@ -179,8 +179,7 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .rh-progress-stroke.is-layer-hidden { opacity:0 !important; }
 .rh-progress-stroke.is-complete { animation:rh-progress-complete .46s ease-out both; }
 .rh-progress-node-badge.image-resolution-badge { z-index:9; max-width:calc(100% - 102px); opacity:1 !important; pointer-events:none !important; }
-.image-node.node-generating .rh-progress-node-badge.image-resolution-badge,
-.image-node.dragging .rh-progress-node-badge.image-resolution-badge { opacity:1 !important; pointer-events:none !important; }
+.image-node.node-generating .rh-progress-node-badge.image-resolution-badge { opacity:1 !important; pointer-events:none !important; }
 .smart-progress-task-grid {
     display:grid;
     gap:8px;
@@ -463,6 +462,7 @@ body.smart-node-chrome-settling .image-wrap > img,
 body.smart-node-chrome-settling .image-wrap > .media-video-card { transition:none !important; }
 body.smart-node-drag .image-node:hover .floating-node-actions,
 body.smart-node-drag .image-node .run-time-pill,
+body.smart-node-drag .image-node.node-generating .rh-progress-node-badge.image-resolution-badge,
 body.smart-node-drag .thumb-item:hover .mini-x,
 body.smart-node-drag .image-wrap:hover .mini-x,
 body.smart-node-drag .image-node:hover .node-port,
