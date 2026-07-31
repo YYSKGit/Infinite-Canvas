@@ -149,7 +149,7 @@ test('every completed node-group type exposes a far-right node delete action', (
 
 test('ordinary media groups reuse the smart-group summary header and reserve its height', () => {
     assert.match(jsSource, /const MEDIA_GROUP_SUMMARY_SPACE = 28;/);
-    assert.match(jsSource, /function mediaGroupSummaryHtml\(items, expectedCount=0, expectedKind=''\)[\s\S]*?class="smart-group-summary media-group-summary"/);
+    assert.match(jsSource, /function mediaGroupSummaryHtml\(items, expectedCount=0, expectedKind='', completedCount=null\)[\s\S]*?class="smart-group-summary media-group-summary"/);
     assert.match(jsSource, /class="smart-group-card media-group-card has-thumbs"/);
     assert.match(jsSource, /height = visibleRows \* cell - 8 \+ PAD \+ MEDIA_GROUP_SUMMARY_SPACE/);
     assert.match(jsSource, /h:visibleRows \* cell - 8 \+ pad \+ MEDIA_GROUP_SUMMARY_SPACE/);
@@ -160,6 +160,16 @@ test('ordinary media groups reuse the smart-group summary header and reserve its
 test('multi-task generation uses the same media-group summary without resetting progress cells', () => {
     assert.match(jsSource, /function smartProgressTaskGroupBodyHtml\(node, layout=null, progressTaskGrid=''\)/);
     assert.match(jsSource, /class="smart-group-card media-group-card smart-progress-group-card has-thumbs"/);
+    assert.match(
+        jsSource,
+        /progressTasks\.length > 1[\s\S]*?nodeHasLiveRunState\(node\)[\s\S]*?width:Math\.round\(explicitW\),[\s\S]*?height:Math\.round\(explicitH\)/
+    );
+    assert.match(jsSource, /function mediaGroupSummaryHtml\(items, expectedCount=0, expectedKind='', completedCount=null\)/);
+    assert.match(jsSource, /const progress = hasProgress \? ` \(\$\{completed\}\/\$\{total\}\)` : ''/);
+    assert.match(jsSource, /tasks\.filter\(task => smartProgressTaskResultItems\(task\)\.length > 0\)\.length/);
+    assert.match(jsSource, /mediaGroupSummaryHtml\(\[\], tasks\.length, smartProgressTaskMediaKind\(node\), completedCount\)/);
+    assert.match(jsSource, /mediaGroupSummaryHtml\(\[\], count, smartProgressTaskMediaKind\(node\), 0\)/);
+    assert.match(jsSource, /currentTasks\.filter\(task => smartProgressTaskResultItems\(task\)\.length > 0\)\.length[\s\S]*?mediaGroupSummaryHtml\(\[\], currentTasks\.length, smartProgressTaskMediaKind\(current\), completedCount\)/);
     assert.match(jsSource, /if\(progressTaskGrid\) return smartProgressTaskGroupBodyHtml\(node, layout, progressTaskGrid\);/);
     assert.match(jsSource, /querySelector\(':scope > \.node-body \.smart-progress-task-grid'\)/);
     assert.match(jsSource, /if\(currentGrid\)\{[\s\S]*?patchSmartProgressTaskGrid\(currentGrid, freshGrid\)/);

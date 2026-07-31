@@ -4724,9 +4724,32 @@ function imageLayout(images, scale=1, node=null){
     }
     const count = (images || []).length;
     const s = node?.type === 'smart-image' || !node?.type ? mediaNodeDefaultScale(node) : (Number.isFinite(scale) && scale > 0 ? scale : 1);
+    const progressTasks = runningHubProgressTasks(node);
+    const explicitW = Number(node?.w);
+    const explicitH = Number(node?.h);
+    if(
+        progressTasks.length > 1
+        && nodeHasLiveRunState(node)
+        && Number.isFinite(explicitW) && explicitW > 24
+        && Number.isFinite(explicitH) && explicitH > 24
+    ){
+        // Partial multi-task results are attached to node.images as each task
+        // completes. Do not let the generic media layout reinterpret those
+        // intermediate 1/2/... images and collapse a still-running 3+ task
+        // grid to the completed subset's row count. The pending box is the
+        // stable geometry for the whole run and may also reflect a live resize.
+        const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(progressTasks.length))));
+        const rows = Math.ceil(progressTasks.length / cols);
+        return {
+            cols,
+            rows,
+            visibleRows:Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows),
+            width:Math.round(explicitW),
+            height:Math.round(explicitH),
+            thumb:Math.round(MEDIA_GROUP_THUMB_BASE * MEDIA_GROUP_DEFAULT_SCALE)
+        };
+    }
     if(count === 0){
-        const explicitW = Number(node?.w);
-        const explicitH = Number(node?.h);
         const pending = Number(node?.pending) > 0 || Boolean(node?.queued);
         const fallbackW = pending ? 260 * s : EMPTY_UPLOAD_NODE_WIDTH;
         const fallbackH = pending ? 180 * s : EMPTY_UPLOAD_NODE_HEIGHT;
@@ -4744,8 +4767,6 @@ function imageLayout(images, scale=1, node=null){
     const cell = thumb + 8;
     const PAD = 32; // group-node has 16px padding on each side
     const grid = images.find(img => img?.grid?.type === 'grid-split')?.grid;
-    const explicitW = Number(node?.w);
-    const explicitH = Number(node?.h);
     if(grid){
         const cols = Math.max(1, Number(grid.cols || 1));
         const rows = Math.max(1, Number(grid.rows || 1));
@@ -12741,7 +12762,7 @@ function historicalRunningSnapshotBodyHtml(){
         </div>
     </div>`;
 }
-function mediaGroupSummaryHtml(items, expectedCount=0, expectedKind=''){
+function mediaGroupSummaryHtml(items, expectedCount=0, expectedKind='', completedCount=null){
     const counts = (items || []).reduce((acc, item) => {
         const kind = mediaKindForItem(item);
         acc[kind] = (acc[kind] || 0) + 1;
@@ -12763,7 +12784,11 @@ function mediaGroupSummaryHtml(items, expectedCount=0, expectedKind=''){
         .filter(kind => counts[kind])
         .map(kind => `${counts[kind]} ${labels[kind]}`)
         .join(' · ');
-    return `<div class="smart-group-summary media-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>`;
+    const total = Math.max(0, Number(expectedCount) || 0);
+    const hasProgress = completedCount !== null && completedCount !== undefined && total > 0;
+    const completed = Math.max(0, Math.min(total, Number(completedCount) || 0));
+    const progress = hasProgress ? ` (${completed}/${total})` : '';
+    return `<div class="smart-group-summary media-group-summary"><i data-lucide="group"></i><span>${escapeHtml(`${summary}${progress}`)}</span></div>`;
 }
 function smartProgressTaskMediaKind(node){
     const tasks = runningHubProgressTasks(node);
@@ -12787,7 +12812,8 @@ function smartProgressTaskGroupBodyHtml(node, layout=null, progressTaskGrid=''){
     if(tasks.length <= 1) return '';
     const gridHtml = progressTaskGrid || smartProgressTaskGridHtml(node, layout);
     if(!gridHtml) return '';
-    return `<div class="smart-group-card media-group-card smart-progress-group-card has-thumbs">${mediaGroupSummaryHtml([], tasks.length, smartProgressTaskMediaKind(node))}${gridHtml}</div>`;
+    const completedCount = tasks.filter(task => smartProgressTaskResultItems(task).length > 0).length;
+    return `<div class="smart-group-card media-group-card smart-progress-group-card has-thumbs">${mediaGroupSummaryHtml([], tasks.length, smartProgressTaskMediaKind(node), completedCount)}${gridHtml}</div>`;
 }
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
@@ -12815,7 +12841,7 @@ function nodeBodyHtml(node, layout){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows));
         const rowHeight = Math.max(28, (Number(layout.height || 0) - 30 - 21 - 16 - 8 * (visibleRows - 1)) / visibleRows);
         const skeleton = `<div class="loading-skeleton media-group-layout-grid ${rows > visibleRows ? 'is-scrollable' : ''}" data-grid-rows="${rows}" data-grid-visible-rows="${visibleRows}" style="--thumb-cols:${cols};--media-group-visible-rows:${visibleRows};--media-group-row-height:${Number(rowHeight.toFixed(3))}px">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
-        return `<div class="smart-group-card media-group-card smart-pending-group-card has-thumbs">${mediaGroupSummaryHtml([], count, smartProgressTaskMediaKind(node))}${skeleton}</div>`;
+        return `<div class="smart-group-card media-group-card smart-pending-group-card has-thumbs">${mediaGroupSummaryHtml([], count, smartProgressTaskMediaKind(node), 0)}${skeleton}</div>`;
     }
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
         return smartTerminalRunBodyHtml(node, layout);
@@ -23879,7 +23905,9 @@ function scheduleRunningHubProgressRefresh(node){
             alignSmartProgressTaskGridGeometry(currentGrid);
             const currentSummary = nodeEl.querySelector(':scope > .node-body .smart-progress-group-card > .media-group-summary');
             const summaryTemplate = document.createElement('template');
-            summaryTemplate.innerHTML = mediaGroupSummaryHtml([], runningHubProgressTasks(current).length, smartProgressTaskMediaKind(current)).trim();
+            const currentTasks = runningHubProgressTasks(current);
+            const completedCount = currentTasks.filter(task => smartProgressTaskResultItems(task).length > 0).length;
+            summaryTemplate.innerHTML = mediaGroupSummaryHtml([], currentTasks.length, smartProgressTaskMediaKind(current), completedCount).trim();
             const freshSummary = summaryTemplate.content.firstElementChild;
             const currentSummaryText = currentSummary?.querySelector(':scope > span');
             const freshSummaryText = freshSummary?.querySelector(':scope > span');
