@@ -184,37 +184,82 @@ test('RunningHub realtime progress is proxied and signed upstream URLs stay serv
     assert.match(jsSource, /\/api\/runninghub\/query\?taskId=.*?useWallet=/);
 });
 
-test('RunningHub progress uses a smooth inset border and a persistent resolution-style node badge', () => {
+test('single-task progress keeps its outer border while multi-task progress moves into named task cells', () => {
     assert.match(jsSource, /\$\{runningHubProgressBorderHtml\(node,\s*layout\)\}/);
     assert.match(cssSource, /\.rh-progress-border-host\s*\{[^}]*position:absolute;[^}]*pointer-events:none;/);
     assert.match(cssSource, /\.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
     assert.match(cssSource, /@keyframes rh-progress-orbit/);
-    assert.match(cssSource, /\.rh-progress-stroke\.is-segment-active/);
+    assert.match(cssSource, /\.smart-progress-task-grid\s*\{/);
+    assert.match(cssSource, /\.smart-progress-task-breathe\s*\{/);
+    assert.match(cssSource, /\.smart-progress-task-value\s*\{/);
+    assert.match(cssSource, /@keyframes smart-task-border-breathe/);
+    assert.match(cssSource, /@keyframes smart-task-halo-breathe/);
+    assert.match(cssSource, /width:52cqmin;\s*height:52cqmin;/);
+    assert.match(cssSource, /\.smart-progress-task-cell:not\(\.is-queued\):not\(\.is-complete\):not\(\.is-terminal\) \.smart-progress-task-placeholder-dot\s*\{/);
+    assert.match(cssSource, /animation:smart-task-border-breathe 1\.8s ease-in-out infinite/);
+    assert.match(cssSource, /animation:smart-task-halo-breathe 1\.8s ease-in-out infinite/);
+    assert.match(cssSource, /\.smart-progress-task-content\s*\{[^}]*inset:0;/);
+    assert.match(cssSource, /animation-delay:var\(--smart-task-pulse-delay,\s*0ms\)/);
+    assert.doesNotMatch(cssSource, /\.smart-progress-task-rail/);
     assert.match(cssSource, /animation-delay:var\(--rh-progress-delay,\s*0ms\)/);
     assert.match(cssSource, /stroke-dasharray \.38s cubic-bezier/);
     assert.match(cssSource, /\.rh-progress-stroke\.is-layer-hidden\s*\{[^}]*opacity:0\s*!important;/);
     assert.match(jsSource, /patchRunningHubProgressHost\(currentHost,\s*fresh\)/);
     assert.match(jsSource, /preservePhase\s*\?\s*\['style'\]\s*:\s*\[\]/);
+    assert.match(jsSource, /function animateSmartProgressTaskValuePath\(path,\s*freshPath,\s*svg\)/);
+    assert.match(jsSource, /const completionJump = to >= 99\.999 && from < 99\.999;/);
+    assert.match(jsSource, /Math\.min\(900,\s*Math\.max\(560,\s*380 \+ Math\.abs\(to - from\) \* 5\)\)/);
+    assert.match(jsSource, /alignSmartProgressTaskGridGeometry\(world\)/);
+    assert.match(jsSource, /syncSmartProgressTaskSvgGeometry\(freshSvg,\s*cell\.clientWidth,\s*cell\.clientHeight\)/);
+    assert.match(jsSource, /const preserveHaloPhase = smartProgressTaskCellHasActiveHalo\(cell\)\s*&& smartProgressTaskCellHasActiveHalo\(freshCell\);/);
+    assert.match(jsSource, /syncRunningHubProgressElement\(cell,\s*freshCell,\s*preserveHaloPhase \? \['style'\] : \[\]\)/);
     assert.match(jsSource, /const nodeId = String\(data\.node \?\? ''\)\.trim\(\);\s*if\(!nodeId\) return;/);
 
     const sandbox = vm.createContext({
         Date:{now:() => 5000},
         nodeRect:() => ({width:260, height:180}),
-        escapeHtml:value => String(value)
+        escapeHtml:value => String(value),
+        escapeAttr:value => String(value),
+        mediaKindForItem:item => item?.kind || 'image',
+        imageForDisplay:item => item,
+        thumbMediaHtml:item => `<img src="${item?.url || ''}">`
     });
     vm.runInContext(`
+        ${extractFunction('smartNodeProgressState')}
         ${extractFunction('runningHubProgressTasks')}
         ${extractFunction('runningHubTaskFraction')}
         ${extractFunction('runningHubProgressLabel')}
+        ${extractFunction('smartProgressTaskResultItems')}
+        ${extractFunction('smartProgressTaskStatusParts')}
+        ${extractFunction('smartProgressTaskStatusText')}
+        ${extractFunction('smartProgressTaskValuePath')}
+        ${extractFunction('smartProgressTaskGridHtml')}
         ${extractFunction('runningHubProgressBorderHtml')}
+        globalThis.valuePath25 = smartProgressTaskValuePath(25);
+        globalThis.valuePath50 = smartProgressTaskValuePath(50);
+        globalThis.gridValuePath25 = smartProgressTaskValuePath(25, 118, 78, 1, 11);
+        globalThis.singleRowValuePath25 = smartProgressTaskValuePath(25, 118, 164, 1, 11);
         globalThis.single = runningHubProgressBorderHtml({
             runningHubProgress:{tasks:[{index:0,status:'running',nodeName:'KSampler',value:15,max:30}]}
         });
         globalThis.multi = runningHubProgressBorderHtml({
             runningHubProgress:{tasks:[
-                {index:0,status:'succeeded',value:1,max:1},
+                {index:0,status:'succeeded',value:1,max:1,resultItems:[{url:'/one.png',kind:'image'}]},
                 {index:1,status:'running',nodeName:'VAEDecode',value:null,max:null,startedAt:1000},
                 {index:2,status:'queued',value:null,max:null}
+            ]}
+        });
+        globalThis.multiGrid = smartProgressTaskGridHtml({
+            runningHubProgress:{tasks:[
+                {index:0,status:'succeeded',value:1,max:1,resultItems:[{url:'/one.png',kind:'image'}]},
+                {index:1,status:'running',nodeName:'VAEDecode',value:null,max:null,startedAt:1000},
+                {index:2,status:'queued',value:null,max:null}
+            ]}
+        });
+        globalThis.determinateGrid = smartProgressTaskGridHtml({
+            veniceProgress:{tasks:[
+                {index:0,status:'running',nodeName:'准备',value:0,max:4,startedAt:1000},
+                {index:1,status:'running',nodeName:'K采样器',value:1,max:4,startedAt:1000}
             ]}
         });
         globalThis.multiUnknown = runningHubProgressBorderHtml({
@@ -249,19 +294,35 @@ test('RunningHub progress uses a smooth inset border and a persistent resolution
     assert.equal((sandbox.single.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.equal((sandbox.unnamed.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.match(sandbox.unnamed, /rh-progress-value-layer is-determinate is-layer-hidden[\s\S]*stroke-dasharray="0 100"/);
-    assert.equal((sandbox.multi.match(/class="rh-progress-stroke/g) || []).length, 7);
-    assert.equal((sandbox.multi.match(/rh-progress-global-orbit/g) || []).length, 1);
-    assert.equal((sandbox.multi.match(/rh-progress-orbit-layer/g) || []).length, 3);
-    assert.equal((sandbox.multi.match(/rh-progress-value-layer/g) || []).length, 3);
-    assert.match(sandbox.multi, /1\/3 · VAEDecode/);
-    assert.match(sandbox.multi, /--rh-progress-delay:-1300ms/);
-    assert.match(sandbox.multiUnknown, /rh-progress-global-orbit is-indeterminate\s{2}"/);
-    assert.equal((sandbox.multiUnknown.match(/is-segment-active[\s\S]*?is-layer-hidden/g) || []).length, 2);
-    assert.match(sandbox.multiSticky, /rh-progress-global-orbit is-indeterminate\s+is-layer-hidden/);
-    assert.equal((sandbox.multiSticky.match(/is-segment-active\s+(?:is-queued\s+)?"/g) || []).length, 2);
-    assert.match(sandbox.multiTerminal, /rh-progress-global-orbit is-indeterminate\s+is-layer-hidden/);
-    assert.match(sandbox.multiTerminal, /is-segment-active\s+is-layer-hidden[\s\S]*?rh-progress-value-layer is-determinate is-layer-hidden/);
-    assert.match(jsSource, /node\.runningHubProgress\.segmented = true/);
+    assert.equal(sandbox.multi, '');
+    assert.equal(sandbox.multiUnknown, '');
+    assert.equal(sandbox.multiSticky, '');
+    assert.equal(sandbox.multiTerminal, '');
+    assert.equal((sandbox.multiGrid.match(/smart-progress-task-cell /g) || []).length, 3);
+    assert.equal((sandbox.multiGrid.match(/smart-progress-task-border/g) || []).length, 3);
+    assert.equal((sandbox.multiGrid.match(/smart-progress-task-value/g) || []).length, 3);
+    assert.match(sandbox.multiGrid, /viewBox="0 0 118 78"/);
+    assert.match(sandbox.multiGrid, /M 1 66 L 1 12 A 11 11 0 0 1 12 1/);
+    assert.match(sandbox.multiGrid, /L 12 77 A 11 11 0 0 1 1 66"/);
+    assert.doesNotMatch(sandbox.multiGrid, /A 11 11 0 0 1 1 66 Z/);
+    assert.doesNotMatch(sandbox.multiGrid, /stroke-dasharray/);
+    assert.equal(sandbox.valuePath25, 'M 1 89 L 1 11 A 10 10 0 0 1 11 1');
+    assert.equal(sandbox.valuePath50, 'M 1 89 L 1 11 A 10 10 0 0 1 11 1 L 89 1 A 10 10 0 0 1 99 11');
+    assert.equal(sandbox.gridValuePath25, 'M 1 66 L 1 12 A 11 11 0 0 1 12 1 L 32 1');
+    assert.equal(sandbox.singleRowValuePath25, 'M 1 152 L 1 17.721');
+    assert.doesNotMatch(sandbox.multiGrid, /smart-progress-task-rail/);
+    assert.match(sandbox.multiGrid, /smart-progress-task-cell[\s\S]*?is-complete[\s\S]*?data-progress-task-index="0"/);
+    assert.match(sandbox.multiGrid, /data-progress-result-signature="image:\/one\.png"/);
+    assert.match(sandbox.multiGrid, /is-running[\s\S]*?data-progress-task-index="1" style="--smart-task-pulse-delay:-590ms"/);
+    assert.match(sandbox.multiGrid, /smart-progress-task-breathe "/);
+    assert.match(sandbox.multiGrid, /smart-progress-task-value \s+is-layer-hidden/);
+    assert.match(sandbox.multiGrid, /title="VAEDecode"><span class="smart-progress-task-status-name">VAEDecode<\/span><\/span>/);
+    assert.doesNotMatch(sandbox.multiGrid, /title="VAEDecode · 运行中"/);
+    assert.match(sandbox.multiGrid, /data-progress-task-index="2"/);
+    assert.match(sandbox.multiGrid, /smart-progress-task-status-detail">等待<\/span>/);
+    assert.match(sandbox.determinateGrid, /data-progress-task-index="0"[\s\S]*?smart-progress-task-value \s+is-layer-hidden[\s\S]*?d="M 1 152"/);
+    assert.match(sandbox.determinateGrid, /data-progress-task-index="1"[\s\S]*?smart-progress-task-value [\s\S]*?d="M 1 152 L 1 17\.721"/);
+    assert.match(sandbox.determinateGrid, /smart-progress-task-status-name">K采样器<\/span><span class="smart-progress-task-status-separator">·<\/span><span class="smart-progress-task-status-detail">25%<\/span>/);
     assert.doesNotMatch(sandbox.unnamed, />10<\/span>/);
 });
 
@@ -288,6 +349,149 @@ test('RunningHub in-place progress patches preserve a live orbit phase', () => {
     assert.equal(sandbox.preservedStyle, '--rh-progress-delay:-420ms');
     assert.equal(sandbox.runningMode, 'indeterminate');
     assert.equal(sandbox.queuedMode, 'indeterminate');
+});
+
+test('multi-task center halos preserve phase across determinate updates and full redraws', () => {
+    let fakeNow = 5000;
+    const sandbox = vm.createContext({
+        Date:{now:() => fakeNow},
+        nodeRect:() => ({width:260, height:180}),
+        escapeHtml:value => String(value),
+        escapeAttr:value => String(value),
+        mediaKindForItem:item => item?.kind || 'image',
+        imageForDisplay:item => item,
+        thumbMediaHtml:item => `<img src="${item?.url || ''}">`
+    });
+    vm.runInContext(`
+        ${extractFunction('smartNodeProgressState')}
+        ${extractFunction('runningHubProgressTasks')}
+        ${extractFunction('runningHubTaskFraction')}
+        ${extractFunction('smartProgressTaskResultItems')}
+        ${extractFunction('smartProgressTaskStatusParts')}
+        ${extractFunction('smartProgressTaskStatusText')}
+        ${extractFunction('smartProgressTaskValuePath')}
+        ${extractFunction('smartProgressTaskGridHtml')}
+        ${extractFunction('smartProgressTaskCellHasActiveHalo')}
+        const node = {runningHubProgress:{tasks:[
+            {index:0,status:'running',nodeName:'K采样器',value:null,max:null,startedAt:1000},
+            {index:1,status:'queued',value:null,max:null,startedAt:1000}
+        ]}};
+        globalThis.firstGrid = smartProgressTaskGridHtml(node);
+        const cell = (classes, hasDot=true) => ({
+            classList:{contains:name => classes.includes(name)},
+            querySelector:() => hasDot ? {} : null
+        });
+        globalThis.runningHalo = smartProgressTaskCellHasActiveHalo(cell(['is-running']));
+        globalThis.determinateHalo = smartProgressTaskCellHasActiveHalo(cell(['is-determinate']));
+        globalThis.queuedHalo = smartProgressTaskCellHasActiveHalo(cell(['is-queued']));
+        globalThis.completeHalo = smartProgressTaskCellHasActiveHalo(cell(['is-complete']));
+        globalThis.missingHalo = smartProgressTaskCellHasActiveHalo(cell(['is-running'], false));
+    `, sandbox);
+    fakeNow = 5300;
+    vm.runInContext('globalThis.secondGrid = smartProgressTaskGridHtml(node);', sandbox);
+    assert.match(sandbox.firstGrid, /data-progress-task-index="0" style="--smart-task-pulse-delay:-400ms"/);
+    assert.match(sandbox.secondGrid, /data-progress-task-index="0" style="--smart-task-pulse-delay:-700ms"/);
+    assert.equal(sandbox.runningHalo, true);
+    assert.equal(sandbox.determinateHalo, true);
+    assert.equal(sandbox.queuedHalo, false);
+    assert.equal(sandbox.completeHalo, false);
+    assert.equal(sandbox.missingHalo, false);
+});
+
+test('multi-task determinate borders interpolate a single partial path using the single-task timing', () => {
+    const queuedFrames = [];
+    const sandbox = vm.createContext({
+        performance:{now:() => 0},
+        window:{matchMedia:() => ({matches:false})},
+        requestAnimationFrame:callback => {
+            queuedFrames.push(callback);
+            return queuedFrames.length;
+        },
+        cancelAnimationFrame:() => {}
+    });
+    vm.runInContext(`
+        ${extractFunction('smartProgressTaskValuePath')}
+        ${extractFunction('smartProgressTaskEase')}
+        ${extractFunction('animateSmartProgressTaskValuePath')}
+        const path = {
+            dataset:{progressPercent:'0'},
+            attributes:{d:'M 1 89'},
+            isConnected:true,
+            setAttribute(name, value){ this.attributes[name] = value; },
+            getAttribute(name){ return this.attributes[name] || ''; }
+        };
+        const freshPath = {
+            dataset:{progressPercent:'25'},
+            getAttribute(name){ return name === 'd' ? smartProgressTaskValuePath(25) : ''; }
+        };
+        const svg = {dataset:{
+            progressPathWidth:'100',
+            progressPathHeight:'100',
+            progressPathInset:'1',
+            progressPathRadius:'10'
+        }};
+        animateSmartProgressTaskValuePath(path, freshPath, svg);
+        globalThis.path = path;
+    `, sandbox);
+    assert.equal(queuedFrames.length, 1);
+    queuedFrames.shift()(190);
+    assert.notEqual(sandbox.path.attributes.d, 'M 1 89');
+    assert.notEqual(sandbox.path.attributes.d, sandbox.smartProgressTaskValuePath?.(25));
+    queuedFrames.shift()(380);
+    assert.equal(sandbox.path.attributes.d, 'M 1 89 L 1 11 A 10 10 0 0 1 11 1');
+    assert.equal(sandbox.path.dataset.progressPercent, '25');
+
+    vm.runInContext(`
+        const completePath = {
+            dataset:{progressPercent:'75'},
+            attributes:{d:smartProgressTaskValuePath(75)},
+            isConnected:true,
+            setAttribute(name, value){ this.attributes[name] = value; },
+            getAttribute(name){ return this.attributes[name] || ''; }
+        };
+        const completeFreshPath = {
+            dataset:{progressPercent:'100'},
+            getAttribute(name){ return name === 'd' ? smartProgressTaskValuePath(100) : ''; }
+        };
+        animateSmartProgressTaskValuePath(completePath, completeFreshPath, svg);
+        globalThis.completePath = completePath;
+    `, sandbox);
+    queuedFrames.shift()(380);
+    assert.notEqual(sandbox.completePath.attributes.d, sandbox.smartProgressTaskValuePath(100));
+    queuedFrames.shift()(560);
+    assert.equal(sandbox.completePath.attributes.d, sandbox.smartProgressTaskValuePath(100));
+    assert.equal(sandbox.completePath.dataset.progressPercent, '100');
+});
+
+test('multi-task progress keeps result media ordered by task slot instead of completion time', () => {
+    const sandbox = vm.createContext({
+        nowMs:() => 1000,
+        resultMediaUrls:value => value,
+        mediaKindForUrls:() => 'image',
+        scheduleRunningHubProgressRefresh:() => {}
+    });
+    vm.runInContext(`
+        ${extractFunction('smartNodeProgressState')}
+        ${extractFunction('runningHubProgressTasks')}
+        ${extractFunction('smartProgressTaskResultItems')}
+        ${extractFunction('smartProgressTaskSlot')}
+        ${extractFunction('setSmartProgressTaskResults')}
+        const node = {
+            images:[],
+            runningHubProgress:{tasks:[
+                {index:0,resultItems:[]},
+                {index:1,resultItems:[]}
+            ]}
+        };
+        node.images = [{url:'/second.png',kind:'image',_genPrompt:{promptText:'second'}}];
+        setSmartProgressTaskResults(node, 1, node.images);
+        node.images.push({url:'/first.png',kind:'image',_genPrompt:{promptText:'first'}});
+        setSmartProgressTaskResults(node, 0, [node.images[1]]);
+        globalThis.orderedUrls = node.images.map(item => item.url);
+        globalThis.orderedPrompts = node.images.map(item => item._genPrompt?.promptText);
+    `, sandbox);
+    assert.deepEqual([...sandbox.orderedUrls], ['/first.png', '/second.png']);
+    assert.deepEqual([...sandbox.orderedPrompts], ['first', 'second']);
 });
 
 test('Venice image and video tasks reuse the border with stable asymptotic estimates', () => {

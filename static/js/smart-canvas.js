@@ -12384,8 +12384,11 @@ function smartGroupBodyHtml(node){
         ${members.length ? '' : `<div class="smart-group-empty"><i data-lucide="plus"></i><span>拖入图片自动收进分组</span></div>`}
     </div>`;
 }
+function smartNodeProgressState(node){
+    return node?.runningHubProgress || node?.veniceProgress || null;
+}
 function runningHubProgressTasks(node){
-    const state = node?.runningHubProgress || node?.veniceProgress;
+    const state = smartNodeProgressState(node);
     return Array.isArray(state?.tasks) ? state.tasks.filter(Boolean).sort((a, b) => Number(a.index || 0) - Number(b.index || 0)) : [];
 }
 function runningHubTaskFraction(task){
@@ -12397,14 +12400,9 @@ function runningHubTaskFraction(task){
 }
 function runningHubProgressLabel(node){
     const tasks = runningHubProgressTasks(node);
-    if(!tasks.length) return '';
-    const completed = tasks.filter(task => task.status === 'succeeded').length;
+    if(tasks.length !== 1) return '';
     const active = tasks.find(task => task.nodeName && !['succeeded','failed','cancelled','canceled'].includes(task.status))
         || tasks.find(task => !['succeeded','failed','cancelled','canceled'].includes(task.status));
-    if(tasks.length > 1){
-        const detail = active?.nodeName ? ` · ${active.nodeName}` : '';
-        return `${completed}/${tasks.length}${detail}`;
-    }
     if(active?.nodeName){
         const fraction = runningHubTaskFraction(active);
         return `${active.nodeName}${fraction === null ? '' : ` · ${Math.round(fraction * 100)}%`}`;
@@ -12412,9 +12410,184 @@ function runningHubProgressLabel(node){
     if(active?.status === 'queued') return 'QUEUED';
     return '';
 }
+function smartProgressTaskResultItems(task){
+    return Array.isArray(task?.resultItems) ? task.resultItems.filter(item => item?.url) : [];
+}
+function smartProgressTaskStatusParts(task){
+    const status = String(task?.status || '').toLowerCase();
+    const fraction = runningHubTaskFraction(task);
+    const name = String(task?.nodeName || '').trim();
+    let detail = '等待';
+    if(status === 'succeeded') detail = '完成';
+    else if(status === 'finalizing') detail = '完成中';
+    else if(['failed','cancelled','canceled'].includes(status)) detail = status === 'failed' ? '失败' : '已取消';
+    else if(fraction !== null && fraction > 0) detail = `${Math.round(fraction * 100)}%`;
+    else if(status === 'running') detail = name ? '' : '运行中';
+    return {name, detail};
+}
+function smartProgressTaskStatusText(task){
+    const {name, detail} = smartProgressTaskStatusParts(task);
+    return name && detail ? `${name} · ${detail}` : name || detail;
+}
+function smartProgressTaskValuePath(percent, width=100, height=100, inset=1, preferredRadius=10){
+    const fraction = Math.max(0, Math.min(1, Number(percent) / 100 || 0));
+    const pathWidth = Math.max(2, Number(width) || 100);
+    const pathHeight = Math.max(2, Number(height) || 100);
+    const pathInset = Math.max(0, Number(inset) || 0);
+    const left = pathInset;
+    const top = pathInset;
+    const right = Math.max(left, pathWidth - pathInset);
+    const bottom = Math.max(top, pathHeight - pathInset);
+    const radius = Math.max(0, Math.min(
+        Number(preferredRadius) || 0,
+        (right - left) / 2,
+        (bottom - top) / 2
+    ));
+    const verticalLength = Math.max(0, bottom - top - radius * 2);
+    const horizontalLength = Math.max(0, right - left - radius * 2);
+    const arcLength = Math.PI * radius / 2;
+    const totalLength = verticalLength * 2 + horizontalLength * 2 + arcLength * 4;
+    let remaining = totalLength * fraction;
+    const format = value => String(Number(value.toFixed(3)));
+    let current = [left, bottom - radius];
+    const commands = [`M ${format(current[0])} ${format(current[1])}`];
+    const segments = [
+        {type:'line', end:[left,top + radius], length:verticalLength},
+        {type:'arc', center:[left + radius,top + radius], start:Math.PI, end:[left + radius,top], length:arcLength},
+        {type:'line', end:[right - radius,top], length:horizontalLength},
+        {type:'arc', center:[right - radius,top + radius], start:-Math.PI / 2, end:[right,top + radius], length:arcLength},
+        {type:'line', end:[right,bottom - radius], length:verticalLength},
+        {type:'arc', center:[right - radius,bottom - radius], start:0, end:[right - radius,bottom], length:arcLength},
+        {type:'line', end:[left + radius,bottom], length:horizontalLength},
+        {type:'arc', center:[left + radius,bottom - radius], start:Math.PI / 2, end:[left,bottom - radius], length:arcLength}
+    ];
+    for(const segment of segments){
+        if(remaining <= 0) break;
+        if(remaining + 1e-6 >= segment.length){
+            commands.push(segment.type === 'line'
+                ? `L ${segment.end[0]} ${segment.end[1]}`
+                : `A ${format(radius)} ${format(radius)} 0 0 1 ${format(segment.end[0])} ${format(segment.end[1])}`);
+            current = segment.end;
+            remaining = Math.max(0, remaining - segment.length);
+            if(remaining < 1e-6) remaining = 0;
+            continue;
+        }
+        const ratio = remaining / segment.length;
+        if(segment.type === 'line'){
+            const x = current[0] + (segment.end[0] - current[0]) * ratio;
+            const y = current[1] + (segment.end[1] - current[1]) * ratio;
+            commands.push(`L ${format(x)} ${format(y)}`);
+        } else {
+            const angle = segment.start + Math.PI / 2 * ratio;
+            const x = segment.center[0] + Math.cos(angle) * radius;
+            const y = segment.center[1] + Math.sin(angle) * radius;
+            commands.push(`A ${format(radius)} ${format(radius)} 0 0 1 ${format(x)} ${format(y)}`);
+        }
+        remaining = 0;
+    }
+    return commands.join(' ');
+}
+function smartProgressTaskGridHtml(node, layout=null){
+    const tasks = runningHubProgressTasks(node);
+    if(tasks.length <= 1) return '';
+    const rect = layout || nodeRect(node);
+    const width = Math.max(24, Number(rect?.width || 260));
+    const height = Math.max(24, Number(rect?.height || 180));
+    const total = tasks.length;
+    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(total))));
+    const rows = Math.ceil(total / cols);
+    const gridPadding = 8;
+    const gridGap = 8;
+    const cellWidth = Math.max(2, (width - gridPadding * 2 - gridGap * (cols - 1)) / cols);
+    const cellHeight = Math.max(2, (height - gridPadding * 2 - gridGap * (rows - 1)) / rows);
+    const pathWidth = Number(cellWidth.toFixed(3));
+    const pathHeight = Number(cellHeight.toFixed(3));
+    const pathInset = 1;
+    const pathRadius = Math.max(0, Math.min(11, Math.min(pathWidth, pathHeight) / 2 - pathInset));
+    // Start at the lower-left and travel clockwise: up the left edge, across
+    // the top, down the right edge, then back along the bottom. Deliberately
+    // leave the subpath open even though its endpoints meet geometrically:
+    // browsers centre dash patterns around a closed seam, which makes a
+    // determinate stroke appear to grow in both directions from the start.
+    const taskBorderPath = smartProgressTaskValuePath(100, pathWidth, pathHeight, pathInset, pathRadius);
+    let resultCursor = 0;
+    const cells = tasks.map((task, taskIndex) => {
+        const status = String(task?.status || 'submitting').toLowerCase();
+        const fraction = runningHubTaskFraction(task);
+        const complete = status === 'succeeded' || status === 'finalizing';
+        const terminal = ['failed','cancelled','canceled'].includes(status);
+        const determinate = complete || (fraction !== null && fraction > 0);
+        const amount = complete ? 100 : fraction !== null ? fraction * 100 : 0;
+        const queued = ['submitting','queued'].includes(status);
+        const indeterminate = !queued && !determinate && !terminal;
+        const results = smartProgressTaskResultItems(task);
+        const resultIndex = resultCursor;
+        resultCursor += results.length;
+        const signature = results.map(item => `${mediaKindForItem(item)}:${item.url || ''}`).join('|');
+        const first = results[0] ? imageForDisplay(results[0]) : null;
+        const content = first
+            ? `${thumbMediaHtml(first)}${results.length > 1 ? `<span class="smart-progress-task-extra">+${results.length - 1}</span>` : ''}`
+            : `<span class="smart-progress-task-placeholder-dot"></span>`;
+        const index = Number.isFinite(Number(task?.index)) ? Number(task.index) : taskIndex;
+        const phaseOrigin = Math.max(0, Number(task?.startedAt) || Number(task?.createdAt) || 0);
+        const phaseElapsed = (phaseOrigin
+            ? Math.max(0, Date.now() - phaseOrigin)
+            : Date.now()) + Math.max(0, index) * 190;
+        const pulseDelay = -(phaseElapsed % 1800);
+        const statusParts = smartProgressTaskStatusParts(task);
+        const statusText = smartProgressTaskStatusText(task);
+        const statusHtml = `${statusParts.name ? `<span class="smart-progress-task-status-name">${escapeHtml(statusParts.name)}</span>` : ''}${statusParts.name && statusParts.detail ? '<span class="smart-progress-task-status-separator">·</span>' : ''}${statusParts.detail ? `<span class="smart-progress-task-status-detail">${escapeHtml(statusParts.detail)}</span>` : ''}`;
+        const valuePath = smartProgressTaskValuePath(amount, pathWidth, pathHeight, pathInset, pathRadius);
+        return `<div class="smart-progress-task-cell ${queued ? 'is-queued' : ''} ${indeterminate ? 'is-running' : ''} ${determinate ? 'is-determinate' : ''} ${complete ? 'is-complete' : ''} ${terminal ? 'is-terminal' : ''} ${status === 'failed' ? 'is-failed' : ''}" data-progress-task-index="${index}" style="--smart-task-pulse-delay:${pulseDelay}ms">
+            <svg class="smart-progress-task-border" viewBox="0 0 ${pathWidth} ${pathHeight}" preserveAspectRatio="none" data-progress-path-width="${pathWidth}" data-progress-path-height="${pathHeight}" data-progress-path-inset="${pathInset}" data-progress-path-radius="${pathRadius}" aria-hidden="true">
+                <path class="smart-progress-task-track" d="${taskBorderPath}"></path>
+                <path class="smart-progress-task-breathe ${indeterminate ? '' : 'is-layer-hidden'}" d="${taskBorderPath}"></path>
+                <path class="smart-progress-task-value ${complete ? 'is-complete' : ''} ${determinate ? '' : 'is-layer-hidden'}" data-progress-percent="${amount}" d="${valuePath}"></path>
+            </svg>
+            <div class="smart-progress-task-content" data-progress-result-signature="${escapeAttr(signature)}"${first ? ` data-image-index="${resultIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(first)}:${first.url || ''}`)}"` : ''}>${content}</div>
+            <span class="smart-progress-task-index">${index + 1}</span>
+            <span class="smart-progress-task-status" title="${escapeAttr(statusText)}">${statusHtml}</span>
+        </div>`;
+    }).join('');
+    return `<div class="smart-progress-task-grid" data-progress-task-count="${total}" style="grid-template-columns:repeat(${cols},minmax(0,1fr));grid-template-rows:repeat(${rows},minmax(0,1fr))" data-progress-layout-width="${width}" data-progress-layout-height="${height}">${cells}</div>`;
+}
+function syncSmartProgressTaskSvgGeometry(svg, width, height){
+    if(!svg) return;
+    const pathWidth = Math.max(2, Number(width) || 0);
+    const pathHeight = Math.max(2, Number(height) || 0);
+    if(pathWidth <= 2 || pathHeight <= 2) return;
+    const inset = 1;
+    const radius = Math.max(0, Math.min(11, Math.min(pathWidth, pathHeight) / 2 - inset));
+    const fullPath = smartProgressTaskValuePath(100, pathWidth, pathHeight, inset, radius);
+    svg.setAttribute('viewBox', `0 0 ${pathWidth} ${pathHeight}`);
+    svg.dataset.progressPathWidth = String(pathWidth);
+    svg.dataset.progressPathHeight = String(pathHeight);
+    svg.dataset.progressPathInset = String(inset);
+    svg.dataset.progressPathRadius = String(radius);
+    svg.querySelector(':scope > .smart-progress-task-track')?.setAttribute('d', fullPath);
+    svg.querySelector(':scope > .smart-progress-task-breathe')?.setAttribute('d', fullPath);
+    const valuePath = svg.querySelector(':scope > .smart-progress-task-value');
+    if(valuePath){
+        const percent = Number(valuePath.dataset.progressPercent) || 0;
+        valuePath.setAttribute('d', smartProgressTaskValuePath(percent, pathWidth, pathHeight, inset, radius));
+    }
+}
+function alignSmartProgressTaskGridGeometry(root){
+    root?.querySelectorAll?.('.smart-progress-task-cell').forEach(cell => {
+        if(!(cell.clientWidth > 0) || !(cell.clientHeight > 0)) return;
+        syncSmartProgressTaskSvgGeometry(
+            cell.querySelector(':scope > .smart-progress-task-border'),
+            cell.clientWidth,
+            cell.clientHeight
+        );
+    });
+}
 function runningHubProgressBorderHtml(node, layout=null){
     const tasks = runningHubProgressTasks(node);
     if(!tasks.length) return '';
+    // Multi-task nodes communicate progress inside their own stable cells.
+    // The normal node frame remains as the only outer border.
+    if(tasks.length > 1) return '';
     const rect = layout || nodeRect(node);
     const width = Math.max(24, Number(rect?.width || 260));
     const height = Math.max(24, Number(rect?.height || 180));
@@ -12422,62 +12595,22 @@ function runningHubProgressBorderHtml(node, layout=null){
     // stroke centre one pixel inside it, so its corners follow the same curve.
     const inset = 1;
     const radius = Math.max(0, Math.min(11, Math.min(width, height) / 2 - inset));
-    const total = Math.max(1, tasks.length);
     const label = runningHubProgressLabel(node);
     const animationStyle = (task, duration) => {
         const start = Math.max(0, Number(task?.startedAt) || 0);
         const elapsed = Math.max(0, Date.now() - start);
         return ` style="--rh-progress-delay:${-(elapsed % duration)}ms"`;
     };
-    let segments = '';
-    if(total === 1){
-        const task = tasks[0];
-        const fraction = runningHubTaskFraction(task);
-        const complete = task.status === 'succeeded' || task.status === 'finalizing';
-        const determinate = complete || fraction !== null;
-        const amount = complete ? 100 : fraction !== null ? Math.max(.8, fraction * 100) : 0;
-        const duration = 1700;
-        segments = `
-            <rect class="rh-progress-stroke rh-progress-orbit-layer is-indeterminate ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animationStyle(task, duration)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>
-            <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}"></rect>
-        `;
-    } else {
-        const progressState = node?.runningHubProgress || {};
-        const hasReliableProgress = tasks.some(task => (
-            task.status === 'succeeded'
-            || task.status === 'finalizing'
-            || ['failed','cancelled','canceled'].includes(task.status)
-            || runningHubTaskFraction(task) !== null
-        ));
-        const segmented = Boolean(progressState.segmented) || hasReliableProgress;
-        const aggregateQueued = tasks.every(task => ['submitting','queued'].includes(task.status));
-        const aggregateStartedAt = tasks.reduce((earliest, task) => {
-            const startedAt = Math.max(0, Number(task?.startedAt) || 0);
-            return startedAt && (!earliest || startedAt < earliest) ? startedAt : earliest;
-        }, 0);
-        const span = 100 / total;
-        const gap = Math.min(1.5, span * .16);
-        const globalOrbit = `<rect class="rh-progress-stroke rh-progress-global-orbit is-indeterminate ${aggregateQueued ? 'is-queued' : ''} ${segmented ? 'is-layer-hidden' : ''}"${animationStyle({startedAt:aggregateStartedAt}, 1700)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>`;
-        const taskSegments = tasks.map((task, index) => {
-            const start = index * span + gap / 2;
-            const available = Math.max(.6, span - gap);
-            const fraction = runningHubTaskFraction(task);
-            const complete = task.status === 'succeeded' || task.status === 'finalizing';
-            const determinate = complete || fraction !== null;
-            const terminal = ['failed','cancelled','canceled'].includes(task.status);
-            const amount = complete ? available : fraction !== null ? Math.max(.5, available * fraction) : 0;
-            const pendingAmount = Math.max(.8, available * .3);
-            const pendingStart = start + Math.max(0, (available - pendingAmount) / 2);
-            const orbitVisible = segmented && !determinate && !terminal;
-            const valueVisible = segmented && determinate;
-            const animation = animationStyle(task, 1350);
-            return `
-                <rect class="rh-progress-stroke rh-progress-orbit-layer is-segment-active ${task.status === 'queued' || task.status === 'submitting' ? 'is-queued' : ''} ${orbitVisible ? '' : 'is-layer-hidden'}"${animation} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${pendingAmount} ${100 - pendingAmount}" stroke-dashoffset="${-pendingStart}"></rect>
-                <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${valueVisible ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}" stroke-dashoffset="${-start}"></rect>
-            `;
-        }).join('');
-        segments = `${globalOrbit}${taskSegments}`;
-    }
+    const task = tasks[0];
+    const fraction = runningHubTaskFraction(task);
+    const complete = task.status === 'succeeded' || task.status === 'finalizing';
+    const determinate = complete || fraction !== null;
+    const amount = complete ? 100 : fraction !== null ? Math.max(.8, fraction * 100) : 0;
+    const duration = 1700;
+    const segments = `
+        <rect class="rh-progress-stroke rh-progress-orbit-layer is-indeterminate ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animationStyle(task, duration)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>
+        <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}"></rect>
+    `;
     return `<div class="rh-progress-border-host ${node?.veniceProgress ? 'is-venice-progress' : ''}">
         <svg class="rh-progress-border" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
             <rect class="rh-progress-track" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}"></rect>
@@ -12490,6 +12623,8 @@ function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
+    const progressTaskGrid = smartProgressTaskGridHtml(node, layout);
+    if(progressTaskGrid) return progressTaskGrid;
     const imgs = (node.images || []).map(imageForDisplay);
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
         return jimengPendingBodyHtml(node, layout);
@@ -12795,7 +12930,7 @@ function render(){
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
-        const isGroup = isImageNode && imgs.length > 1;
+        const isGroup = isImageNode && (imgs.length > 1 || runningHubProgressTasks(node).length > 1);
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const isGenerating = nodeHasLiveRunState(node);
         const ancestorRunState = smartAncestorNodeVisualState(node.id);
@@ -12862,6 +12997,7 @@ function render(){
     restoreMediaPlaybackStates(mediaStates);
     restoreThumbScrollStates(thumbScrollStates);
     restorePromptNodeTextareaScrollStates(promptTextareaScrollStates);
+    alignSmartProgressTaskGridGeometry(world);
     bindNodeEvents();
     bindConnectionEvents();
     syncSmartCanvasVideoSelection();
@@ -21474,11 +21610,12 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         ? (await Promise.all(runningHubJobs.map((job, index) =>
             runRunningHubGeneration(prompt, job.refs, activeSettings, runContext, {index, total:runningHubJobs.length})
                 .then(result => {
+                    setSmartProgressTaskResults(runningHubProgressNodeForContext(runContext), index, result);
                     finishRunningHubProgressTask(runContext, index, 'succeeded');
                     return result;
                 })
                 .catch(error => {
-                    finishRunningHubProgressTask(runContext, index, 'failed');
+                    finishRunningHubProgressTask(runContext, index, 'failed', error);
                     throw error;
                 })
         ))).flat()
@@ -22179,7 +22316,7 @@ async function runGeneration(event=null, options={}){
         delete pendingNode.runFailed;
         delete pendingNode.runCancelled;
         pendingNode.runTimerHidden = false;
-        if(!cleanHistoryImages(pendingNode.images || []).length){
+        if(expectedCount > 1 || !cleanHistoryImages(pendingNode.images || []).length){
             rememberSmartNodePreRunBox(pendingNode);
             const pendingBox = pendingBoxSize(pendingNode.pending, {sourceNode:node, refs, settings:activeSettings});
             pendingNode.w = pendingBox.w;
@@ -22236,13 +22373,14 @@ async function runGeneration(event=null, options={}){
                     const batch = resultMediaUrls(await runRunningHubGeneration(prompt, job.refs, activeSettings, runContext, {index, total:runningHubJobs.length}));
                     throwIfSmartGenerationCancelled(runSignal);
                     if(!batch.length) throw new Error(tr('smart.errNoOutImages'));
-                    finalizeSmartPendingTask(pendingNode, `runninghub_${index}`, batch, 'image');
+                    const additions = finalizeSmartPendingTask(pendingNode, `runninghub_${index}`, batch, 'image');
+                    setSmartProgressTaskResults(pendingNode, index, additions);
                     finishRunningHubProgressTask(runContext, index, 'succeeded');
                     render();
                     scheduleSave();
                     return {ok:true, images:batch};
                 } catch(error) {
-                    finishRunningHubProgressTask(runContext, index, 'failed');
+                    finishRunningHubProgressTask(runContext, index, 'failed', error);
                     pendingNode.pending = Math.max(0, Number(pendingNode.pending || 0) - 1);
                     render();
                     scheduleSave();
@@ -22332,9 +22470,7 @@ async function runGeneration(event=null, options={}){
         } else {
             pendingNode.pending = 0;
             delete pendingNode._replaceExistingOutputsOnNextResult;
-            if(!(pendingNode.images || []).length){
-                clearSmartNodePreRunBox(pendingNode, true);
-            }
+            clearSmartNodePreRunBox(pendingNode, true);
         }
         markSmartNodeRunFailed(pendingNode, {keepRecoverableTasks:true});
         if(extracted) restoreFromExtraction(node, extracted);
@@ -22621,7 +22757,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
         return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:basePayload.provider_id, model:basePayload.model};
     } catch(error) {
         if(veniceImageProvider){
-            for(let index = 0; index < count; index++) finishVeniceProgressTask(runContext, index, 'failed');
+            for(let index = 0; index < count; index++) finishVeniceProgressTask(runContext, index, 'failed', error);
         }
         throw error;
     } finally {
@@ -22816,7 +22952,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
         if(veniceVideoProvider) finishVeniceProgressTask(runContext, 0, 'succeeded');
         return resultMediaUrls(result);
     } catch(error) {
-        if(veniceVideoProvider) finishVeniceProgressTask(runContext, 0, 'failed');
+        if(veniceVideoProvider) finishVeniceProgressTask(runContext, 0, 'failed', error);
         throw error;
     } finally {
         endVeniceCreditsFastRefresh(veniceCreditsToken);
@@ -23201,7 +23337,6 @@ function ensureRunningHubProgress(context, total=1){
         delete node.veniceProgress;
         node.runningHubProgress = {
             runId:context.runId,
-            segmented:false,
             tasks:Array.from({length:count}, (_, index) => ({
                 index,
                 taskId:'',
@@ -23210,6 +23345,8 @@ function ensureRunningHubProgress(context, total=1){
                 nodeName:'',
                 value:null,
                 max:null,
+                resultItems:[],
+                error:'',
                 startedAt:nowMs(),
                 updatedAt:nowMs()
             }))
@@ -23221,6 +23358,45 @@ function ensureRunningHubProgress(context, total=1){
 function runningHubProgressSlot(context, index=0){
     const node = runningHubProgressNodeForContext(context);
     return node?.runningHubProgress?.tasks?.[Math.max(0, Number(index) || 0)] || null;
+}
+function smartProgressTaskSlot(node, index=0){
+    const normalizedIndex = Math.max(0, Number(index) || 0);
+    const tasks = smartNodeProgressState(node)?.tasks;
+    if(!Array.isArray(tasks)) return null;
+    return tasks.find((task, taskIndex) => Number(task?.index ?? taskIndex) === normalizedIndex) || tasks[normalizedIndex] || null;
+}
+function setSmartProgressTaskResults(node, index, resultItems=[]){
+    const task = smartProgressTaskSlot(node, index);
+    if(!task) return [];
+    const directItems = (Array.isArray(resultItems) ? resultItems.flat(Infinity) : [resultItems]).filter(Boolean);
+    const resolvedItems = directItems.every(item => typeof item === 'string' || item?.url)
+        ? directItems
+        : resultMediaUrls(resultItems);
+    const items = resolvedItems.map((item, itemIndex) => {
+        if(typeof item !== 'string') return item;
+        const kind = mediaKindForUrls([item], 'image');
+        const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
+        return {url:item, name:`output-${itemIndex + 1}.${ext}`, kind, generatedResult:true};
+    }).filter(item => item?.url);
+    task.resultItems = items;
+    task.updatedAt = nowMs();
+    const orderedItems = runningHubProgressTasks(node).flatMap(progressTask => smartProgressTaskResultItems(progressTask));
+    const orderedUrls = new Set(orderedItems.map(item => item.url));
+    const currentItems = Array.isArray(node?.images) ? node.images.filter(item => item?.url) : [];
+    if(currentItems.some(item => orderedUrls.has(item.url))){
+        node.images = [
+            ...orderedItems,
+            ...currentItems.filter(item => !orderedUrls.has(item.url))
+        ];
+    }
+    scheduleRunningHubProgressRefresh(node);
+    return items;
+}
+function setSmartProgressTaskError(node, index, error){
+    const task = smartProgressTaskSlot(node, index);
+    if(!task) return;
+    task.error = String(error?.message || error || '').trim();
+    task.updatedAt = nowMs();
 }
 function syncRunningHubProgressElement(current, fresh, preservedAttributes=[]){
     const preserved = new Set(preservedAttributes);
@@ -23240,10 +23416,71 @@ function runningHubProgressAnimationMode(element){
     if(element?.classList?.contains('is-indeterminate')){
         return 'indeterminate';
     }
-    if(element?.classList?.contains('is-segment-active')){
-        return 'segment';
-    }
     return '';
+}
+function smartProgressTaskEase(progress){
+    const target = Math.max(0, Math.min(1, Number(progress) || 0));
+    let low = 0;
+    let high = 1;
+    let parameter = target;
+    for(let index = 0; index < 10; index += 1){
+        parameter = (low + high) / 2;
+        const inverse = 1 - parameter;
+        const x = 3 * inverse * inverse * parameter * .22
+            + 3 * inverse * parameter * parameter * .36
+            + parameter * parameter * parameter;
+        if(x < target) low = parameter;
+        else high = parameter;
+    }
+    const inverse = 1 - parameter;
+    return 3 * inverse * inverse * parameter
+        + 3 * inverse * parameter * parameter
+        + parameter * parameter * parameter;
+}
+function animateSmartProgressTaskValuePath(path, freshPath, svg){
+    if(!path || !freshPath || !svg) return;
+    if(path._smartProgressFrame) cancelAnimationFrame(path._smartProgressFrame);
+    const from = Number(path.dataset.progressPercent);
+    const to = Number(freshPath.dataset.progressPercent);
+    const width = Number(svg.dataset.progressPathWidth);
+    const height = Number(svg.dataset.progressPathHeight);
+    const inset = Number(svg.dataset.progressPathInset);
+    const radius = Number(svg.dataset.progressPathRadius);
+    const reducedMotion = typeof window !== 'undefined'
+        && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    if(
+        reducedMotion
+        || !Number.isFinite(from)
+        || !Number.isFinite(to)
+        || !Number.isFinite(width)
+        || !Number.isFinite(height)
+        || Math.abs(to - from) < .001
+    ){
+        path.setAttribute('d', freshPath.getAttribute('d') || '');
+        path.dataset.progressPercent = String(to);
+        path._smartProgressFrame = 0;
+        return;
+    }
+    const startedAt = performance.now();
+    const completionJump = to >= 99.999 && from < 99.999;
+    const duration = completionJump
+        ? Math.min(900, Math.max(560, 380 + Math.abs(to - from) * 5))
+        : 380;
+    const tick = now => {
+        const elapsed = Math.max(0, now - startedAt);
+        const progress = Math.min(1, elapsed / duration);
+        const value = from + (to - from) * smartProgressTaskEase(progress);
+        path.setAttribute('d', smartProgressTaskValuePath(value, width, height, inset, radius));
+        path.dataset.progressPercent = String(value);
+        if(progress < 1 && path.isConnected){
+            path._smartProgressFrame = requestAnimationFrame(tick);
+            return;
+        }
+        path.setAttribute('d', freshPath.getAttribute('d') || '');
+        path.dataset.progressPercent = String(to);
+        path._smartProgressFrame = 0;
+    };
+    path._smartProgressFrame = requestAnimationFrame(tick);
 }
 function patchRunningHubProgressHost(currentHost, freshHost){
     const currentSvg = currentHost?.querySelector(':scope > .rh-progress-border');
@@ -23274,6 +23511,63 @@ function patchRunningHubProgressHost(currentHost, freshHost){
     }
     return currentHost;
 }
+function smartProgressTaskCellHasActiveHalo(cell){
+    if(!cell?.classList) return false;
+    if(
+        cell.classList.contains('is-queued')
+        || cell.classList.contains('is-complete')
+        || cell.classList.contains('is-terminal')
+    ) return false;
+    return Boolean(cell.querySelector?.(':scope > .smart-progress-task-content > .smart-progress-task-placeholder-dot'));
+}
+function patchSmartProgressTaskGrid(currentGrid, freshGrid){
+    const currentCells = [...(currentGrid?.querySelectorAll(':scope > .smart-progress-task-cell') || [])];
+    const freshCells = [...(freshGrid?.querySelectorAll(':scope > .smart-progress-task-cell') || [])];
+    if(!currentGrid || !freshGrid || currentCells.length !== freshCells.length){
+        currentGrid?.replaceWith(freshGrid);
+        return freshGrid;
+    }
+    syncRunningHubProgressElement(currentGrid, freshGrid);
+    currentCells.forEach((cell, index) => {
+        const freshCell = freshCells[index];
+        const preserveHaloPhase = smartProgressTaskCellHasActiveHalo(cell)
+            && smartProgressTaskCellHasActiveHalo(freshCell);
+        syncRunningHubProgressElement(cell, freshCell, preserveHaloPhase ? ['style'] : []);
+        const currentSvg = cell.querySelector(':scope > .smart-progress-task-border');
+        const freshSvg = freshCell.querySelector(':scope > .smart-progress-task-border');
+        if(freshSvg && cell.clientWidth > 0 && cell.clientHeight > 0){
+            syncSmartProgressTaskSvgGeometry(freshSvg, cell.clientWidth, cell.clientHeight);
+        }
+        const currentPaths = [...(currentSvg?.querySelectorAll(':scope > path') || [])];
+        const freshPaths = [...(freshSvg?.querySelectorAll(':scope > path') || [])];
+        if(currentSvg && freshSvg && currentPaths.length === freshPaths.length){
+            syncRunningHubProgressElement(currentSvg, freshSvg);
+            currentPaths.forEach((path, pathIndex) => {
+                const freshPath = freshPaths[pathIndex];
+                if(path.classList.contains('smart-progress-task-value')){
+                    syncRunningHubProgressElement(path, freshPath, ['d', 'data-progress-percent']);
+                    animateSmartProgressTaskValuePath(path, freshPath, freshSvg);
+                } else {
+                    syncRunningHubProgressElement(path, freshPath);
+                }
+            });
+        }
+        const currentContent = cell.querySelector(':scope > .smart-progress-task-content');
+        const freshContent = freshCell.querySelector(':scope > .smart-progress-task-content');
+        if(currentContent && freshContent){
+            const currentSignature = currentContent.dataset.progressResultSignature || '';
+            const freshSignature = freshContent.dataset.progressResultSignature || '';
+            if(currentSignature !== freshSignature) currentContent.replaceWith(freshContent);
+        }
+        const currentStatus = cell.querySelector(':scope > .smart-progress-task-status');
+        const freshStatus = freshCell.querySelector(':scope > .smart-progress-task-status');
+        if(currentStatus && freshStatus){
+            syncRunningHubProgressElement(currentStatus, freshStatus);
+            currentStatus.innerHTML = freshStatus.innerHTML;
+        }
+    });
+    return currentGrid;
+}
 function scheduleRunningHubProgressRefresh(node){
     if(!node?.id || runningHubProgressRefreshFrames.has(node.id)) return;
     const frame = requestAnimationFrame(() => {
@@ -23282,17 +23576,33 @@ function scheduleRunningHubProgressRefresh(node){
         const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
         if(!current || !nodeEl) return;
         const currentHost = nodeEl.querySelector(':scope > .rh-progress-border-host');
+        const currentGrid = nodeEl.querySelector(':scope > .node-body > .smart-progress-task-grid');
         const html = runningHubProgressBorderHtml(current);
         if(!html){
             currentHost?.remove();
+        } else {
+            const template = document.createElement('template');
+            template.innerHTML = html.trim();
+            const fresh = template.content.firstElementChild;
+            if(fresh){
+                if(currentHost) patchRunningHubProgressHost(currentHost, fresh);
+                else nodeEl.prepend(fresh);
+            }
+        }
+        const gridHtml = smartProgressTaskGridHtml(current);
+        if(!gridHtml){
+            if(currentGrid) render();
             return;
         }
-        const template = document.createElement('template');
-        template.innerHTML = html.trim();
-        const fresh = template.content.firstElementChild;
-        if(!fresh) return;
-        if(currentHost) patchRunningHubProgressHost(currentHost, fresh);
-        else nodeEl.prepend(fresh);
+        const gridTemplate = document.createElement('template');
+        gridTemplate.innerHTML = gridHtml.trim();
+        const freshGrid = gridTemplate.content.firstElementChild;
+        if(!freshGrid) return;
+        if(currentGrid) patchSmartProgressTaskGrid(currentGrid, freshGrid);
+        else {
+            nodeEl.querySelector(':scope > .node-body')?.replaceChildren(freshGrid);
+            alignSmartProgressTaskGridGeometry(freshGrid);
+        }
     });
     runningHubProgressRefreshFrames.set(node.id, frame);
 }
@@ -23300,20 +23610,13 @@ function updateRunningHubProgressTask(context, index, patch={}){
     const node = runningHubProgressNodeForContext(context);
     const slot = runningHubProgressSlot(context, index);
     if(!node || !slot) return null;
-    const measurable = Number.isFinite(Number(patch.value))
-        && Number.isFinite(Number(patch.max))
-        && Number(patch.max) > 0;
-    const shouldSegment = runningHubProgressTasks(node).length > 1
-        && (measurable || ['succeeded','finalizing','failed','cancelled','canceled'].includes(patch.status));
-    const segmentedChanged = shouldSegment && node.runningHubProgress?.segmented !== true;
     const changed = Object.entries(patch).some(([key, value]) => slot[key] !== value);
-    if(!changed && !segmentedChanged) return slot;
-    if(segmentedChanged) node.runningHubProgress.segmented = true;
+    if(!changed) return slot;
     Object.assign(slot, patch, {updatedAt:nowMs()});
     scheduleRunningHubProgressRefresh(node);
     return slot;
 }
-function finishRunningHubProgressTask(context, index, status='succeeded'){
+function finishRunningHubProgressTask(context, index, status='succeeded', error=null){
     const node = runningHubProgressNodeForContext(context);
     const slot = updateRunningHubProgressTask(context, index, {
         status,
@@ -23321,6 +23624,7 @@ function finishRunningHubProgressTask(context, index, status='succeeded'){
         max:status === 'succeeded' ? 1 : null
     });
     if(!node || !slot) return;
+    if(error) setSmartProgressTaskError(node, index, error);
     const monitor = slot.taskId ? context?.runningHubProgressMonitors?.get(slot.taskId) : null;
     if(monitor){
         monitor.closed = true;
@@ -23525,6 +23829,8 @@ function ensureVeniceProgress(context, {kind='image', total=1, estimateMs=null}=
                 nodeName:`Venice · ${kind === 'video' ? '视频' : '图片'}`,
                 value:kind === 'image' ? 0 : null,
                 max:kind === 'image' ? 1 : null,
+                resultItems:[],
+                error:'',
                 estimateMs:Number(estimateMs) > 0 ? Number(estimateMs) : null,
                 executionMs:null,
                 observedAt:0,
@@ -23619,7 +23925,7 @@ function startVeniceVideoProgressMonitor(context, progressId){
     })();
     return monitor;
 }
-function finishVeniceProgressTask(context, index=0, status='succeeded'){
+function finishVeniceProgressTask(context, index=0, status='succeeded', error=null){
     const node = runningHubProgressNodeForContext(context);
     const state = node?.veniceProgress;
     const task = state?.tasks?.[Math.max(0, Number(index) || 0)];
@@ -23627,6 +23933,7 @@ function finishVeniceProgressTask(context, index=0, status='succeeded'){
     task.status = status;
     task.value = status === 'succeeded' ? 1 : task.value;
     task.max = status === 'succeeded' ? 1 : task.max;
+    if(error) task.error = String(error?.message || error || '').trim();
     task.updatedAt = nowMs();
     scheduleRunningHubProgressRefresh(node);
     if(state.tasks.every(item => ['succeeded','failed','cancelled'].includes(item.status))){
@@ -23935,7 +24242,9 @@ async function querySmartImageTaskNow(nodeId, localTaskId){
         if(data.status === 'succeeded'){
             task.failed = false;
             task.querying = false;
-            finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(data.image_items?.length ? data.image_items : (data.images?.length ? data.images : data)), task.kind || 'image');
+            const taskIndex = smartPendingTasks(node).findIndex(item => item.taskId === task.taskId);
+            const additions = finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(data.image_items?.length ? data.image_items : (data.images?.length ? data.images : data)), task.kind || 'image');
+            if(taskIndex >= 0) setSmartProgressTaskResults(node, taskIndex, additions);
             render();
             scheduleSave();
             return;
@@ -24022,14 +24331,14 @@ async function pollSmartCanvasTask(taskId, runContext=null, veniceProgressIndex=
         if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'succeeded');
         return result;
     } catch(error) {
-        if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'failed');
+        if(veniceProgressIndex !== null) finishVeniceProgressTask(runContext, veniceProgressIndex, 'failed', error);
         throw error;
     } finally {
         activeSmartTaskPolls.delete(pollKey);
     }
 }
 function finalizeSmartPendingTask(node, taskId, images, kind='image'){
-    if(!node || !taskId) return;
+    if(!node || !taskId) return [];
     const taskMeta = smartPendingTasks(node).find(task => task.taskId === taskId) || null;
     const taskProviderId = String(taskMeta?.providerId || taskMeta?.provider_id || '');
     node.pendingTasks = smartPendingTasks(node).filter(task => task.taskId !== taskId);
@@ -24073,6 +24382,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         notifySmartTaskSuccess(kind, node.images.length);
     }
     if(isVeniceProviderId(taskProviderId)) scheduleVeniceCreditsRefresh(taskProviderId, 120);
+    return additions;
 }
 async function resumeSmartPendingNode(node, logContext={}){
     const tasks = smartPendingTasks(node);
@@ -24108,7 +24418,8 @@ async function resumeSmartPendingNode(node, logContext={}){
         if(task.failed && task.recoverTaskId) return;
         try {
             const result = await pollSmartCanvasTask(task.taskId, runContext, index);
-            finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)), task.kind || 'image');
+            const additions = finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)), task.kind || 'image');
+            setSmartProgressTaskResults(node, index, additions);
             render();
             scheduleSave();
         } catch(e) {
