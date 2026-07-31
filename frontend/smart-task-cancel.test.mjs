@@ -140,6 +140,35 @@ test('generated nodes expose a quick run button that reuses single-node generati
     assert.match(cssSource, /\.mini-x\.smart-node-run-btn\s*\{/);
 });
 
+test('every completed node-group type exposes a far-right node delete action', () => {
+    assert.match(jsSource, /const isDeletableNodeGroup = !isPending && \(isGroup \|\| isHistory \|\| isSmartGroup\);/);
+    assert.match(jsSource, /isDeletableNodeGroup[\s\S]*?class="mini-x node-delete"/);
+    assert.match(jsSource, /const floatingActions = `\$\{floatingCancelBtn\}\$\{floatingPinBtn\}\$\{floatingRunBtn\}\$\{floatingDeleteBtn\}`/);
+    assert.match(jsSource, /const floatingRunBtn = floatingPinBtn && hadStandardFloatingDelete/);
+});
+
+test('ordinary media groups reuse the smart-group summary header and reserve its height', () => {
+    assert.match(jsSource, /const MEDIA_GROUP_SUMMARY_SPACE = 28;/);
+    assert.match(jsSource, /function mediaGroupSummaryHtml\(items, expectedCount=0, expectedKind=''\)[\s\S]*?class="smart-group-summary media-group-summary"/);
+    assert.match(jsSource, /class="smart-group-card media-group-card has-thumbs"/);
+    assert.match(jsSource, /height = visibleRows \* cell - 8 \+ PAD \+ MEDIA_GROUP_SUMMARY_SPACE/);
+    assert.match(jsSource, /h:visibleRows \* cell - 8 \+ pad \+ MEDIA_GROUP_SUMMARY_SPACE/);
+    assert.match(cssSource, /\.image-node\.group-node \.node-body\s*\{[^}]*padding:0/);
+    assert.match(cssSource, /\.smart-group-card\.media-group-card \.thumb-grid\s*\{/);
+});
+
+test('multi-task generation uses the same media-group summary without resetting progress cells', () => {
+    assert.match(jsSource, /function smartProgressTaskGroupBodyHtml\(node, layout=null, progressTaskGrid=''\)/);
+    assert.match(jsSource, /class="smart-group-card media-group-card smart-progress-group-card has-thumbs"/);
+    assert.match(jsSource, /if\(progressTaskGrid\) return smartProgressTaskGroupBodyHtml\(node, layout, progressTaskGrid\);/);
+    assert.match(jsSource, /querySelector\(':scope > \.node-body \.smart-progress-task-grid'\)/);
+    assert.match(jsSource, /if\(currentGrid\)\{[\s\S]*?patchSmartProgressTaskGrid\(currentGrid, freshGrid\)/);
+    assert.match(jsSource, /class="smart-group-card media-group-card smart-pending-group-card has-thumbs"/);
+    assert.match(jsSource, /Number\(node\.pending\) > 1/);
+    assert.match(cssSource, /\.smart-progress-group-card \.smart-progress-task-grid\s*\{[^}]*flex:1 1 auto/);
+    assert.match(cssSource, /\.smart-pending-group-card \.loading-skeleton\s*\{[^}]*width:100% !important/);
+});
+
 test('re-generation archives the current batch before dispatch and never restores it on failure', () => {
     const start = jsSource.indexOf('async function runGeneration(');
     const end = jsSource.indexOf('async function runPromptLLMNode(', start);

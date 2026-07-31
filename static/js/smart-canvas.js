@@ -4080,6 +4080,9 @@ const ZOOM_PREVIEW_NODE_DEFAULT_SCALE = 1;
 const ZOOM_PREVIEW_NODE_MAX_SCALE = 1.15;
 const MEDIA_GROUP_THUMB_BASE = 224;
 const MEDIA_GROUP_MAX_VISIBLE_ROWS = 3;
+// Keep ordinary media groups aligned with smart groups: one compact summary
+// row plus its gap sits above the thumbnail grid.
+const MEDIA_GROUP_SUMMARY_SPACE = 28;
 // The thumbnail scroller uses a 4px scrollbar plus 2px trailing breathing room.
 // Reserve that width in automatic group sizing instead of shifting or clipping
 // the fixed-width thumbnail columns after overflow begins.
@@ -4258,7 +4261,7 @@ function smartGroupThumbLayout(node){
     const hasExplicit = Number.isFinite(explicitW) && explicitW >= SMART_GROUP_MIN_WIDTH
         && Number.isFinite(explicitH) && explicitH >= SMART_GROUP_MIN_HEIGHT;
     const scale = mediaNodeDefaultScale({type:'smart-image', images:items, scale:node?.scale});
-    const summarySpace = 28;
+    const summarySpace = MEDIA_GROUP_SUMMARY_SPACE;
     const outerPad = 32;
     if(count === 1){
         if(hasExplicit){
@@ -4748,20 +4751,20 @@ function imageLayout(images, scale=1, node=null){
         const rows = Math.max(1, Number(grid.rows || 1));
         const visibleRows = Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows);
         if(Number.isFinite(explicitW) && explicitW > 40 && Number.isFinite(explicitH) && explicitH > 40){
-            const fittedThumb = Math.max(28, Math.floor(Math.min((explicitW - PAD - (cols - 1) * 8) / cols, (explicitH - PAD - (visibleRows - 1) * 8) / visibleRows)));
-            return {cols, rows, visibleRows, width:Math.round(explicitW), height:visibleRows * (fittedThumb + 8) - 8 + PAD, thumb:fittedThumb};
+            const fittedThumb = Math.max(28, Math.floor(Math.min((explicitW - PAD - (cols - 1) * 8) / cols, (explicitH - PAD - MEDIA_GROUP_SUMMARY_SPACE - (visibleRows - 1) * 8) / visibleRows)));
+            return {cols, rows, visibleRows, width:Math.round(explicitW), height:visibleRows * (fittedThumb + 8) - 8 + PAD + MEDIA_GROUP_SUMMARY_SPACE, thumb:fittedThumb};
         }
-        return {cols, rows, visibleRows, width:Math.max(Math.round(226*s), cols * cell + PAD + mediaGroupScrollbarSpace(rows, visibleRows)), height:visibleRows * cell - 8 + PAD, thumb};
+        return {cols, rows, visibleRows, width:Math.max(Math.round(226*s), cols * cell + PAD + mediaGroupScrollbarSpace(rows, visibleRows)), height:visibleRows * cell - 8 + PAD + MEDIA_GROUP_SUMMARY_SPACE, thumb};
     }
     const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
     const rows = Math.ceil(count / cols);
     const visibleRows = Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows);
     if(Number.isFinite(explicitW) && explicitW > 40 && Number.isFinite(explicitH) && explicitH > 40){
-        const fitted = groupImageGridLayout(count, explicitW, explicitH, thumb, PAD, 8);
-        return {cols:fitted.cols, rows:fitted.rows, visibleRows:fitted.visibleRows, width:Math.round(explicitW), height:fitted.visibleRows * (fitted.thumb + 8) - 8 + PAD, thumb:fitted.thumb};
+        const fitted = groupImageGridLayout(count, explicitW, Math.max(41, explicitH - MEDIA_GROUP_SUMMARY_SPACE), thumb, PAD, 8);
+        return {cols:fitted.cols, rows:fitted.rows, visibleRows:fitted.visibleRows, width:Math.round(explicitW), height:fitted.visibleRows * (fitted.thumb + 8) - 8 + PAD + MEDIA_GROUP_SUMMARY_SPACE, thumb:fitted.thumb};
     }
     const width = Math.max(Math.round(226*s), cols * cell + PAD + mediaGroupScrollbarSpace(rows, visibleRows));
-    const height = visibleRows * cell - 8 + PAD;
+    const height = visibleRows * cell - 8 + PAD + MEDIA_GROUP_SUMMARY_SPACE;
     return {cols, rows, visibleRows, width, height, thumb};
 }
 function smartLoopCount(node){
@@ -12709,13 +12712,61 @@ function historicalRunningSnapshotBodyHtml(){
         </div>
     </div>`;
 }
+function mediaGroupSummaryHtml(items, expectedCount=0, expectedKind=''){
+    const counts = (items || []).reduce((acc, item) => {
+        const kind = mediaKindForItem(item);
+        acc[kind] = (acc[kind] || 0) + 1;
+        return acc;
+    }, {});
+    const normalizedExpectedKind = ['image','video','audio','text','file'].includes(expectedKind) ? expectedKind : '';
+    if(Number(expectedCount) > 0){
+        Object.keys(counts).forEach(kind => delete counts[kind]);
+        counts[normalizedExpectedKind || 'image'] = Math.max(1, Number(expectedCount) || 1);
+    }
+    const labels = {
+        image:tr('smart.kindImage'),
+        video:tr('smart.kindVideo'),
+        audio:tr('smart.kindAudio'),
+        text:tr('smart.kindText'),
+        file:tr('smart.kindFile')
+    };
+    const summary = ['image','video','audio','text','file']
+        .filter(kind => counts[kind])
+        .map(kind => `${counts[kind]} ${labels[kind]}`)
+        .join(' · ');
+    return `<div class="smart-group-summary media-group-summary"><i data-lucide="group"></i><span>${escapeHtml(summary)}</span></div>`;
+}
+function smartProgressTaskMediaKind(node){
+    const tasks = runningHubProgressTasks(node);
+    const resultItem = tasks.flatMap(smartProgressTaskResultItems).find(item => item?.url);
+    if(resultItem) return mediaKindForItem(resultItem);
+    const explicitKinds = [
+        node?.outputKind,
+        ...tasks.map(task => task?.outputKind),
+        node?.runSettings?.kind,
+        node?.runSettings?.apiKind
+    ].map(value => String(value || '').toLowerCase());
+    if(explicitKinds.some(kind => kind === 'video' || kind.includes('video'))) return 'video';
+    if(explicitKinds.some(kind => kind === 'audio' || kind.includes('audio'))) return 'audio';
+    const taskNames = tasks.map(task => String(task?.nodeName || '').toLowerCase()).join(' ');
+    if(/视频|video/.test(taskNames)) return 'video';
+    if(/音频|audio/.test(taskNames)) return 'audio';
+    return 'image';
+}
+function smartProgressTaskGroupBodyHtml(node, layout=null, progressTaskGrid=''){
+    const tasks = runningHubProgressTasks(node);
+    if(tasks.length <= 1) return '';
+    const gridHtml = progressTaskGrid || smartProgressTaskGridHtml(node, layout);
+    if(!gridHtml) return '';
+    return `<div class="smart-group-card media-group-card smart-progress-group-card has-thumbs">${mediaGroupSummaryHtml([], tasks.length, smartProgressTaskMediaKind(node))}${gridHtml}</div>`;
+}
 function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
     if(isHistoricalRunningSnapshotNode(node)) return historicalRunningSnapshotBodyHtml();
     const progressTaskGrid = smartProgressTaskGridHtml(node, layout);
-    if(progressTaskGrid) return progressTaskGrid;
+    if(progressTaskGrid) return smartProgressTaskGroupBodyHtml(node, layout, progressTaskGrid);
     const imgs = (node.images || []).map(imageForDisplay);
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
         return jimengPendingBodyHtml(node, layout);
@@ -12732,7 +12783,8 @@ function nodeBodyHtml(node, layout){
         if(count <= 1) return `<div class="loading-cell single" style="width:${layout.width}px;height:${layout.height}px"></div>`;
         const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
         const rows = Math.ceil(count / cols);
-        return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        const skeleton = `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        return `<div class="smart-group-card media-group-card smart-pending-group-card has-thumbs">${mediaGroupSummaryHtml([], count, smartProgressTaskMediaKind(node))}${skeleton}</div>`;
     }
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
         return smartTerminalRunBodyHtml(node, layout);
@@ -12744,7 +12796,8 @@ function nodeBodyHtml(node, layout){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
         const gridContent = `<div class="thumb-grid ${isRunning ? 'thumb-grid-loading' : ''}" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${smartHistoryPreviousBadgeHtml(node, i)}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
-        return isRunning ? `<div class="thumb-grid-wrapper">${gridContent}${loadingOverlay}</div>` : gridContent;
+        const groupContent = `<div class="smart-group-card media-group-card has-thumbs">${mediaGroupSummaryHtml(imgs)}${gridContent}</div>`;
+        return isRunning ? `<div class="thumb-grid-wrapper">${groupContent}${loadingOverlay}</div>` : groupContent;
     }
     if(imgs[0]) return `<div class="image-wrap ${showSingleImageName ? 'has-outside-image-name' : ''} ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''} ${isRunning ? 'image-wrap-loading' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${showSingleImageName ? imageNameBadgeHtml(imgs[0], {outside:true, node}) : ''}${smartHistoryPreviousBadgeHtml(node, 0)}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>${loadingOverlay}</div>`;
     return `<div class="empty-upload-node">
@@ -13026,7 +13079,7 @@ function render(){
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
-        const isGroup = isImageNode && (imgs.length > 1 || runningHubProgressTasks(node).length > 1);
+        const isGroup = isImageNode && (imgs.length > 1 || runningHubProgressTasks(node).length > 1 || (imgs.length === 0 && Number(node.pending) > 1));
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const isGenerating = nodeHasLiveRunState(node);
         const isRunFailed = !isGenerating && (node.runStatus === 'failed' || node.runFailed === true);
@@ -13039,12 +13092,16 @@ function render(){
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const floatingPinBtn = smartAncestorPinButtonHtml(node);
-        const floatingDeleteBtn = !isEmpty && !isGroup && !isPending
-            ? (isImageNode && imgs.length
+        const hadStandardFloatingDelete = !isEmpty && !isGroup && !isPending;
+        const isDeletableNodeGroup = !isPending && (isGroup || isHistory || isSmartGroup);
+        const floatingDeleteBtn = hadStandardFloatingDelete || isDeletableNodeGroup
+            ? (isDeletableNodeGroup
+                ? `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`
+                : isImageNode && imgs.length
                 ? `<button class="mini-x node-media-clear" type="button" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`
                 : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`)
             : '';
-        const floatingRunBtn = floatingPinBtn && floatingDeleteBtn ? smartNodeQuickRunButtonHtml(node) : '';
+        const floatingRunBtn = floatingPinBtn && hadStandardFloatingDelete ? smartNodeQuickRunButtonHtml(node) : '';
         const floatingCancelBtn = isGenerating && !isPrompt
             ? `<button class="smart-task-cancel" type="button" data-smart-task-cancel="${escapeAttr(node.id)}" title="取消任务" aria-label="取消任务"><i data-lucide="square"></i></button>`
             : '';
@@ -19227,7 +19284,7 @@ function pendingBoxSize(count, options={}){
     const pad = 32;
     return {
         w:Math.max(Math.round(226 * MEDIA_GROUP_DEFAULT_SCALE), cols * cell + pad + mediaGroupScrollbarSpace(rows, visibleRows)),
-        h:visibleRows * cell - 8 + pad
+        h:visibleRows * cell - 8 + pad + MEDIA_GROUP_SUMMARY_SPACE
     };
 }
 function animateFirstPendingNode(nodeId, fromSize){
@@ -23760,7 +23817,7 @@ function scheduleRunningHubProgressRefresh(node){
         const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
         if(!current || !nodeEl) return;
         const currentHost = nodeEl.querySelector(':scope > .rh-progress-border-host');
-        const currentGrid = nodeEl.querySelector(':scope > .node-body > .smart-progress-task-grid');
+        const currentGrid = nodeEl.querySelector(':scope > .node-body .smart-progress-task-grid');
         const html = runningHubProgressBorderHtml(current);
         if(!html){
             currentHost?.remove();
@@ -23782,10 +23839,24 @@ function scheduleRunningHubProgressRefresh(node){
         gridTemplate.innerHTML = gridHtml.trim();
         const freshGrid = gridTemplate.content.firstElementChild;
         if(!freshGrid) return;
-        if(currentGrid) patchSmartProgressTaskGrid(currentGrid, freshGrid);
+        if(currentGrid){
+            patchSmartProgressTaskGrid(currentGrid, freshGrid);
+            const currentSummary = nodeEl.querySelector(':scope > .node-body .smart-progress-group-card > .media-group-summary');
+            const summaryTemplate = document.createElement('template');
+            summaryTemplate.innerHTML = mediaGroupSummaryHtml([], runningHubProgressTasks(current).length, smartProgressTaskMediaKind(current)).trim();
+            const freshSummary = summaryTemplate.content.firstElementChild;
+            const currentSummaryText = currentSummary?.querySelector(':scope > span');
+            const freshSummaryText = freshSummary?.querySelector(':scope > span');
+            if(currentSummaryText && freshSummaryText) currentSummaryText.textContent = freshSummaryText.textContent;
+        }
         else {
-            nodeEl.querySelector(':scope > .node-body')?.replaceChildren(freshGrid);
-            alignSmartProgressTaskGridGeometry(freshGrid);
+            const groupTemplate = document.createElement('template');
+            groupTemplate.innerHTML = smartProgressTaskGroupBodyHtml(current, null, gridHtml).trim();
+            const freshGroup = groupTemplate.content.firstElementChild;
+            if(!freshGroup) return;
+            nodeEl.querySelector(':scope > .node-body')?.replaceChildren(freshGroup);
+            alignSmartProgressTaskGridGeometry(freshGroup);
+            if(window.lucide) lucide.createIcons();
         }
     });
     runningHubProgressRefreshFrames.set(node.id, frame);

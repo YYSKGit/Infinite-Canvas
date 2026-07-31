@@ -85,6 +85,7 @@
         "smart.createLoopSub": { zh: "控制一键运行轮数和批次", en: "Control run rounds and batches" },
         "smart.kindAudio": { zh: "音频", en: "Audio" },
         "smart.kindText": { zh: "文本", en: "Text" },
+        "smart.kindFile": { zh: "文件", en: "File" },
         "smart.exportNodeReady": { zh: "选择文件夹后一键导出", en: "Choose a folder to export" },
         "smart.exportNodeEmpty": { zh: "连接节点后收集图片、视频、音频和文本", en: "Connect nodes to collect images, video, audio, and text" },
         "smart.exportChooseFolder": { zh: "选择文件夹并导出", en: "Choose Folder & Export" },
