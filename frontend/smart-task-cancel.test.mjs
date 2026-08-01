@@ -414,7 +414,7 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.match(cssSource, /\.smart-progress-task-breathe\.is-layer-hidden\s*\{[^}]*stroke-opacity:0;/);
     assert.match(cssSource, /\.smart-progress-task-placeholder-dot::before\s*\{[\s\S]*?background:radial-gradient/);
     assert.match(cssSource, /transition:opacity \.36s cubic-bezier\(\.22,1,\.36,1\),filter \.36s ease/);
-    assert.match(cssSource, /\.smart-progress-task-content\s*\{[^}]*inset:0;/);
+    assert.match(cssSource, /\.smart-progress-task-content\s*\{[^}]*inset:1px;/);
     assert.match(cssSource, /animation-delay:var\(--smart-task-pulse-delay,\s*0ms\)/);
     assert.doesNotMatch(cssSource, /\.smart-progress-task-rail/);
     assert.match(cssSource, /animation-delay:var\(--rh-progress-delay,\s*0ms\)/);
