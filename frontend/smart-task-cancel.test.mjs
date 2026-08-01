@@ -14,7 +14,9 @@ function extractFunction(name){
     const starts = markers.map(marker => jsSource.indexOf(marker)).filter(index => index >= 0);
     assert.ok(starts.length, `missing production function ${name}`);
     const start = Math.min(...starts);
-    const bodyStart = jsSource.indexOf('{', start);
+    const bodyMarker = /\)\s*\{/.exec(jsSource.slice(start));
+    assert.ok(bodyMarker, `missing production function body ${name}`);
+    const bodyStart = start + bodyMarker.index + bodyMarker[0].lastIndexOf('{');
     let depth = 0;
     let quote = '';
     let escaped = false;
@@ -252,6 +254,77 @@ test('archived media share a stable batch id and stay ahead of older history', (
     assert.equal(sandbox.history.images[1].historyBatchId, 'history_batch_new');
     assert.equal(sandbox.history.images[0].historyBatchStatus, 'partial');
     assert.equal(sandbox.history.images[0].historyBatchExpectedCount, 3);
+});
+
+test('media node layout normalization resets stale single and group geometry', () => {
+    const sandbox = vm.createContext({
+        MEDIA_NODE_DEFAULT_SCALE:2,
+        MEDIA_GROUP_DEFAULT_SCALE:0.8
+    });
+    vm.runInContext(`
+        ${extractFunction('normalizeSmartMediaNodeLayout')}
+        globalThis.formerGroup = normalizeSmartMediaNodeLayout({
+            images:[{url:'/single.png'}], scale:0.8, w:208, h:139
+        });
+        globalThis.formerSingle = normalizeSmartMediaNodeLayout({
+            images:[{url:'/one.png'}, {url:'/two.png'}], scale:2, w:520, h:340
+        });
+        globalThis.empty = normalizeSmartMediaNodeLayout({images:[], scale:0.8, w:208, h:139});
+    `, sandbox);
+    assert.equal(sandbox.formerGroup.scale, 2);
+    assert.equal(sandbox.formerSingle.scale, 0.8);
+    assert.equal(sandbox.empty.scale, 2);
+    for(const node of [sandbox.formerGroup, sandbox.formerSingle, sandbox.empty]){
+        assert.equal('w' in node, false);
+        assert.equal('h' in node, false);
+    }
+});
+
+test('loop-style appended outputs normalize as their final count changes', () => {
+    const sandbox = vm.createContext({
+        MEDIA_NODE_DEFAULT_SCALE:2,
+        MEDIA_GROUP_DEFAULT_SCALE:0.8,
+        smartLoopContext:null,
+        selectedImage:{nodeId:'', index:-1},
+        liveSmartNode:node => node,
+        nodeRect:node => ({width:Number(node.w) || 208}),
+        cleanHistoryImages:items => items.map(item => ({...item})),
+        embedGenPromptIntoImages:items => items,
+        markSmartNodeComplete:() => {},
+        pushRightSideNodes:() => {}
+    });
+    vm.runInContext(`
+        ${extractFunction('normalizeSmartMediaNodeLayout')}
+        ${extractFunction('appendOutputsToNode')}
+        const node = {id:'output', x:0, images:[], scale:0.8, w:208, h:139};
+        appendOutputsToNode(node, [{url:'/one.png'}]);
+        globalThis.afterOne = {...node};
+        appendOutputsToNode(node, [{url:'/two.png'}]);
+        globalThis.afterTwo = {...node};
+    `, sandbox);
+    assert.equal(sandbox.afterOne.scale, 2);
+    assert.equal(sandbox.afterOne.images.length, 1);
+    assert.equal(sandbox.afterTwo.scale, 0.8);
+    assert.equal(sandbox.afterTwo.images.length, 2);
+    assert.equal(sandbox.afterTwo.title, 'Group');
+});
+
+test('every media-count mutation path uses the shared layout normalizer', () => {
+    [
+        'appendImagesToSmartNode',
+        'finishLoopTargetPreviewState',
+        'showDirectLoopRoundPreview',
+        'replaceOutputsToNodeWithHistory',
+        'appendOutputsToNode',
+        'finalizeSmartPendingTask',
+        'mergeImageNodesIntoGroup'
+    ].forEach(name => {
+        assert.match(extractFunction(name), /normalizeSmartMediaNodeLayout\(/, `${name} must normalize layout`);
+    });
+    assert.match(extractFunction('deleteImage'), /if\(isSmartImageNode\(node\)\) normalizeSmartMediaNodeLayout\(node\)/);
+    assert.match(extractFunction('recoverStuckLoopOutputsFromLogs'), /normalizeSmartMediaNodeLayout\(slot\)/);
+    const runGeneration = extractFunction('runGeneration');
+    assert.match(runGeneration, /normalizeSmartMediaNodeLayout\(pendingNode\)/);
 });
 
 test('failed and cancelled empty slots expose an in-node retry using the saved request snapshot', () => {

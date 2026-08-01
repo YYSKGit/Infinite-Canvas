@@ -4080,6 +4080,16 @@ const ZOOM_PREVIEW_NODE_DEFAULT_SCALE = 1;
 const ZOOM_PREVIEW_NODE_MAX_SCALE = 1.15;
 const MEDIA_GROUP_THUMB_BASE = 224;
 const MEDIA_GROUP_MAX_VISIBLE_ROWS = 3;
+function normalizeSmartMediaNodeLayout(node, itemCount=null){
+    if(!node) return node;
+    const count = itemCount !== null && itemCount !== undefined && Number.isFinite(Number(itemCount))
+        ? Math.max(0, Number(itemCount))
+        : (node.images || []).filter(item => item?.url).length;
+    node.scale = count > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
+    delete node.w;
+    delete node.h;
+    return node;
+}
 // Keep ordinary media groups aligned with smart groups: one compact summary
 // row plus its gap sits above the thumbnail grid.
 const MEDIA_GROUP_SUMMARY_SPACE = 28;
@@ -9466,9 +9476,7 @@ function recoverStuckLoopOutputsFromLogs(){
         markSmartNodeComplete(slot);
         if(kind) slot.outputKind = kind;
         slot.title = slot.title || 'Image';
-        slot.scale = mediaNodeDefaultScale(slot);
-        delete slot.w;
-        delete slot.h;
+        normalizeSmartMediaNodeLayout(slot);
         used.add(output.url);
         changed = true;
         clearSourceBusyStateIfDownstreamDone(nodes.find(n => n.id === sourceId));
@@ -10671,7 +10679,7 @@ function createNode(x, y, images=[], options={}){
     if(!options.skipUndo) pushUndo();
     const nodeImages = (images || []).map(img => ({...img}));
     const node = {id:uid('smart'), type:'smart-image', x, y, title:nodeImages.length > 1 ? 'Group' : nodeImages.length ? 'Image' : tr('smart.createImportNode'), images:nodeImages, created_at:Date.now()};
-    node.scale = nodeImages.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : mediaNodeDefaultScale(node);
+    normalizeSmartMediaNodeLayout(node, nodeImages.length);
     inheritNodeMetaFromImage(node);
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
@@ -14726,6 +14734,7 @@ function deleteImage(id, imageIndex){
             delete node.h;
             inheritNodeMetaFromImage(node);
         }
+        if(isSmartImageNode(node)) normalizeSmartMediaNodeLayout(node);
     }
     if(selectedImage.nodeId === id) selectedImage = {nodeId:id, index:Math.min(selectedImage.index, node.images.length - 1)};
     if(selectedImage.index < 0) selectedImage = {nodeId:'', index:-1};
@@ -19136,13 +19145,9 @@ function appendImagesToSmartNode(uploaded, targetId='', opts={}){
     }
     if(node.images.length > 1){
         node.title = uploadTitleForItems(node.images, 'Group');
-        if(previousCount <= 1 && (!Number.isFinite(Number(node.scale)) || Number(node.scale) === MEDIA_NODE_DEFAULT_SCALE || Number(node.scale) === MEDIA_GROUP_PREVIOUS_DEFAULT_SCALE)){
-            node.scale = MEDIA_GROUP_DEFAULT_SCALE;
-        }
-        delete node.w;
-        delete node.h;
     }
-    if(node.images.length === 1){ node.title = uploadTitleForItems(node.images, node.title || 'Image'); delete node.w; delete node.h; }
+    if(node.images.length === 1) node.title = uploadTitleForItems(node.images, node.title || 'Image');
+    normalizeSmartMediaNodeLayout(node);
     if(targetGroup) addNodeToSmartGroup(targetGroup, node);
     selectedId = node.id;
     render();
@@ -20839,10 +20844,8 @@ function finishLoopTargetPreviewState(node){
     markSmartNodeComplete(node);
     if((node.images || []).some(img => img?.url)){
         node.title = node.images.length > 1 ? 'Group' : 'Image';
-        node.scale = node.images.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
+        normalizeSmartMediaNodeLayout(node);
         node.outputKind = mediaKindForUrls(node.images || [], (node.images || []).some(isVideoMediaItem) ? 'video' : 'image');
-        delete node.w;
-        delete node.h;
     }
 }
 function refsForDirectLoopRound(loopNode, loopIndex, total){
@@ -20879,10 +20882,8 @@ function showDirectLoopRoundPreview(loopNode, target, refs, loopIndex, total){
     target.runTimerHidden = false;
     target.runInputRefs = cleanRefs.map(savedSmartRunInputRef).filter(ref => ref.url);
     target.outputKind = mediaKindForUrls(preview, preview.some(isVideoMediaItem) ? 'video' : 'image');
-    target.scale = preview.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
+    normalizeSmartMediaNodeLayout(target, preview.length);
     target.title = total > 1 ? `Image ${loopIndex}/${total}` : (target.title || 'Image');
-    delete target.w;
-    delete target.h;
     render();
     return true;
 }
@@ -21472,9 +21473,7 @@ function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=nul
     markSmartNodeComplete(node, meta);
     node.outputKind = kind;
     node.title = cascadeOutputTitle(kind, node.images.length);
-    node.scale = node.images.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : MEDIA_NODE_DEFAULT_SCALE;
-    delete node.w;
-    delete node.h;
+    normalizeSmartMediaNodeLayout(node);
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
     const skipShift = options.skipShift || Boolean(smartLoopContext?.nodeId);
     if(!skipShift) pushRightSideNodes(node, afterRight - beforeRight + 36);
@@ -21500,8 +21499,7 @@ function appendOutputsToNode(node, additions, kind='image', options={}){
     markSmartNodeComplete(node);
     node.outputKind = kind;
     node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : kind === 'file' ? 'File' : 'Image');
-    delete node.w;
-    delete node.h;
+    normalizeSmartMediaNodeLayout(node);
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
     const skipShift = options.skipShift || Boolean(smartLoopContext?.nodeId);
     if(!skipShift) pushRightSideNodes(node, afterRight - beforeRight + 36);
@@ -22667,9 +22665,7 @@ async function runGeneration(event=null, options={}){
             if(pendingNode.pending > 0) pendingNode.pending = 0;
             markSmartNodeComplete(pendingNode, pendingMeta);
             pendingNode.title = pendingNode.images.length > 1 ? 'Group' : 'Image';
-            pendingNode.scale = pendingNode.images.length > 1 ? MEDIA_GROUP_DEFAULT_SCALE : mediaNodeDefaultScale(pendingNode);
-            delete pendingNode.w;
-            delete pendingNode.h;
+            normalizeSmartMediaNodeLayout(pendingNode);
             render();
             if(failures.length){
                 const message = failures[0]?.error?.message || tr('smart.errRunFailed');
@@ -24698,10 +24694,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         node.runTimerHidden = false;
         node.running = false;
         node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : 'Image');
-        if(node.images.length > 1 && (!Number.isFinite(Number(node.scale)) || Number(node.scale) === MEDIA_NODE_DEFAULT_SCALE || Number(node.scale) === MEDIA_GROUP_PREVIOUS_DEFAULT_SCALE)) node.scale = MEDIA_GROUP_DEFAULT_SCALE;
-        else node.scale = mediaNodeDefaultScale(node);
-        delete node.w;
-        delete node.h;
+        normalizeSmartMediaNodeLayout(node);
         notifySmartTaskSuccess(kind, node.images.length);
     }
     if(isVeniceProviderId(taskProviderId)) scheduleVeniceCreditsRefresh(taskProviderId, 120);
@@ -25000,9 +24993,7 @@ function mergeImageNodesIntoGroup(sourceId, targetId){
     const sourceImages = (source.images || []).map(img => stripImageGenerationMeta({...img}));
     target.images = [...(target.images || []).map(img => stripImageGenerationMeta(img)), ...sourceImages];
     target.title = 'Group';
-    if(!Number.isFinite(Number(target.scale)) || Number(target.scale) === MEDIA_NODE_DEFAULT_SCALE) target.scale = MEDIA_GROUP_DEFAULT_SCALE;
-    delete target.w;
-    delete target.h;
+    normalizeSmartMediaNodeLayout(target);
     canvas.connections = (canvas.connections || []).map(c => {
         if(c.from === source.id) return {...c, from:target.id};
         if(c.to === source.id) return {...c, to:target.id};
