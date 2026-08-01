@@ -145,6 +145,9 @@ test('every completed node-group type exposes a far-right node delete action', (
     assert.match(jsSource, /isDeletableNodeGroup[\s\S]*?class="mini-x node-delete"/);
     assert.match(jsSource, /const floatingActions = `\$\{floatingCancelBtn\}\$\{floatingPinBtn\}\$\{floatingRunBtn\}\$\{floatingDeleteBtn\}`/);
     assert.match(jsSource, /const floatingRunBtn = floatingPinBtn && hadStandardFloatingDelete/);
+    const buttonDelete = extractFunction('deleteNodeFromButton');
+    assert.match(buttonDelete, /deleteNode\(id\);/);
+    assert.doesNotMatch(buttonDelete, /clearNodeMediaBeforeDelete/);
 });
 
 test('ordinary media groups reuse the smart-group summary header and reserve its height', () => {

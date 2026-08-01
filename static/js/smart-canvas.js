@@ -14595,7 +14595,6 @@ function clearNodeMediaBeforeDelete(id){
     return true;
 }
 function deleteNodeFromButton(id){
-    if(clearNodeMediaBeforeDelete(id)) return;
     deleteNode(id);
 }
 function disconnectConnection(index){
