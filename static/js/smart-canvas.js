@@ -12706,11 +12706,11 @@ function smartGenerationBackdropItems(node){
     const batchId = String(node?.runBackdropBatchId || '');
     if(batchId){
         const history = historyGroupForNode(node);
-        const historyImages = (history?.images || []).filter(item => {
+        const historyMedia = (history?.images || []).filter(item => {
             if(String(item?.historyBatchId || '') !== batchId || !item?.url) return false;
-            return mediaKindForItem(item) === 'image';
+            return ['image','video'].includes(mediaKindForItem(item));
         });
-        if(historyImages.length) return historyImages;
+        if(historyMedia.length) return historyMedia;
     }
     const refs = Array.isArray(node?.runBackdropInputRefs)
         ? node.runBackdropInputRefs

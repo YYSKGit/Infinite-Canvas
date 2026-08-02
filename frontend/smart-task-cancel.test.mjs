@@ -669,10 +669,12 @@ test('RunningHub in-place progress patches preserve a live breathing phase', () 
     assert.equal(sandbox.queuedMode, 'indeterminate');
 });
 
-test('generation surfaces prioritize archived images, then input images, then input video first frames', () => {
+test('generation surfaces prioritize all archived visual media, then input images, then input video first frames', () => {
     const history = {images:[
         {url:'https://remote.example/a.png',localUrl:'/a.png',kind:'image',historyBatchId:'batch-new'},
         {url:'/b.png',kind:'image',historyBatchId:'batch-new'},
+        {url:'/mixed.mp4',kind:'video',historyBatchId:'batch-new'},
+        {url:'/previous.mp4',kind:'video',historyBatchId:'batch-video'},
         {url:'/older.png',kind:'image',historyBatchId:'batch-old'},
         {url:'/sound.mp3',kind:'audio',historyBatchId:'batch-new'}
     ]};
@@ -698,6 +700,9 @@ test('generation surfaces prioritize archived images, then input images, then in
         globalThis.slot0 = smartGenerationSurfaceHtml(node, 0, {items});
         globalThis.slot1 = smartGenerationSurfaceHtml(node, 1, {items});
         globalThis.slot2 = smartGenerationSurfaceHtml(node, 2, {items});
+        const historyVideoNode = {runBackdropBatchId:'batch-video',runBackdropInputRefs:[{url:'/input.png',kind:'image'}],runStartedAt:1000};
+        globalThis.historyVideoItems = smartGenerationBackdropItems(historyVideoNode);
+        globalThis.historyVideoSurface = smartGenerationSurfaceHtml(historyVideoNode, 0, {items:historyVideoItems});
         const inputNode = {runBackdropInputRefs:[
             {url:'/clip.mp4',kind:'video'},
             {url:'/input-a.png',kind:'image'},
@@ -713,11 +718,14 @@ test('generation surfaces prioritize archived images, then input images, then in
         globalThis.audioSurface = smartGenerationSurfaceHtml(audioNode, 0, {items:smartGenerationBackdropItems(audioNode)});
         globalThis.empty = smartGenerationSurfaceHtml({runStartedAt:1000}, 0);
     `, sandbox);
-    assert.deepEqual(Array.from(sandbox.items, item => item.url), ['https://remote.example/a.png','/b.png']);
+    assert.deepEqual(Array.from(sandbox.items, item => item.url), ['https://remote.example/a.png','/b.png','/mixed.mp4']);
     assert.match(sandbox.slot0, /has-history[\s\S]*src="\/preview\/a\.png"/);
     assert.match(sandbox.slot1, /has-history[\s\S]*src="\/preview\/b\.png"/);
-    assert.match(sandbox.slot2, /has-history[\s\S]*src="\/preview\/a\.png"/);
+    assert.match(sandbox.slot2, /has-history[\s\S]*src="\/api\/media-preview\?w=512&url=\/mixed\.mp4&frame=first"/);
     assert.doesNotMatch(sandbox.slot0, /smart-generation-animation-video/);
+    assert.deepEqual(Array.from(sandbox.historyVideoItems, item => item.url), ['/previous.mp4']);
+    assert.match(sandbox.historyVideoSurface, /data-generation-batch="batch-video"[\s\S]*src="\/api\/media-preview\?w=512&url=\/previous\.mp4&frame=first"/);
+    assert.doesNotMatch(sandbox.historyVideoSurface, /input\.png|smart-generation-animation-video|is-ambient/);
     assert.deepEqual(Array.from(sandbox.inputItems, item => item.url), ['/input-a.png','/input-b.png']);
     assert.match(sandbox.inputSlot2, /data-generation-batch="input:\/input-a\.png"[\s\S]*src="\/preview\/input-a\.png"/);
     assert.deepEqual(Array.from(sandbox.videoItems, item => item.url), ['/clip.mp4']);
