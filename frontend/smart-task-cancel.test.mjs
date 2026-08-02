@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -8,6 +9,8 @@ const jsSource = readFileSync(fileURLToPath(new URL('../static/js/smart-canvas.j
 const cssSource = readFileSync(fileURLToPath(new URL('../static/css/smart-canvas.css', import.meta.url)), 'utf8');
 const i18nSource = readFileSync(fileURLToPath(new URL('../static/js/i18n/smart-canvas.js', import.meta.url)), 'utf8');
 const backendSource = readFileSync(fileURLToPath(new URL('../main.py', import.meta.url)), 'utf8');
+const generationAnimationVideo = readFileSync(fileURLToPath(new URL('../static/media/load-bg-animation.mp4', import.meta.url)));
+const generationAnimationPoster = readFileSync(fileURLToPath(new URL('../static/media/load-bg-animation-poster.webp', import.meta.url)));
 
 function extractFunction(name){
     const markers = [`function ${name}(`, `async function ${name}(`];
@@ -472,7 +475,10 @@ test('RunningHub realtime progress is proxied and signed upstream URLs stay serv
     assert.match(jsSource, /\/api\/runninghub\/query\?taskId=.*?useWallet=/);
 });
 
-test('single-task and multi-task progress share the same breathing border and generation surface language', () => {
+test('single-task and multi-task progress share the same border while empty surfaces use the local MP4', () => {
+    assert.equal(generationAnimationVideo.length, 5047293);
+    assert.equal(createHash('sha256').update(generationAnimationVideo).digest('hex'), '1b1d121016d781c3098992db5d50c33a1f5b7b5f51cbaddf5cad02350c0fa8a9');
+    assert.ok(generationAnimationPoster.length > 0);
     assert.match(jsSource, /\$\{runningHubProgressBorderHtml\(node,\s*layout\)\}/);
     assert.match(cssSource, /\.rh-progress-border-host\s*\{[^}]*position:absolute;[^}]*pointer-events:none;/);
     assert.match(cssSource, /\.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
@@ -482,28 +488,30 @@ test('single-task and multi-task progress share the same breathing border and ge
     assert.match(cssSource, /\.smart-progress-task-breathe\s*\{/);
     assert.match(cssSource, /\.smart-progress-task-value\s*\{/);
     assert.match(cssSource, /@keyframes smart-task-border-breathe/);
-    assert.match(cssSource, /@keyframes smart-generation-field-a/);
-    assert.match(cssSource, /@keyframes smart-generation-field-b/);
+    assert.doesNotMatch(cssSource, /@keyframes smart-generation-field-/);
+    assert.doesNotMatch(jsSource, /smart-generation-field/);
     assert.doesNotMatch(cssSource, /smart-progress-task-placeholder-dot|smart-task-halo-breathe/);
     assert.match(cssSource, /animation:smart-task-border-breathe 1\.8s ease-in-out infinite/);
-    assert.match(cssSource, /animation:smart-generation-field-a 10s cubic-bezier/);
-    assert.match(cssSource, /animation:smart-generation-field-b 10s cubic-bezier/);
     assert.match(cssSource, /\.smart-progress-task-breathe\.is-layer-hidden\s*\{[^}]*stroke-opacity:0;/);
-    assert.match(cssSource, /\.smart-generation-surface::before,[\s\S]*?will-change:transform,opacity;/);
+    assert.match(cssSource, /\.smart-generation-surface\.is-ambient\s*\{[^}]*load-bg-animation-poster\.webp/);
+    assert.match(cssSource, /\.smart-generation-animation-video\s*\{[\s\S]*?object-fit:cover;[\s\S]*?opacity:0;/);
+    assert.match(cssSource, /\.smart-progress-task-content video\.smart-generation-animation-video \{ object-fit:cover; \}/);
+    assert.match(cssSource, /\.smart-progress-task-content video \{ width:100%; height:100%; object-fit:contain; \}/);
+    assert.match(cssSource, /\.smart-generation-surface\.is-video-ready \.smart-generation-animation-video \{ opacity:1; \}/);
     assert.match(cssSource, /\.smart-generation-backdrop\s*\{[\s\S]*?object-fit:cover;[\s\S]*?filter:blur\(18px\)/);
     assert.match(cssSource, /\.smart-generation-surface\.is-backdrop-ready \.smart-generation-backdrop/);
-    assert.match(cssSource, /\.smart-generation-surface\.has-history::before,[\s\S]*?\.smart-generation-surface\.has-history::after\s*\{[^}]*opacity:0;[^}]*animation:none;/);
-    assert.match(cssSource, /Generation feedback is functional status/);
-    assert.match(cssSource, /@keyframes smart-generation-field-a\s*\{[\s\S]*?38%[^}]*opacity:\.96;[\s\S]*?68%[^}]*opacity:\.56;[\s\S]*?82%[^}]*opacity:\.12;/);
-    assert.match(cssSource, /@keyframes smart-generation-field-b\s*\{[\s\S]*?38%[^}]*opacity:\.08;[\s\S]*?68%[^}]*opacity:\.22;[\s\S]*?82%[^}]*opacity:\.66;/);
-    assert.match(cssSource, /\.smart-generation-contrast-veil\s*\{[\s\S]*?rgba\(15,23,42,\.22\)/);
+    assert.match(cssSource, /\.smart-generation-contrast-veil\s*\{[\s\S]*?rgba\(15,23,42,\.24\)[\s\S]*?rgba\(15,23,42,\.12\)/);
     assert.match(cssSource, /\.smart-generation-surface\.is-ambient \.smart-generation-contrast-veil \{ opacity:1; \}/);
     assert.match(jsSource, /smart-generation-contrast-veil/);
-    assert.match(cssSource, /\.smart-generation-surface::before \{ animation:smart-generation-field-a 12s ease-in-out infinite !important; \}/);
-    assert.match(cssSource, /\.smart-generation-surface\.has-history::before,[\s\S]*?animation:none !important; opacity:0 !important;/);
+    assert.match(jsSource, /SMART_GENERATION_ANIMATION_VIDEO_URL = '\/static\/media\/load-bg-animation\.mp4'/);
+    assert.match(jsSource, /<video class="smart-generation-animation-video"[^`]*autoplay[^`]*loop muted playsinline/);
+    assert.match(jsSource, /function bindSmartGenerationAnimationVideos\(root=document\)/);
+    assert.match(jsSource, /function syncSmartGenerationAnimationVideo\(video\)/);
+    assert.match(jsSource, /document\.visibilityState === 'visible'/);
+    assert.match(jsSource, /smartGenerationReducedMotionQuery\?\.matches/);
+    assert.doesNotMatch(jsSource, /smart-generation-document-hidden/);
     assert.match(jsSource, /function smartGenerationBackdropPreviewUrl\(item, size=512\)/);
     assert.match(jsSource, /previewSize:768/);
-    assert.match(cssSource, /\.smart-generation-surface\.is-render-paused::before,[\s\S]*?animation-play-state:paused/);
     assert.match(cssSource, /\.smart-progress-task-content\s*\{[^}]*inset:1px;/);
     assert.match(cssSource, /animation-delay:var\(--smart-task-pulse-delay,\s*0ms\)/);
     assert.doesNotMatch(cssSource, /\.smart-progress-task-rail/);
@@ -512,10 +520,11 @@ test('single-task and multi-task progress share the same breathing border and ge
     assert.match(jsSource, /loading-cell single smart-generation-loading-cell[^`]*smartGenerationSurfaceHtml/);
     assert.match(jsSource, /function smartGenerationBackdropItems\(node\)/);
     assert.match(jsSource, /item = items\.length \? items\[index % items\.length\] : null/);
-    assert.equal((jsSource.match(/phaseElapsed % 10000/g) || []).length >= 2, true);
+    assert.doesNotMatch(extractFunction('smartGenerationSurfaceHtml'), /phaseElapsed|loopElapsed|--smart-generation-delay-/);
     assert.match(jsSource, /pendingNode\.runBackdropBatchId = backdropBatchId/);
     assert.match(jsSource, /function bindSmartGenerationBackdropReadiness\(root=document\)/);
     assert.match(jsSource, /bindSmartGenerationBackdropReadiness\(world\)/);
+    assert.match(jsSource, /bindSmartGenerationAnimationVideos\(world\)/);
     assert.match(jsSource, /\{root:null, rootMargin:'160px', threshold:\.01\}/);
     assert.match(cssSource, /stroke-dasharray \.38s cubic-bezier/);
     assert.match(cssSource, /\.rh-progress-stroke\.is-layer-hidden\s*\{[^}]*opacity:0\s*!important;/);
@@ -530,8 +539,9 @@ test('single-task and multi-task progress share the same breathing border and ge
     assert.match(jsSource, /syncRunningHubProgressElement\(cell,\s*freshCell,\s*preserveSurfacePhase \? \['style'\] : \[\]\)/);
     assert.match(jsSource, /syncRunningHubProgressElement\(currentSurface, freshSurface, \['style','data-backdrop-ready-bound'\]\)/);
     assert.match(jsSource, /data-generation-batch=/);
-    assert.match(jsSource, /hasDecodedGenerationBackdrop/);
+    assert.match(jsSource, /hasReusableGenerationSurface/);
     assert.match(jsSource, /freshGenerationSurfaces = new Map/);
+    assert.match(jsSource, /querySelectorAll\?\.\('\.smart-generation-surface\[data-generation-batch\]'\)/);
     assert.match(cssSource, /\.smart-progress-task-value\.is-complete\s*\{[^}]*stroke-linecap:butt;/);
     assert.match(jsSource, /const nodeId = String\(data\.node \?\? ''\)\.trim\(\);\s*if\(!nodeId\) return;/);
 
@@ -544,7 +554,9 @@ test('single-task and multi-task progress share the same breathing border and ge
         imageForDisplay:item => item,
         thumbMediaHtml:item => `<img src="${item?.url || ''}">`,
         historyGroupForNode:() => null,
-        smartMediaPreviewUrl:() => ''
+        smartMediaPreviewUrl:() => '',
+        SMART_GENERATION_ANIMATION_VIDEO_URL:'/static/media/load-bg-animation.mp4',
+        SMART_GENERATION_ANIMATION_POSTER_URL:'/static/media/load-bg-animation-poster.webp'
     });
     vm.runInContext(`
         ${extractFunction('smartNodeProgressState')}
@@ -657,7 +669,7 @@ test('RunningHub in-place progress patches preserve a live breathing phase', () 
     assert.equal(sandbox.queuedMode, 'indeterminate');
 });
 
-test('regeneration surfaces reuse only the archived run batch and repeat it by slot', () => {
+test('generation surfaces prioritize archived images, then input images, then input video first frames', () => {
     const history = {images:[
         {url:'https://remote.example/a.png',localUrl:'/a.png',kind:'image',historyBatchId:'batch-new'},
         {url:'/b.png',kind:'image',historyBatchId:'batch-new'},
@@ -670,33 +682,115 @@ test('regeneration surfaces reuse only the archived run batch and repeat it by s
         mediaKindForItem:item => item?.kind || 'image',
         imageForDisplay:item => item?.localUrl ? {...item,url:item.localUrl} : item,
         historyGroupForNode:() => history,
-        smartMediaPreviewUrl:item => `/preview/${String(item?.url || '').split('/').pop()}`,
-        smartOriginalMediaUrl:item => item?.url || ''
+        smartMediaPreviewUrl:item => item?.kind === 'video'
+            ? `/api/media-preview?w=512&url=${String(item?.url || '')}`
+            : `/preview/${String(item?.url || '').split('/').pop()}`,
+        smartOriginalMediaUrl:item => item?.url || '',
+        SMART_GENERATION_ANIMATION_VIDEO_URL:'/static/media/load-bg-animation.mp4',
+        SMART_GENERATION_ANIMATION_POSTER_URL:'/static/media/load-bg-animation-poster.webp'
     });
     vm.runInContext(`
         ${extractFunction('smartGenerationBackdropItems')}
         ${extractFunction('smartGenerationBackdropPreviewUrl')}
         ${extractFunction('smartGenerationSurfaceHtml')}
-        const node = {runBackdropBatchId:'batch-new',runStartedAt:1000};
+        const node = {runBackdropBatchId:'batch-new',runBackdropInputRefs:[{url:'/input.png',kind:'image'}],runStartedAt:1000};
         globalThis.items = smartGenerationBackdropItems(node);
         globalThis.slot0 = smartGenerationSurfaceHtml(node, 0, {items});
         globalThis.slot1 = smartGenerationSurfaceHtml(node, 1, {items});
         globalThis.slot2 = smartGenerationSurfaceHtml(node, 2, {items});
+        const inputNode = {runBackdropInputRefs:[
+            {url:'/clip.mp4',kind:'video'},
+            {url:'/input-a.png',kind:'image'},
+            {url:'/input-b.png',kind:'image'},
+            {url:'/sound.mp3',kind:'audio'}
+        ],runStartedAt:1000};
+        globalThis.inputItems = smartGenerationBackdropItems(inputNode);
+        globalThis.inputSlot2 = smartGenerationSurfaceHtml(inputNode, 2, {items:inputItems});
+        const videoNode = {runBackdropInputRefs:[{url:'/clip.mp4',kind:'video'}],runStartedAt:1000};
+        globalThis.videoItems = smartGenerationBackdropItems(videoNode);
+        globalThis.videoSurface = smartGenerationSurfaceHtml(videoNode, 0, {items:videoItems});
+        const audioNode = {runBackdropInputRefs:[{url:'/sound.mp3',kind:'audio'}],runStartedAt:1000};
+        globalThis.audioSurface = smartGenerationSurfaceHtml(audioNode, 0, {items:smartGenerationBackdropItems(audioNode)});
         globalThis.empty = smartGenerationSurfaceHtml({runStartedAt:1000}, 0);
     `, sandbox);
     assert.deepEqual(Array.from(sandbox.items, item => item.url), ['https://remote.example/a.png','/b.png']);
     assert.match(sandbox.slot0, /has-history[\s\S]*src="\/preview\/a\.png"/);
     assert.match(sandbox.slot1, /has-history[\s\S]*src="\/preview\/b\.png"/);
     assert.match(sandbox.slot2, /has-history[\s\S]*src="\/preview\/a\.png"/);
+    assert.doesNotMatch(sandbox.slot0, /smart-generation-animation-video/);
+    assert.deepEqual(Array.from(sandbox.inputItems, item => item.url), ['/input-a.png','/input-b.png']);
+    assert.match(sandbox.inputSlot2, /data-generation-batch="input:\/input-a\.png"[\s\S]*src="\/preview\/input-a\.png"/);
+    assert.deepEqual(Array.from(sandbox.videoItems, item => item.url), ['/clip.mp4']);
+    assert.match(sandbox.videoSurface, /src="\/api\/media-preview\?w=512&url=\/clip\.mp4&frame=first"/);
+    assert.doesNotMatch(sandbox.videoSurface, /is-ambient/);
+    assert.doesNotMatch(sandbox.videoSurface, /smart-generation-animation-video/);
+    assert.match(backendSource, /exact_first_frame = is_video[\s\S]*?frame[\s\S]*?== "first"/);
+    assert.match(backendSource, /cache_variant = "video-first-frame-v2" if exact_first_frame else "default"/);
+    assert.match(backendSource, /generate_video_preview_image\(path, width, 0\.0 if exact_first_frame else 0\.5\)/);
+    assert.match(sandbox.audioSurface, /smart-generation-surface is-ambient/);
+    assert.doesNotMatch(sandbox.audioSurface, /smart-generation-backdrop/);
+    assert.match(sandbox.audioSurface, /data-generation-batch="ambient-video"[\s\S]*smart-generation-animation-video[\s\S]*load-bg-animation\.mp4/);
     assert.match(sandbox.empty, /smart-generation-surface is-ambient/);
     assert.doesNotMatch(sandbox.empty, /smart-generation-backdrop/);
+    assert.match(sandbox.empty, /autoplay loop muted playsinline preload="auto"/);
     assert.match(jsSource, /const backdropBatchId = uid\('history_batch'\);[\s\S]*?batchId:backdropBatchId[\s\S]*?pendingNode\.runBackdropBatchId = backdropBatchId/);
-    assert.match(jsSource, /function clearSmartNodeBusyState\(node\)[\s\S]*?delete node\.runBackdropBatchId;/);
-    assert.match(jsSource, /function markSmartNodeRunFailed\(node, options=\{\}\)[\s\S]*?delete node\.runBackdropBatchId;/);
+    assert.match(jsSource, /const backdropInputRefs = \(refs \|\| \[\]\)[\s\S]*?pendingNode\.runBackdropInputRefs = backdropInputRefs/);
+    assert.match(jsSource, /function clearSmartNodeBusyState\(node\)[\s\S]*?delete node\.runBackdropBatchId;[\s\S]*?delete node\.runBackdropInputRefs;/);
+    assert.match(jsSource, /function markSmartNodeRunFailed\(node, options=\{\}\)[\s\S]*?delete node\.runBackdropBatchId;[\s\S]*?delete node\.runBackdropInputRefs;/);
+    assert.match(jsSource, /delete node\.runRetrySnapshot;[\s\S]*?delete node\.runBackdropBatchId;[\s\S]*?delete node\.runBackdropInputRefs;[\s\S]*?node\.runStatus = 'completed'/);
 });
 
-test('decoded regeneration backgrounds survive full node renders by batch and slot', () => {
-    const sandbox = vm.createContext({});
+test('ambient MP4 playback pauses only for queueing, invisibility, page hiding, or reduced motion', () => {
+    const reducedMotion = {matches:false};
+    const documentState = {visibilityState:'visible'};
+    const sandbox = vm.createContext({
+        document:documentState,
+        smartGenerationReducedMotionQuery:reducedMotion
+    });
+    vm.runInContext(`
+        ${extractFunction('smartGenerationAnimationVideoShouldPlay')}
+        ${extractFunction('syncSmartGenerationAnimationVideo')}
+        const classes = new Set();
+        const surface = {classList:{contains:name => classes.has(name)}};
+        const video = {
+            isConnected:true,
+            muted:false,
+            loop:false,
+            playsInline:false,
+            paused:true,
+            ended:false,
+            playCount:0,
+            pauseCount:0,
+            closest:() => surface,
+            play(){ this.playCount += 1; this.paused = false; return Promise.resolve(); },
+            pause(){ this.pauseCount += 1; this.paused = true; }
+        };
+        syncSmartGenerationAnimationVideo(video);
+        globalThis.activePlays = video.playCount;
+        classes.add('is-queued');
+        syncSmartGenerationAnimationVideo(video);
+        classes.delete('is-queued');
+        video.paused = false;
+        classes.add('is-render-paused');
+        syncSmartGenerationAnimationVideo(video);
+        classes.delete('is-render-paused');
+        video.paused = false;
+        smartGenerationReducedMotionQuery.matches = true;
+        syncSmartGenerationAnimationVideo(video);
+        smartGenerationReducedMotionQuery.matches = false;
+        video.paused = false;
+        document.visibilityState = 'hidden';
+        syncSmartGenerationAnimationVideo(video);
+        globalThis.pauseCount = video.pauseCount;
+        globalThis.mediaFlags = [video.muted, video.loop, video.playsInline];
+    `, sandbox);
+    assert.equal(sandbox.activePlays, 1);
+    assert.equal(sandbox.pauseCount, 4);
+    assert.deepEqual([...sandbox.mediaFlags], [true, true, true]);
+});
+
+test('decoded regeneration backgrounds and ambient videos survive full node renders by batch and slot', () => {
+    const sandbox = vm.createContext({syncSmartGenerationAnimationVideo:() => {}});
     vm.runInContext(`
         ${extractFunction('transplantSmartMediaElements')}
         const classList = names => {
@@ -714,6 +808,7 @@ test('decoded regeneration backgrounds survive full node renders by batch and sl
             classList:classList(['has-history', ...names]),
             style:{cssText:'--old-phase:1'},
             replacedWith:null,
+            querySelector:() => null,
             replaceWith(value){ this.replacedWith = value; }
         });
         const oldSurface = surface('batch-a', 0, ['is-backdrop-ready']);
@@ -735,7 +830,7 @@ test('decoded regeneration backgrounds survive full node renders by batch and sl
     assert.equal(sandbox.style, '--fresh-phase:1');
 });
 
-test('multi-task generation surfaces derive a stable phase across regenerated markup', () => {
+test('multi-task generation surfaces keep stable MP4 identities across regenerated markup', () => {
     let fakeNow = 5000;
     const sandbox = vm.createContext({
         Date:{now:() => fakeNow},
@@ -746,7 +841,9 @@ test('multi-task generation surfaces derive a stable phase across regenerated ma
         imageForDisplay:item => item,
         thumbMediaHtml:item => `<img src="${item?.url || ''}">`,
         historyGroupForNode:() => null,
-        smartMediaPreviewUrl:() => ''
+        smartMediaPreviewUrl:() => '',
+        SMART_GENERATION_ANIMATION_VIDEO_URL:'/static/media/load-bg-animation.mp4',
+        SMART_GENERATION_ANIMATION_POSTER_URL:'/static/media/load-bg-animation-poster.webp'
     });
     vm.runInContext(`
         ${extractFunction('smartNodeProgressState')}
@@ -780,6 +877,8 @@ test('multi-task generation surfaces derive a stable phase across regenerated ma
     vm.runInContext('globalThis.secondGrid = smartProgressTaskGridHtml(node);', sandbox);
     assert.match(sandbox.firstGrid, /data-progress-task-index="0" style="--smart-task-pulse-delay:-400ms"/);
     assert.match(sandbox.secondGrid, /data-progress-task-index="0" style="--smart-task-pulse-delay:-700ms"/);
+    assert.match(sandbox.firstGrid, /data-generation-batch="ambient-video"[\s\S]*smart-generation-animation-video/);
+    assert.match(sandbox.secondGrid, /data-generation-batch="ambient-video"[\s\S]*smart-generation-animation-video/);
     assert.equal(sandbox.runningSurface, true);
     assert.equal(sandbox.determinateSurface, true);
     assert.equal(sandbox.queuedSurface, false);

@@ -301,6 +301,9 @@ const activeSmartTaskPolls = new Map();
 const activeSmartGenerationRuns = new Map();
 const runningHubProgressRefreshFrames = new Map();
 let smartGenerationSurfaceObserver = null;
+const SMART_GENERATION_ANIMATION_VIDEO_URL = '/static/media/load-bg-animation.mp4';
+const SMART_GENERATION_ANIMATION_POSTER_URL = '/static/media/load-bg-animation-poster.webp';
+const smartGenerationReducedMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)') || null;
 const VENICE_IMAGE_ESTIMATE_MS = 10000;
 const VENICE_PROGRESS_TICK_MS = 100;
 const smartNodeRunTokens = new Map();
@@ -2599,6 +2602,64 @@ function bindSmartGenerationBackdropReadiness(root=document){
         if(img.complete && img.naturalWidth) reveal();
     });
 }
+function smartGenerationAnimationVideoShouldPlay(video){
+    const surface = video?.closest?.('.smart-generation-surface');
+    return Boolean(
+        video?.isConnected
+        && surface
+        && !surface.classList.contains('is-queued')
+        && !surface.classList.contains('is-render-paused')
+        && document.visibilityState === 'visible'
+        && !smartGenerationReducedMotionQuery?.matches
+    );
+}
+function syncSmartGenerationAnimationVideo(video){
+    if(!video) return;
+    // Keep autoplay reliable across browsers without exposing media controls or
+    // allowing this decorative asset to participate in the canvas video UI.
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    if(smartGenerationAnimationVideoShouldPlay(video)){
+        if(video.paused || video.ended){
+            const playResult = video.play?.();
+            playResult?.catch?.(() => {});
+        }
+    } else {
+        if(!video.paused) video.pause?.();
+    }
+}
+function syncSmartGenerationAnimationVideos(root=document){
+    root.querySelectorAll?.('.smart-generation-animation-video').forEach(syncSmartGenerationAnimationVideo);
+}
+function bindSmartGenerationAnimationVideos(root=document){
+    root.querySelectorAll?.('.smart-generation-animation-video:not([data-generation-video-bound])').forEach(video => {
+        video.dataset.generationVideoBound = '1';
+        const surface = video.closest('.smart-generation-surface');
+        if(!surface) return;
+        const reveal = () => requestAnimationFrame(() => {
+            if(!video.isConnected || video.readyState < 2) return;
+            surface.classList.remove('is-video-failed');
+            surface.classList.add('is-video-ready');
+            syncSmartGenerationAnimationVideo(video);
+        });
+        video.addEventListener('loadeddata', reveal);
+        video.addEventListener('canplay', reveal);
+        video.addEventListener('error', () => {
+            surface.classList.remove('is-video-ready');
+            surface.classList.add('is-video-failed');
+            video.pause?.();
+        });
+        if(video.readyState >= 2) reveal();
+        syncSmartGenerationAnimationVideo(video);
+    });
+}
+const handleSmartGenerationReducedMotionChange = () => syncSmartGenerationAnimationVideos(document);
+if(smartGenerationReducedMotionQuery?.addEventListener){
+    smartGenerationReducedMotionQuery.addEventListener('change', handleSmartGenerationReducedMotionChange);
+} else {
+    smartGenerationReducedMotionQuery?.addListener?.(handleSmartGenerationReducedMotionChange);
+}
 const SMART_IMAGE_LOD_TIERS = [512, 768, 1024, 1536, 2048];
 const SMART_IMAGE_LOD_MAX_CONCURRENT = 2;
 const smartImageLodStates = new WeakMap();
@@ -2882,6 +2943,7 @@ function clearSmartNodeTransientRunState(node, options={}){
     delete node.pendingTasks;
     delete node._runMetaTargetId;
     delete node.runBackdropBatchId;
+    delete node.runBackdropInputRefs;
     if(options.clearRunHistory){
         delete node.runStartedAt;
         delete node.runFinishedAt;
@@ -9349,6 +9411,7 @@ function clearSmartNodeBusyState(node){
     delete node.jimengPending;
     delete node.pendingTasks;
     delete node.runBackdropBatchId;
+    delete node.runBackdropInputRefs;
     return node;
 }
 function smartRunErrorMessage(error, fallback=''){
@@ -9421,6 +9484,7 @@ function markSmartNodeRunFailed(node, options={}){
         node.runError = smartRunErrorMessage(options.error);
         node.runTimerHidden = false;
         delete node.runBackdropBatchId;
+        delete node.runBackdropInputRefs;
     }
     return node;
 }
@@ -11665,9 +11729,9 @@ function transplantSmartMediaElements(oldNodeEl, newNodeEl){
         restoreMediaPlaybackState(oldMedia, state);
         requestAnimationFrame(() => restoreMediaPlaybackState(oldMedia, state));
     });
-    const oldGenerationSurfaces = [...(oldNodeEl?.querySelectorAll?.('.smart-generation-surface.has-history[data-generation-batch]') || [])];
+    const oldGenerationSurfaces = [...(oldNodeEl?.querySelectorAll?.('.smart-generation-surface[data-generation-batch]') || [])];
     const freshGenerationSurfaces = new Map(
-        [...(newNodeEl?.querySelectorAll?.('.smart-generation-surface.has-history[data-generation-batch]') || [])]
+        [...(newNodeEl?.querySelectorAll?.('.smart-generation-surface[data-generation-batch]') || [])]
             .map(surface => [`${surface.dataset.generationBatch || ''}:${surface.dataset.generationSlot || '0'}`, surface])
     );
     oldGenerationSurfaces.forEach(surface => {
@@ -11676,13 +11740,18 @@ function transplantSmartMediaElements(oldNodeEl, newNodeEl){
         if(!fresh) return;
         const backdropReady = surface.classList.contains('is-backdrop-ready');
         const backdropFailed = surface.classList.contains('is-backdrop-failed');
+        const videoReady = surface.classList.contains('is-video-ready');
+        const videoFailed = surface.classList.contains('is-video-failed');
         const renderPaused = surface.classList.contains('is-render-paused');
         surface.className = fresh.className;
         surface.style.cssText = fresh.style.cssText;
         surface.classList.toggle('is-backdrop-ready', backdropReady);
         surface.classList.toggle('is-backdrop-failed', backdropFailed);
+        surface.classList.toggle('is-video-ready', videoReady);
+        surface.classList.toggle('is-video-failed', videoFailed);
         surface.classList.toggle('is-render-paused', renderPaused);
         fresh.replaceWith(surface);
+        syncSmartGenerationAnimationVideo(surface.querySelector('.smart-generation-animation-video'));
     });
 }
 function applyDetachedVideoDomHandoff(){
@@ -12635,12 +12704,20 @@ function smartProgressTaskValuePath(percent, width=100, height=100, inset=1, pre
 }
 function smartGenerationBackdropItems(node){
     const batchId = String(node?.runBackdropBatchId || '');
-    if(!batchId) return [];
-    const history = historyGroupForNode(node);
-    return (history?.images || []).filter(item => {
-        if(String(item?.historyBatchId || '') !== batchId || !item?.url) return false;
-        return mediaKindForItem(item) === 'image';
-    });
+    if(batchId){
+        const history = historyGroupForNode(node);
+        const historyImages = (history?.images || []).filter(item => {
+            if(String(item?.historyBatchId || '') !== batchId || !item?.url) return false;
+            return mediaKindForItem(item) === 'image';
+        });
+        if(historyImages.length) return historyImages;
+    }
+    const refs = Array.isArray(node?.runBackdropInputRefs)
+        ? node.runBackdropInputRefs
+        : (Array.isArray(node?.runInputRefs) ? node.runInputRefs : []);
+    const visualRefs = refs.filter(item => item?.url && ['image','video'].includes(mediaKindForItem(item)));
+    const images = visualRefs.filter(item => mediaKindForItem(item) === 'image');
+    return images.length ? images : visualRefs.filter(item => mediaKindForItem(item) === 'video');
 }
 function smartGenerationBackdropPreviewUrl(item, size=512){
     if(!item?.url) return '';
@@ -12659,15 +12736,17 @@ function smartGenerationSurfaceHtml(node, slotIndex=0, options={}){
     const previewSize = Math.max(64, Number(options.previewSize) || 512);
     const preview = smartGenerationBackdropPreviewUrl(item, previewSize);
     const queued = Boolean(options.queued);
-    const phaseOrigin = Math.max(0, Number(options.startedAt) || Number(node?.runStartedAt) || 0);
-    const phaseElapsed = (phaseOrigin ? Math.max(0, Date.now() - phaseOrigin) : Date.now()) + index * 1370;
-    const style = `--smart-generation-delay-a:${-(phaseElapsed % 10000)}ms;--smart-generation-delay-b:${-(phaseElapsed % 10000)}ms`;
     const original = preview ? smartOriginalMediaUrl(imageForDisplay(item)) : '';
     const backdrop = preview
         ? `<img class="smart-generation-backdrop" src="${escapeAttr(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" alt="" loading="eager" fetchpriority="high" draggable="false" aria-hidden="true"><span class="smart-generation-backdrop-veil"></span>`
         : '';
-    const batchAttr = preview ? ` data-generation-batch="${escapeAttr(String(node?.runBackdropBatchId || ''))}"` : '';
-    return `<span class="smart-generation-surface ${preview ? 'has-history' : 'is-ambient'} ${queued ? 'is-queued' : ''}" data-generation-slot="${index}"${batchAttr} style="${style}" aria-hidden="true">${backdrop}<span class="smart-generation-contrast-veil"></span></span>`;
+    const backdropIdentity = preview
+        ? String(node?.runBackdropBatchId || `input:${smartOriginalMediaUrl(imageForDisplay(item))}`)
+        : 'ambient-video';
+    const animationVideo = preview
+        ? ''
+        : `<video class="smart-generation-animation-video" src="${SMART_GENERATION_ANIMATION_VIDEO_URL}" poster="${SMART_GENERATION_ANIMATION_POSTER_URL}" ${queued ? '' : 'autoplay '}loop muted playsinline preload="${queued ? 'metadata' : 'auto'}" disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" aria-hidden="true" tabindex="-1"></video>`;
+    return `<span class="smart-generation-surface ${preview ? 'has-history' : 'is-ambient'} ${queued ? 'is-queued' : ''}" data-generation-slot="${index}" data-generation-batch="${escapeAttr(backdropIdentity)}" aria-hidden="true">${backdrop}${animationVideo}<span class="smart-generation-contrast-veil"></span></span>`;
 }
 function smartProgressTaskGridHtml(node, layout=null){
     const tasks = runningHubProgressTasks(node);
@@ -12717,7 +12796,7 @@ function smartProgressTaskGridHtml(node, layout=null){
         const phaseOrigin = Math.max(0, Number(task?.startedAt) || Number(task?.createdAt) || 0);
         const content = first
             ? `${thumbMediaHtml(first)}${results.length > 1 ? `<span class="smart-progress-task-extra">+${results.length - 1}</span>` : ''}`
-            : smartGenerationSurfaceHtml(node, index, {items:backdropItems, queued, startedAt:phaseOrigin});
+            : smartGenerationSurfaceHtml(node, index, {items:backdropItems, queued});
         const phaseElapsed = (phaseOrigin
             ? Math.max(0, Date.now() - phaseOrigin)
             : Date.now()) + Math.max(0, index) * 190;
@@ -13205,10 +13284,17 @@ function rememberInlineVideoActivations(){
 function refreshSmartGenerationSurfaceVisibility(root=world){
     smartGenerationSurfaceObserver?.disconnect?.();
     smartGenerationSurfaceObserver = null;
-    const surfaces = [...(root?.querySelectorAll?.('.smart-generation-surface') || [])];
-    if(!surfaces.length || typeof IntersectionObserver === 'undefined') return;
+    const surfaces = [...(root?.querySelectorAll?.('.smart-generation-surface.is-ambient') || [])];
+    if(!surfaces.length) return;
+    if(typeof IntersectionObserver === 'undefined'){
+        surfaces.forEach(surface => syncSmartGenerationAnimationVideo(surface.querySelector('.smart-generation-animation-video')));
+        return;
+    }
     smartGenerationSurfaceObserver = new IntersectionObserver(entries => {
-        entries.forEach(entry => entry.target.classList.toggle('is-render-paused', !entry.isIntersecting));
+        entries.forEach(entry => {
+            entry.target.classList.toggle('is-render-paused', !entry.isIntersecting);
+            syncSmartGenerationAnimationVideo(entry.target.querySelector('.smart-generation-animation-video'));
+        });
     }, {root:null, rootMargin:'160px', threshold:.01});
     surfaces.forEach(surface => smartGenerationSurfaceObserver.observe(surface));
 }
@@ -13227,10 +13313,10 @@ function render(){
     const reusableNodes = new Map();
     world.querySelectorAll('.image-node').forEach(el => {
         const node = nodes.find(n => n.id === el.dataset.id);
-        const hasDecodedGenerationBackdrop = Boolean(
-            el.querySelector('.smart-generation-surface.has-history.is-backdrop-ready[data-generation-batch]')
+        const hasReusableGenerationSurface = Boolean(
+            el.querySelector('.smart-generation-surface[data-generation-batch]')
         );
-        if(node && (smartNodeHasLiveMedia(node) || hasDecodedGenerationBackdrop)) reusableNodes.set(node.id, el);
+        if(node && (smartNodeHasLiveMedia(node) || hasReusableGenerationSurface)) reusableNodes.set(node.id, el);
     });
     const nodeHtmlEntries = nodes
         .filter(node => node.id !== SMART_LOG_PREVIEW_NODE_ID)
@@ -13341,6 +13427,7 @@ function render(){
     if(window.lucide) lucide.createIcons();
     bindSmartPreviewImageFallbacks(world);
     bindSmartGenerationBackdropReadiness(world);
+    bindSmartGenerationAnimationVideos(world);
     measureSmartNodeImages();
     refreshRunTimerPills();
     scheduleSmartVideoResetFrameRefresh();
@@ -22690,6 +22777,11 @@ async function runGeneration(event=null, options={}){
     delete pendingNode.runCancelled;
     delete pendingNode._replaceExistingOutputsOnNextResult;
     delete pendingNode.runBackdropBatchId;
+    const backdropInputRefs = (refs || [])
+        .filter(ref => ref?.url && ['image','video'].includes(mediaKindForItem(ref)))
+        .map(savedSmartRunInputRef);
+    if(backdropInputRefs.length) pendingNode.runBackdropInputRefs = backdropInputRefs;
+    else delete pendingNode.runBackdropInputRefs;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
         const currentOutputs = cleanHistoryImages(pendingNode.images || []);
@@ -23543,9 +23635,8 @@ function smartBackgroundNotify(title, body='', type='success'){
         }).catch(() => {});
     }
 }
-document.body.classList.toggle('smart-generation-document-hidden', document.visibilityState !== 'visible');
 document.addEventListener('visibilitychange', () => {
-    document.body.classList.toggle('smart-generation-document-hidden', document.visibilityState !== 'visible');
+    syncSmartGenerationAnimationVideos(document);
     if(document.visibilityState === 'visible'){
         closeSmartBackgroundNotifications();
         scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
@@ -23555,6 +23646,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', closeSmartBackgroundNotifications);
 window.addEventListener('pageshow', () => {
     if(document.visibilityState === 'visible'){
+        syncSmartGenerationAnimationVideos(document);
         closeSmartBackgroundNotifications();
         scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
         scheduleSmartImageLodRefresh({settle:true});
@@ -23971,6 +24063,12 @@ function patchSmartProgressTaskGrid(currentGrid, freshGrid){
         || freshCells.some(cell => !currentCellsByKey.has(taskKey(cell)))
     ){
         currentGrid?.replaceWith(freshGrid);
+        bindSmartPreviewImageFallbacks(freshGrid);
+        bindSmartGenerationBackdropReadiness(freshGrid);
+        bindSmartGenerationAnimationVideos(freshGrid);
+        if(smartGenerationSurfaceObserver){
+            freshGrid?.querySelectorAll?.('.smart-generation-surface.is-ambient').forEach(surface => smartGenerationSurfaceObserver.observe(surface));
+        }
         return freshGrid;
     }
     syncRunningHubProgressElement(currentGrid, freshGrid);
@@ -24011,11 +24109,16 @@ function patchSmartProgressTaskGrid(currentGrid, freshGrid){
                 if(currentSurface && freshSurface){
                     const backdropReady = currentSurface.classList.contains('is-backdrop-ready');
                     const backdropFailed = currentSurface.classList.contains('is-backdrop-failed');
+                    const videoReady = currentSurface.classList.contains('is-video-ready');
+                    const videoFailed = currentSurface.classList.contains('is-video-failed');
                     const renderPaused = currentSurface.classList.contains('is-render-paused');
                     syncRunningHubProgressElement(currentSurface, freshSurface, ['style','data-backdrop-ready-bound']);
                     currentSurface.classList.toggle('is-backdrop-ready', backdropReady);
                     currentSurface.classList.toggle('is-backdrop-failed', backdropFailed);
+                    currentSurface.classList.toggle('is-video-ready', videoReady);
+                    currentSurface.classList.toggle('is-video-failed', videoFailed);
                     currentSurface.classList.toggle('is-render-paused', renderPaused);
+                    syncSmartGenerationAnimationVideo(currentSurface.querySelector('.smart-generation-animation-video'));
                 }
             }
         }
@@ -24028,6 +24131,10 @@ function patchSmartProgressTaskGrid(currentGrid, freshGrid){
     });
     bindSmartPreviewImageFallbacks(currentGrid);
     bindSmartGenerationBackdropReadiness(currentGrid);
+    bindSmartGenerationAnimationVideos(currentGrid);
+    if(smartGenerationSurfaceObserver){
+        currentGrid.querySelectorAll('.smart-generation-surface.is-ambient').forEach(surface => smartGenerationSurfaceObserver.observe(surface));
+    }
     return currentGrid;
 }
 function scheduleRunningHubProgressRefresh(node){
@@ -24864,6 +24971,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image', options={}
         delete node.runError;
         delete node.runRetrySnapshot;
         delete node.runBackdropBatchId;
+        delete node.runBackdropInputRefs;
         node.runStatus = 'completed';
         node.runTimerHidden = false;
         node.running = false;
