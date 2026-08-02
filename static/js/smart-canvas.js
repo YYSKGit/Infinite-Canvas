@@ -300,6 +300,7 @@ let veniceCreditsState = {
 const activeSmartTaskPolls = new Map();
 const activeSmartGenerationRuns = new Map();
 const runningHubProgressRefreshFrames = new Map();
+let smartGenerationSurfaceObserver = null;
 const VENICE_IMAGE_ESTIMATE_MS = 10000;
 const VENICE_PROGRESS_TICK_MS = 100;
 const smartNodeRunTokens = new Map();
@@ -2569,6 +2570,35 @@ function bindSmartPreviewImageFallbacks(root=document){
         });
     });
 }
+function bindSmartGenerationBackdropReadiness(root=document){
+    root.querySelectorAll?.('.smart-generation-backdrop:not([data-backdrop-ready-bound])').forEach(img => {
+        img.dataset.backdropReadyBound = '1';
+        const surface = img.closest('.smart-generation-surface');
+        if(!surface) return;
+        let failureCount = 0;
+        const preview = img.dataset.previewSrc || '';
+        const original = img.dataset.originalSrc || '';
+        const hasFallback = Boolean(original && preview && original !== preview);
+        const reveal = () => requestAnimationFrame(() => {
+            if(!img.isConnected || !img.naturalWidth) return;
+            surface.classList.remove('is-backdrop-failed');
+            surface.classList.remove('is-ambient');
+            surface.classList.add('has-history');
+            surface.classList.add('is-backdrop-ready');
+        });
+        img.addEventListener('load', reveal);
+        img.addEventListener('error', () => {
+            failureCount += 1;
+            if(!hasFallback || failureCount > 1){
+                surface.classList.remove('is-backdrop-ready');
+                surface.classList.remove('has-history');
+                surface.classList.add('is-ambient');
+                surface.classList.add('is-backdrop-failed');
+            }
+        });
+        if(img.complete && img.naturalWidth) reveal();
+    });
+}
 const SMART_IMAGE_LOD_TIERS = [512, 768, 1024, 1536, 2048];
 const SMART_IMAGE_LOD_MAX_CONCURRENT = 2;
 const smartImageLodStates = new WeakMap();
@@ -2851,6 +2881,7 @@ function clearSmartNodeTransientRunState(node, options={}){
     delete node.jimengPending;
     delete node.pendingTasks;
     delete node._runMetaTargetId;
+    delete node.runBackdropBatchId;
     if(options.clearRunHistory){
         delete node.runStartedAt;
         delete node.runFinishedAt;
@@ -9317,6 +9348,7 @@ function clearSmartNodeBusyState(node){
     node.queued = false;
     delete node.jimengPending;
     delete node.pendingTasks;
+    delete node.runBackdropBatchId;
     return node;
 }
 function smartRunErrorMessage(error, fallback=''){
@@ -9388,6 +9420,7 @@ function markSmartNodeRunFailed(node, options={}){
         node.runStatus = 'failed';
         node.runError = smartRunErrorMessage(options.error);
         node.runTimerHidden = false;
+        delete node.runBackdropBatchId;
     }
     return node;
 }
@@ -11632,6 +11665,25 @@ function transplantSmartMediaElements(oldNodeEl, newNodeEl){
         restoreMediaPlaybackState(oldMedia, state);
         requestAnimationFrame(() => restoreMediaPlaybackState(oldMedia, state));
     });
+    const oldGenerationSurfaces = [...(oldNodeEl?.querySelectorAll?.('.smart-generation-surface.has-history[data-generation-batch]') || [])];
+    const freshGenerationSurfaces = new Map(
+        [...(newNodeEl?.querySelectorAll?.('.smart-generation-surface.has-history[data-generation-batch]') || [])]
+            .map(surface => [`${surface.dataset.generationBatch || ''}:${surface.dataset.generationSlot || '0'}`, surface])
+    );
+    oldGenerationSurfaces.forEach(surface => {
+        const key = `${surface.dataset.generationBatch || ''}:${surface.dataset.generationSlot || '0'}`;
+        const fresh = freshGenerationSurfaces.get(key);
+        if(!fresh) return;
+        const backdropReady = surface.classList.contains('is-backdrop-ready');
+        const backdropFailed = surface.classList.contains('is-backdrop-failed');
+        const renderPaused = surface.classList.contains('is-render-paused');
+        surface.className = fresh.className;
+        surface.style.cssText = fresh.style.cssText;
+        surface.classList.toggle('is-backdrop-ready', backdropReady);
+        surface.classList.toggle('is-backdrop-failed', backdropFailed);
+        surface.classList.toggle('is-render-paused', renderPaused);
+        fresh.replaceWith(surface);
+    });
 }
 function applyDetachedVideoDomHandoff(){
     const handoff = detachedVideoDomHandoff;
@@ -12581,6 +12633,42 @@ function smartProgressTaskValuePath(percent, width=100, height=100, inset=1, pre
     }
     return commands.join(' ');
 }
+function smartGenerationBackdropItems(node){
+    const batchId = String(node?.runBackdropBatchId || '');
+    if(!batchId) return [];
+    const history = historyGroupForNode(node);
+    return (history?.images || []).filter(item => {
+        if(String(item?.historyBatchId || '') !== batchId || !item?.url) return false;
+        return mediaKindForItem(item) === 'image';
+    });
+}
+function smartGenerationBackdropPreviewUrl(item, size=512){
+    if(!item?.url) return '';
+    const displayItem = imageForDisplay(item);
+    const kind = mediaKindForItem(displayItem);
+    let preview = smartMediaPreviewUrl(displayItem, size);
+    if(kind === 'video' && preview.includes('/api/media-preview?') && !/[?&]frame=/.test(preview)){
+        preview += '&frame=first';
+    }
+    return preview;
+}
+function smartGenerationSurfaceHtml(node, slotIndex=0, options={}){
+    const index = Math.max(0, Number(slotIndex) || 0);
+    const items = Array.isArray(options.items) ? options.items : smartGenerationBackdropItems(node);
+    const item = items.length ? items[index % items.length] : null;
+    const previewSize = Math.max(64, Number(options.previewSize) || 512);
+    const preview = smartGenerationBackdropPreviewUrl(item, previewSize);
+    const queued = Boolean(options.queued);
+    const phaseOrigin = Math.max(0, Number(options.startedAt) || Number(node?.runStartedAt) || 0);
+    const phaseElapsed = (phaseOrigin ? Math.max(0, Date.now() - phaseOrigin) : Date.now()) + index * 1370;
+    const style = `--smart-generation-delay-a:${-(phaseElapsed % 10000)}ms;--smart-generation-delay-b:${-(phaseElapsed % 10000)}ms`;
+    const original = preview ? smartOriginalMediaUrl(imageForDisplay(item)) : '';
+    const backdrop = preview
+        ? `<img class="smart-generation-backdrop" src="${escapeAttr(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" alt="" loading="eager" fetchpriority="high" draggable="false" aria-hidden="true"><span class="smart-generation-backdrop-veil"></span>`
+        : '';
+    const batchAttr = preview ? ` data-generation-batch="${escapeAttr(String(node?.runBackdropBatchId || ''))}"` : '';
+    return `<span class="smart-generation-surface ${preview ? 'has-history' : 'is-ambient'} ${queued ? 'is-queued' : ''}" data-generation-slot="${index}"${batchAttr} style="${style}" aria-hidden="true">${backdrop}<span class="smart-generation-contrast-veil"></span></span>`;
+}
 function smartProgressTaskGridHtml(node, layout=null){
     const tasks = runningHubProgressTasks(node);
     if(tasks.length <= 1) return '';
@@ -12610,6 +12698,7 @@ function smartProgressTaskGridHtml(node, layout=null){
     // so completing the task never changes its endpoint or interpolation model.
     const taskBorderPath = smartProgressTaskValuePath(100, pathWidth, pathHeight, pathInset, pathRadius);
     let resultCursor = 0;
+    const backdropItems = smartGenerationBackdropItems(node);
     const cells = tasks.map((task, taskIndex) => {
         const status = String(task?.status || 'submitting').toLowerCase();
         const fraction = runningHubTaskFraction(task);
@@ -12624,11 +12713,11 @@ function smartProgressTaskGridHtml(node, layout=null){
         resultCursor += results.length;
         const signature = results.map(item => `${mediaKindForItem(item)}:${item.url || ''}`).join('|');
         const first = results[0] ? imageForDisplay(results[0]) : null;
-        const content = first
-            ? `${thumbMediaHtml(first)}${results.length > 1 ? `<span class="smart-progress-task-extra">+${results.length - 1}</span>` : ''}`
-            : `<span class="smart-progress-task-placeholder-dot"></span>`;
         const index = Number.isFinite(Number(task?.index)) ? Number(task.index) : taskIndex;
         const phaseOrigin = Math.max(0, Number(task?.startedAt) || Number(task?.createdAt) || 0);
+        const content = first
+            ? `${thumbMediaHtml(first)}${results.length > 1 ? `<span class="smart-progress-task-extra">+${results.length - 1}</span>` : ''}`
+            : smartGenerationSurfaceHtml(node, index, {items:backdropItems, queued, startedAt:phaseOrigin});
         const phaseElapsed = (phaseOrigin
             ? Math.max(0, Date.now() - phaseOrigin)
             : Date.now()) + Math.max(0, index) * 190;
@@ -12710,21 +12799,27 @@ function runningHubProgressBorderHtml(node, layout=null){
     const animationStyle = (task, duration) => {
         const start = Math.max(0, Number(task?.startedAt) || 0);
         const elapsed = Math.max(0, Date.now() - start);
-        return ` style="--rh-progress-delay:${-(elapsed % duration)}ms"`;
+        return ` style="--smart-task-pulse-delay:${-(elapsed % duration)}ms"`;
     };
     const task = tasks[0];
+    const status = String(task?.status || 'submitting').toLowerCase();
     const fraction = runningHubTaskFraction(task);
-    const complete = task.status === 'succeeded' || task.status === 'finalizing';
+    const complete = status === 'succeeded' || status === 'finalizing';
+    const terminal = ['failed','cancelled','canceled'].includes(status);
+    const queued = ['submitting','queued'].includes(status);
     const determinate = complete || fraction !== null;
     const amount = complete ? 100 : fraction !== null ? Math.max(.8, fraction * 100) : 0;
-    const duration = 1700;
+    const indeterminate = !queued && !determinate && !terminal;
+    const duration = 1800;
+    const fullPath = smartProgressTaskValuePath(100, width, height, inset, radius);
+    const valuePath = smartProgressTaskValuePath(terminal ? 100 : amount, width, height, inset, radius);
     const segments = `
-        <rect class="rh-progress-stroke rh-progress-orbit-layer is-indeterminate ${task.status === 'queued' ? 'is-queued' : ''} ${determinate ? 'is-layer-hidden' : ''}"${animationStyle(task, duration)} pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="18 82"></rect>
-        <rect class="rh-progress-stroke rh-progress-value-layer ${complete ? 'is-complete' : 'is-determinate'} ${determinate ? '' : 'is-layer-hidden'}" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}" stroke-dasharray="${amount} ${100 - amount}"></rect>
+        <path class="rh-progress-stroke smart-progress-task-breathe is-indeterminate ${indeterminate ? '' : 'is-layer-hidden'}"${animationStyle(task, duration)} d="${fullPath}"></path>
+        <path class="rh-progress-stroke smart-progress-task-value ${complete ? 'is-complete' : ''} ${determinate ? 'is-determinate' : ''} ${determinate || terminal ? '' : 'is-layer-hidden'}" data-progress-percent="${terminal ? 100 : amount}" d="${valuePath}"></path>
     `;
-    return `<div class="rh-progress-border-host ${node?.veniceProgress ? 'is-venice-progress' : ''}">
-        <svg class="rh-progress-border" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
-            <rect class="rh-progress-track" pathLength="100" x="${inset}" y="${inset}" width="${width - inset * 2}" height="${height - inset * 2}" rx="${radius}"></rect>
+    return `<div class="rh-progress-border-host ${node?.veniceProgress ? 'is-venice-progress' : ''} ${queued ? 'is-queued' : ''} ${complete ? 'is-complete' : ''} ${terminal ? 'is-terminal' : ''}">
+        <svg class="rh-progress-border" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" data-progress-path-width="${width}" data-progress-path-height="${height}" data-progress-path-inset="${inset}" data-progress-path-radius="${radius}" aria-hidden="true">
+            <path class="rh-progress-track smart-progress-task-track" d="${fullPath}"></path>
             ${segments}
         </svg>
         ${label ? `<span class="image-resolution-badge rh-progress-node-badge" role="status">${escapeHtml(label)}</span>` : ''}
@@ -12839,16 +12934,17 @@ function nodeBodyHtml(node, layout){
         return imageTaskRecoverBodyHtml(node, recoverTask, layout);
     }
     if(node.queued && imgs.length === 0 && !node.pending){
-        return `<div class="loading-cell single queued" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        return `<div class="loading-cell single smart-generation-loading-cell queued" style="width:${layout.width}px;height:${layout.height}px">${smartGenerationSurfaceHtml(node, 0, {queued:true})}</div>`;
     }
     if(node.pending && imgs.length === 0){
         const count = Math.max(1, Number(node.pending) || 1);
-        if(count <= 1) return `<div class="loading-cell single" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        const backdropItems = smartGenerationBackdropItems(node);
+        if(count <= 1) return `<div class="loading-cell single smart-generation-loading-cell" style="width:${layout.width}px;height:${layout.height}px">${smartGenerationSurfaceHtml(node, 0, {items:backdropItems, previewSize:768})}</div>`;
         const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
         const rows = Math.ceil(count / cols);
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, rows));
         const rowHeight = Math.max(28, (Number(layout.height || 0) - 30 - 21 - 16 - 8 * (visibleRows - 1)) / visibleRows);
-        const skeleton = `<div class="loading-skeleton media-group-layout-grid ${rows > visibleRows ? 'is-scrollable' : ''}" data-grid-rows="${rows}" data-grid-visible-rows="${visibleRows}" style="--thumb-cols:${cols};--media-group-visible-rows:${visibleRows};--media-group-row-height:${Number(rowHeight.toFixed(3))}px">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        const skeleton = `<div class="loading-skeleton media-group-layout-grid ${rows > visibleRows ? 'is-scrollable' : ''}" data-grid-rows="${rows}" data-grid-visible-rows="${visibleRows}" style="--thumb-cols:${cols};--media-group-visible-rows:${visibleRows};--media-group-row-height:${Number(rowHeight.toFixed(3))}px">${Array.from({length:count}).map((_, index) => `<div class="loading-cell smart-generation-loading-cell">${smartGenerationSurfaceHtml(node, index, {items:backdropItems})}</div>`).join('')}</div>`;
         return `<div class="smart-group-card media-group-card smart-pending-group-card has-thumbs">${mediaGroupSummaryHtml([], count, smartProgressTaskMediaKind(node), 0)}${skeleton}</div>`;
     }
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
@@ -13106,6 +13202,16 @@ function rememberInlineVideoActivations(){
         if(image && mediaKindForItem(image) === 'video') image._inlineVideoActive = true;
     });
 }
+function refreshSmartGenerationSurfaceVisibility(root=world){
+    smartGenerationSurfaceObserver?.disconnect?.();
+    smartGenerationSurfaceObserver = null;
+    const surfaces = [...(root?.querySelectorAll?.('.smart-generation-surface') || [])];
+    if(!surfaces.length || typeof IntersectionObserver === 'undefined') return;
+    smartGenerationSurfaceObserver = new IntersectionObserver(entries => {
+        entries.forEach(entry => entry.target.classList.toggle('is-render-paused', !entry.isIntersecting));
+    }, {root:null, rootMargin:'160px', threshold:.01});
+    surfaces.forEach(surface => smartGenerationSurfaceObserver.observe(surface));
+}
 function render(){
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
     rememberInlineVideoActivations();
@@ -13121,7 +13227,10 @@ function render(){
     const reusableNodes = new Map();
     world.querySelectorAll('.image-node').forEach(el => {
         const node = nodes.find(n => n.id === el.dataset.id);
-        if(smartNodeHasLiveMedia(node)) reusableNodes.set(node.id, el);
+        const hasDecodedGenerationBackdrop = Boolean(
+            el.querySelector('.smart-generation-surface.has-history.is-backdrop-ready[data-generation-batch]')
+        );
+        if(node && (smartNodeHasLiveMedia(node) || hasDecodedGenerationBackdrop)) reusableNodes.set(node.id, el);
     });
     const nodeHtmlEntries = nodes
         .filter(node => node.id !== SMART_LOG_PREVIEW_NODE_ID)
@@ -13221,6 +13330,7 @@ function render(){
     restoreMediaPlaybackStates(mediaStates);
     alignMediaGroupGridGeometry(world);
     alignSmartProgressTaskGridGeometry(world);
+    refreshSmartGenerationSurfaceVisibility(world);
     restoreThumbScrollStates(thumbScrollStates);
     restorePromptNodeTextareaScrollStates(promptTextareaScrollStates);
     bindNodeEvents();
@@ -13230,6 +13340,7 @@ function render(){
     renderMinimap();
     if(window.lucide) lucide.createIcons();
     bindSmartPreviewImageFallbacks(world);
+    bindSmartGenerationBackdropReadiness(world);
     measureSmartNodeImages();
     refreshRunTimerPills();
     scheduleSmartVideoResetFrameRefresh();
@@ -22578,6 +22689,7 @@ async function runGeneration(event=null, options={}){
     delete pendingNode.runFailed;
     delete pendingNode.runCancelled;
     delete pendingNode._replaceExistingOutputsOnNextResult;
+    delete pendingNode.runBackdropBatchId;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
         const currentOutputs = cleanHistoryImages(pendingNode.images || []);
@@ -22589,11 +22701,14 @@ async function runGeneration(event=null, options={}){
             // Freeze the previous result's own prompt before the node adopts
             // the new request metadata, then commit it to history immediately.
             pendingNode.images = embedGenPromptIntoImages(pendingNode.images, pendingNode);
-            archiveCurrentOutputsToHistory(pendingNode, pendingNode.outputKind || logKind, {
+            const backdropBatchId = uid('history_batch');
+            const archived = archiveCurrentOutputsToHistory(pendingNode, pendingNode.outputKind || logKind, {
+                batchId:backdropBatchId,
                 status:previousRunStatus === 'partial' ? 'partial' : 'completed',
                 expectedCount:previousExpectedCount || currentOutputs.length,
                 createdAt:Number(pendingNode.runFinishedAt || pendingNode.runAt || 0) || nowMs()
             });
+            if(archived) pendingNode.runBackdropBatchId = backdropBatchId;
         }
         pendingNode.pending = Math.max(1, Number(expectedCount) || 1);
         pendingNode.runStartedAt = nowMs();
@@ -23428,7 +23543,9 @@ function smartBackgroundNotify(title, body='', type='success'){
         }).catch(() => {});
     }
 }
+document.body.classList.toggle('smart-generation-document-hidden', document.visibilityState !== 'visible');
 document.addEventListener('visibilitychange', () => {
+    document.body.classList.toggle('smart-generation-document-hidden', document.visibilityState !== 'visible');
     if(document.visibilityState === 'visible'){
         closeSmartBackgroundNotifications();
         scheduleSmartVideoResetFrameRefresh({markDirty:true, settle:true});
@@ -23802,19 +23919,24 @@ function animateSmartProgressTaskValuePath(path, freshPath, svg){
 function patchRunningHubProgressHost(currentHost, freshHost){
     const currentSvg = currentHost?.querySelector(':scope > .rh-progress-border');
     const freshSvg = freshHost?.querySelector(':scope > .rh-progress-border');
-    const currentRects = [...(currentSvg?.querySelectorAll(':scope > rect') || [])];
-    const freshRects = [...(freshSvg?.querySelectorAll(':scope > rect') || [])];
-    if(!currentSvg || !freshSvg || currentRects.length !== freshRects.length){
+    const currentPaths = [...(currentSvg?.querySelectorAll(':scope > path') || [])];
+    const freshPaths = [...(freshSvg?.querySelectorAll(':scope > path') || [])];
+    if(!currentSvg || !freshSvg || currentPaths.length !== freshPaths.length){
         currentHost?.replaceWith(freshHost);
         return freshHost;
     }
     syncRunningHubProgressElement(currentHost, freshHost);
     syncRunningHubProgressElement(currentSvg, freshSvg);
-    currentRects.forEach((rect, index) => {
-        const freshRect = freshRects[index];
-        const currentMode = runningHubProgressAnimationMode(rect);
-        const preservePhase = currentMode && currentMode === runningHubProgressAnimationMode(freshRect);
-        syncRunningHubProgressElement(rect, freshRect, preservePhase ? ['style'] : []);
+    currentPaths.forEach((path, index) => {
+        const freshPath = freshPaths[index];
+        const currentMode = runningHubProgressAnimationMode(path);
+        const preservePhase = currentMode && currentMode === runningHubProgressAnimationMode(freshPath);
+        if(path.classList.contains('smart-progress-task-value')){
+            syncRunningHubProgressElement(path, freshPath, ['d', 'data-progress-percent']);
+            animateSmartProgressTaskValuePath(path, freshPath, freshSvg);
+        } else {
+            syncRunningHubProgressElement(path, freshPath, preservePhase ? ['style'] : []);
+        }
     });
     const currentBadge = currentHost.querySelector(':scope > .rh-progress-node-badge');
     const freshBadge = freshHost.querySelector(':scope > .rh-progress-node-badge');
@@ -23828,14 +23950,14 @@ function patchRunningHubProgressHost(currentHost, freshHost){
     }
     return currentHost;
 }
-function smartProgressTaskCellHasActiveHalo(cell){
+function smartProgressTaskCellHasActiveSurface(cell){
     if(!cell?.classList) return false;
     if(
         cell.classList.contains('is-queued')
         || cell.classList.contains('is-complete')
         || cell.classList.contains('is-terminal')
     ) return false;
-    return Boolean(cell.querySelector?.(':scope > .smart-progress-task-content > .smart-progress-task-placeholder-dot'));
+    return Boolean(cell.querySelector?.(':scope > .smart-progress-task-content > .smart-generation-surface'));
 }
 function patchSmartProgressTaskGrid(currentGrid, freshGrid){
     const currentCells = [...(currentGrid?.querySelectorAll(':scope > .smart-progress-task-cell') || [])];
@@ -23854,9 +23976,9 @@ function patchSmartProgressTaskGrid(currentGrid, freshGrid){
     syncRunningHubProgressElement(currentGrid, freshGrid);
     freshCells.forEach(freshCell => {
         const cell = currentCellsByKey.get(taskKey(freshCell));
-        const preserveHaloPhase = smartProgressTaskCellHasActiveHalo(cell)
-            && smartProgressTaskCellHasActiveHalo(freshCell);
-        syncRunningHubProgressElement(cell, freshCell, preserveHaloPhase ? ['style'] : []);
+        const preserveSurfacePhase = smartProgressTaskCellHasActiveSurface(cell)
+            && smartProgressTaskCellHasActiveSurface(freshCell);
+        syncRunningHubProgressElement(cell, freshCell, preserveSurfacePhase ? ['style'] : []);
         const currentSvg = cell.querySelector(':scope > .smart-progress-task-border');
         const freshSvg = freshCell.querySelector(':scope > .smart-progress-task-border');
         if(freshSvg && cell.clientWidth > 0 && cell.clientHeight > 0){
@@ -23881,7 +24003,21 @@ function patchSmartProgressTaskGrid(currentGrid, freshGrid){
         if(currentContent && freshContent){
             const currentSignature = currentContent.dataset.progressResultSignature || '';
             const freshSignature = freshContent.dataset.progressResultSignature || '';
-            if(currentSignature !== freshSignature) currentContent.replaceWith(freshContent);
+            if(currentSignature !== freshSignature){
+                currentContent.replaceWith(freshContent);
+            } else {
+                const currentSurface = currentContent.querySelector(':scope > .smart-generation-surface');
+                const freshSurface = freshContent.querySelector(':scope > .smart-generation-surface');
+                if(currentSurface && freshSurface){
+                    const backdropReady = currentSurface.classList.contains('is-backdrop-ready');
+                    const backdropFailed = currentSurface.classList.contains('is-backdrop-failed');
+                    const renderPaused = currentSurface.classList.contains('is-render-paused');
+                    syncRunningHubProgressElement(currentSurface, freshSurface, ['style','data-backdrop-ready-bound']);
+                    currentSurface.classList.toggle('is-backdrop-ready', backdropReady);
+                    currentSurface.classList.toggle('is-backdrop-failed', backdropFailed);
+                    currentSurface.classList.toggle('is-render-paused', renderPaused);
+                }
+            }
         }
         const currentStatus = cell.querySelector(':scope > .smart-progress-task-status');
         const freshStatus = freshCell.querySelector(':scope > .smart-progress-task-status');
@@ -23890,6 +24026,8 @@ function patchSmartProgressTaskGrid(currentGrid, freshGrid){
             currentStatus.innerHTML = freshStatus.innerHTML;
         }
     });
+    bindSmartPreviewImageFallbacks(currentGrid);
+    bindSmartGenerationBackdropReadiness(currentGrid);
     return currentGrid;
 }
 function scheduleRunningHubProgressRefresh(node){
@@ -24725,6 +24863,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image', options={}
         delete node.runCancelled;
         delete node.runError;
         delete node.runRetrySnapshot;
+        delete node.runBackdropBatchId;
         node.runStatus = 'completed';
         node.runTimerHidden = false;
         node.running = false;

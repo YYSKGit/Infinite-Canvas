@@ -472,28 +472,51 @@ test('RunningHub realtime progress is proxied and signed upstream URLs stay serv
     assert.match(jsSource, /\/api\/runninghub\/query\?taskId=.*?useWallet=/);
 });
 
-test('single-task progress keeps its outer border while multi-task progress moves into named task cells', () => {
+test('single-task and multi-task progress share the same breathing border and generation surface language', () => {
     assert.match(jsSource, /\$\{runningHubProgressBorderHtml\(node,\s*layout\)\}/);
     assert.match(cssSource, /\.rh-progress-border-host\s*\{[^}]*position:absolute;[^}]*pointer-events:none;/);
     assert.match(cssSource, /\.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
     assert.doesNotMatch(cssSource, /\.image-node\.dragging \.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*opacity:1\s*!important;/);
-    assert.match(cssSource, /@keyframes rh-progress-orbit/);
+    assert.doesNotMatch(cssSource, /@keyframes rh-progress-orbit/);
     assert.match(cssSource, /\.smart-progress-task-grid\s*\{/);
     assert.match(cssSource, /\.smart-progress-task-breathe\s*\{/);
     assert.match(cssSource, /\.smart-progress-task-value\s*\{/);
     assert.match(cssSource, /@keyframes smart-task-border-breathe/);
-    assert.match(cssSource, /@keyframes smart-task-halo-breathe/);
-    assert.match(cssSource, /width:52cqmin;\s*height:52cqmin;/);
-    assert.match(cssSource, /\.smart-progress-task-cell:not\(\.is-queued\):not\(\.is-complete\):not\(\.is-terminal\) \.smart-progress-task-placeholder-dot::before\s*\{/);
+    assert.match(cssSource, /@keyframes smart-generation-field-a/);
+    assert.match(cssSource, /@keyframes smart-generation-field-b/);
+    assert.doesNotMatch(cssSource, /smart-progress-task-placeholder-dot|smart-task-halo-breathe/);
     assert.match(cssSource, /animation:smart-task-border-breathe 1\.8s ease-in-out infinite/);
-    assert.match(cssSource, /animation:smart-task-halo-breathe 1\.8s ease-in-out infinite/);
+    assert.match(cssSource, /animation:smart-generation-field-a 10s cubic-bezier/);
+    assert.match(cssSource, /animation:smart-generation-field-b 10s cubic-bezier/);
     assert.match(cssSource, /\.smart-progress-task-breathe\.is-layer-hidden\s*\{[^}]*stroke-opacity:0;/);
-    assert.match(cssSource, /\.smart-progress-task-placeholder-dot::before\s*\{[\s\S]*?background:radial-gradient/);
-    assert.match(cssSource, /transition:opacity \.36s cubic-bezier\(\.22,1,\.36,1\),filter \.36s ease/);
+    assert.match(cssSource, /\.smart-generation-surface::before,[\s\S]*?will-change:transform,opacity;/);
+    assert.match(cssSource, /\.smart-generation-backdrop\s*\{[\s\S]*?object-fit:cover;[\s\S]*?filter:blur\(18px\)/);
+    assert.match(cssSource, /\.smart-generation-surface\.is-backdrop-ready \.smart-generation-backdrop/);
+    assert.match(cssSource, /\.smart-generation-surface\.has-history::before,[\s\S]*?\.smart-generation-surface\.has-history::after\s*\{[^}]*opacity:0;[^}]*animation:none;/);
+    assert.match(cssSource, /Generation feedback is functional status/);
+    assert.match(cssSource, /@keyframes smart-generation-field-a\s*\{[\s\S]*?38%[^}]*opacity:\.96;[\s\S]*?68%[^}]*opacity:\.56;[\s\S]*?82%[^}]*opacity:\.12;/);
+    assert.match(cssSource, /@keyframes smart-generation-field-b\s*\{[\s\S]*?38%[^}]*opacity:\.08;[\s\S]*?68%[^}]*opacity:\.22;[\s\S]*?82%[^}]*opacity:\.66;/);
+    assert.match(cssSource, /\.smart-generation-contrast-veil\s*\{[\s\S]*?rgba\(15,23,42,\.22\)/);
+    assert.match(cssSource, /\.smart-generation-surface\.is-ambient \.smart-generation-contrast-veil \{ opacity:1; \}/);
+    assert.match(jsSource, /smart-generation-contrast-veil/);
+    assert.match(cssSource, /\.smart-generation-surface::before \{ animation:smart-generation-field-a 12s ease-in-out infinite !important; \}/);
+    assert.match(cssSource, /\.smart-generation-surface\.has-history::before,[\s\S]*?animation:none !important; opacity:0 !important;/);
+    assert.match(jsSource, /function smartGenerationBackdropPreviewUrl\(item, size=512\)/);
+    assert.match(jsSource, /previewSize:768/);
+    assert.match(cssSource, /\.smart-generation-surface\.is-render-paused::before,[\s\S]*?animation-play-state:paused/);
     assert.match(cssSource, /\.smart-progress-task-content\s*\{[^}]*inset:1px;/);
     assert.match(cssSource, /animation-delay:var\(--smart-task-pulse-delay,\s*0ms\)/);
     assert.doesNotMatch(cssSource, /\.smart-progress-task-rail/);
-    assert.match(cssSource, /animation-delay:var\(--rh-progress-delay,\s*0ms\)/);
+    assert.doesNotMatch(cssSource, /animation-delay:var\(--rh-progress-delay,\s*0ms\)/);
+    assert.match(cssSource, /\.loading-cell\.smart-generation-loading-cell[\s\S]*?animation:none;/);
+    assert.match(jsSource, /loading-cell single smart-generation-loading-cell[^`]*smartGenerationSurfaceHtml/);
+    assert.match(jsSource, /function smartGenerationBackdropItems\(node\)/);
+    assert.match(jsSource, /item = items\.length \? items\[index % items\.length\] : null/);
+    assert.equal((jsSource.match(/phaseElapsed % 10000/g) || []).length >= 2, true);
+    assert.match(jsSource, /pendingNode\.runBackdropBatchId = backdropBatchId/);
+    assert.match(jsSource, /function bindSmartGenerationBackdropReadiness\(root=document\)/);
+    assert.match(jsSource, /bindSmartGenerationBackdropReadiness\(world\)/);
+    assert.match(jsSource, /\{root:null, rootMargin:'160px', threshold:\.01\}/);
     assert.match(cssSource, /stroke-dasharray \.38s cubic-bezier/);
     assert.match(cssSource, /\.rh-progress-stroke\.is-layer-hidden\s*\{[^}]*opacity:0\s*!important;/);
     assert.match(jsSource, /patchRunningHubProgressHost\(currentHost,\s*fresh\)/);
@@ -503,8 +526,12 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.match(jsSource, /Math\.min\(900,\s*Math\.max\(560,\s*380 \+ Math\.abs\(to - from\) \* 5\)\)/);
     assert.match(jsSource, /alignSmartProgressTaskGridGeometry\(world\)/);
     assert.match(jsSource, /syncSmartProgressTaskSvgGeometry\(freshSvg,\s*cell\.clientWidth,\s*cell\.clientHeight\)/);
-    assert.match(jsSource, /const preserveHaloPhase = smartProgressTaskCellHasActiveHalo\(cell\)\s*&& smartProgressTaskCellHasActiveHalo\(freshCell\);/);
-    assert.match(jsSource, /syncRunningHubProgressElement\(cell,\s*freshCell,\s*preserveHaloPhase \? \['style'\] : \[\]\)/);
+    assert.match(jsSource, /const preserveSurfacePhase = smartProgressTaskCellHasActiveSurface\(cell\)\s*&& smartProgressTaskCellHasActiveSurface\(freshCell\);/);
+    assert.match(jsSource, /syncRunningHubProgressElement\(cell,\s*freshCell,\s*preserveSurfacePhase \? \['style'\] : \[\]\)/);
+    assert.match(jsSource, /syncRunningHubProgressElement\(currentSurface, freshSurface, \['style','data-backdrop-ready-bound'\]\)/);
+    assert.match(jsSource, /data-generation-batch=/);
+    assert.match(jsSource, /hasDecodedGenerationBackdrop/);
+    assert.match(jsSource, /freshGenerationSurfaces = new Map/);
     assert.match(cssSource, /\.smart-progress-task-value\.is-complete\s*\{[^}]*stroke-linecap:butt;/);
     assert.match(jsSource, /const nodeId = String\(data\.node \?\? ''\)\.trim\(\);\s*if\(!nodeId\) return;/);
 
@@ -515,7 +542,9 @@ test('single-task progress keeps its outer border while multi-task progress move
         escapeAttr:value => String(value),
         mediaKindForItem:item => item?.kind || 'image',
         imageForDisplay:item => item,
-        thumbMediaHtml:item => `<img src="${item?.url || ''}">`
+        thumbMediaHtml:item => `<img src="${item?.url || ''}">`,
+        historyGroupForNode:() => null,
+        smartMediaPreviewUrl:() => ''
     });
     vm.runInContext(`
         ${extractFunction('smartNodeProgressState')}
@@ -526,6 +555,9 @@ test('single-task progress keeps its outer border while multi-task progress move
         ${extractFunction('smartProgressTaskStatusParts')}
         ${extractFunction('smartProgressTaskStatusText')}
         ${extractFunction('smartProgressTaskValuePath')}
+        ${extractFunction('smartGenerationBackdropItems')}
+        ${extractFunction('smartGenerationBackdropPreviewUrl')}
+        ${extractFunction('smartGenerationSurfaceHtml')}
         ${extractFunction('smartProgressTaskGridHtml')}
         ${extractFunction('runningHubProgressBorderHtml')}
         globalThis.valuePath25 = smartProgressTaskValuePath(25);
@@ -560,15 +592,17 @@ test('single-task progress keeps its outer border while multi-task progress move
         });
     `, sandbox);
     assert.match(sandbox.single, /is-determinate/);
-    assert.match(sandbox.single, /stroke-dasharray="50 50"/);
-    assert.match(sandbox.single, /x="1" y="1"[\s\S]*rx="11"/);
-    assert.match(sandbox.single, /rh-progress-orbit-layer is-indeterminate[\s\S]*is-layer-hidden/);
-    assert.match(sandbox.single, /rh-progress-value-layer is-determinate/);
+    assert.doesNotMatch(sandbox.single, /stroke-dasharray/);
+    assert.match(sandbox.single, /smart-progress-task-breathe is-indeterminate is-layer-hidden/);
+    assert.match(sandbox.single, /smart-progress-task-value\s+is-determinate\s+" data-progress-percent="50"/);
+    assert.match(sandbox.single, /data-progress-path-width="260" data-progress-path-height="180" data-progress-path-inset="1" data-progress-path-radius="11"/);
+    assert.match(sandbox.single, /d="M 1 168 L 1 12 A 11 11 0 0 1 12 1 L 248 1 A 11 11 0 0 1 259 12"/);
     assert.match(sandbox.single, /image-resolution-badge rh-progress-node-badge/);
     assert.match(sandbox.single, /KSampler · 50%/);
     assert.equal((sandbox.single.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.equal((sandbox.unnamed.match(/class="rh-progress-stroke/g) || []).length, 2);
-    assert.match(sandbox.unnamed, /rh-progress-value-layer is-determinate is-layer-hidden[\s\S]*stroke-dasharray="0 100"/);
+    assert.match(sandbox.unnamed, /smart-progress-task-breathe is-indeterminate [^>]*--smart-task-pulse-delay:-400ms/);
+    assert.match(sandbox.unnamed, /smart-progress-task-value\s+is-layer-hidden[\s\S]*data-progress-percent="0"/);
     assert.equal(sandbox.multi, '');
     assert.equal((sandbox.multiGrid.match(/smart-progress-task-cell /g) || []).length, 3);
     assert.equal((sandbox.multiGrid.match(/smart-progress-task-border/g) || []).length, 3);
@@ -598,7 +632,7 @@ test('single-task progress keeps its outer border while multi-task progress move
     assert.doesNotMatch(sandbox.unnamed, />10<\/span>/);
 });
 
-test('RunningHub in-place progress patches preserve a live orbit phase', () => {
+test('RunningHub in-place progress patches preserve a live breathing phase', () => {
     const sandbox = vm.createContext({});
     vm.runInContext(`
         ${extractFunction('syncRunningHubProgressElement')}
@@ -610,20 +644,98 @@ test('RunningHub in-place progress patches preserve a live orbit phase', () => {
             setAttribute(name, value){ this.values[name] = value; },
             removeAttribute(name){ delete this.values[name]; }
         });
-        const current = element({class:'rh-progress-stroke is-indeterminate', style:'--rh-progress-delay:-420ms'});
-        const fresh = element({class:'rh-progress-stroke is-indeterminate', style:'--rh-progress-delay:-910ms'});
+        const current = element({class:'rh-progress-stroke is-indeterminate', style:'--smart-task-pulse-delay:-420ms'});
+        const fresh = element({class:'rh-progress-stroke is-indeterminate', style:'--smart-task-pulse-delay:-910ms'});
         syncRunningHubProgressElement(current, fresh, ['style']);
         globalThis.preservedStyle = current.values.style;
         const classElement = names => ({classList:{contains:name => names.includes(name)}});
         globalThis.runningMode = runningHubProgressAnimationMode(classElement(['is-indeterminate']));
         globalThis.queuedMode = runningHubProgressAnimationMode(classElement(['is-indeterminate','is-queued']));
     `, sandbox);
-    assert.equal(sandbox.preservedStyle, '--rh-progress-delay:-420ms');
+    assert.equal(sandbox.preservedStyle, '--smart-task-pulse-delay:-420ms');
     assert.equal(sandbox.runningMode, 'indeterminate');
     assert.equal(sandbox.queuedMode, 'indeterminate');
 });
 
-test('multi-task center halos derive a stable phase across regenerated markup', () => {
+test('regeneration surfaces reuse only the archived run batch and repeat it by slot', () => {
+    const history = {images:[
+        {url:'https://remote.example/a.png',localUrl:'/a.png',kind:'image',historyBatchId:'batch-new'},
+        {url:'/b.png',kind:'image',historyBatchId:'batch-new'},
+        {url:'/older.png',kind:'image',historyBatchId:'batch-old'},
+        {url:'/sound.mp3',kind:'audio',historyBatchId:'batch-new'}
+    ]};
+    const sandbox = vm.createContext({
+        Date:{now:() => 5000},
+        escapeAttr:value => String(value),
+        mediaKindForItem:item => item?.kind || 'image',
+        imageForDisplay:item => item?.localUrl ? {...item,url:item.localUrl} : item,
+        historyGroupForNode:() => history,
+        smartMediaPreviewUrl:item => `/preview/${String(item?.url || '').split('/').pop()}`,
+        smartOriginalMediaUrl:item => item?.url || ''
+    });
+    vm.runInContext(`
+        ${extractFunction('smartGenerationBackdropItems')}
+        ${extractFunction('smartGenerationBackdropPreviewUrl')}
+        ${extractFunction('smartGenerationSurfaceHtml')}
+        const node = {runBackdropBatchId:'batch-new',runStartedAt:1000};
+        globalThis.items = smartGenerationBackdropItems(node);
+        globalThis.slot0 = smartGenerationSurfaceHtml(node, 0, {items});
+        globalThis.slot1 = smartGenerationSurfaceHtml(node, 1, {items});
+        globalThis.slot2 = smartGenerationSurfaceHtml(node, 2, {items});
+        globalThis.empty = smartGenerationSurfaceHtml({runStartedAt:1000}, 0);
+    `, sandbox);
+    assert.deepEqual(Array.from(sandbox.items, item => item.url), ['https://remote.example/a.png','/b.png']);
+    assert.match(sandbox.slot0, /has-history[\s\S]*src="\/preview\/a\.png"/);
+    assert.match(sandbox.slot1, /has-history[\s\S]*src="\/preview\/b\.png"/);
+    assert.match(sandbox.slot2, /has-history[\s\S]*src="\/preview\/a\.png"/);
+    assert.match(sandbox.empty, /smart-generation-surface is-ambient/);
+    assert.doesNotMatch(sandbox.empty, /smart-generation-backdrop/);
+    assert.match(jsSource, /const backdropBatchId = uid\('history_batch'\);[\s\S]*?batchId:backdropBatchId[\s\S]*?pendingNode\.runBackdropBatchId = backdropBatchId/);
+    assert.match(jsSource, /function clearSmartNodeBusyState\(node\)[\s\S]*?delete node\.runBackdropBatchId;/);
+    assert.match(jsSource, /function markSmartNodeRunFailed\(node, options=\{\}\)[\s\S]*?delete node\.runBackdropBatchId;/);
+});
+
+test('decoded regeneration backgrounds survive full node renders by batch and slot', () => {
+    const sandbox = vm.createContext({});
+    vm.runInContext(`
+        ${extractFunction('transplantSmartMediaElements')}
+        const classList = names => {
+            const values = new Set(names);
+            return {
+                contains:name => values.has(name),
+                toggle(name, force){
+                    if(force) values.add(name); else values.delete(name);
+                }
+            };
+        };
+        const surface = (batch, slot, names=[]) => ({
+            dataset:{generationBatch:batch,generationSlot:String(slot)},
+            className:'smart-generation-surface has-history',
+            classList:classList(['has-history', ...names]),
+            style:{cssText:'--old-phase:1'},
+            replacedWith:null,
+            replaceWith(value){ this.replacedWith = value; }
+        });
+        const oldSurface = surface('batch-a', 0, ['is-backdrop-ready']);
+        const freshSurface = surface('batch-a', 0);
+        freshSurface.style.cssText = '--fresh-phase:1';
+        const oldNode = {querySelectorAll(selector){
+            return selector.includes('.thumb-item') ? [] : [oldSurface];
+        }};
+        const freshNode = {querySelectorAll(selector){
+            return selector.includes('.thumb-item') ? [] : [freshSurface];
+        }};
+        transplantSmartMediaElements(oldNode, freshNode);
+        globalThis.reused = freshSurface.replacedWith === oldSurface;
+        globalThis.ready = oldSurface.classList.contains('is-backdrop-ready');
+        globalThis.style = oldSurface.style.cssText;
+    `, sandbox);
+    assert.equal(sandbox.reused, true);
+    assert.equal(sandbox.ready, true);
+    assert.equal(sandbox.style, '--fresh-phase:1');
+});
+
+test('multi-task generation surfaces derive a stable phase across regenerated markup', () => {
     let fakeNow = 5000;
     const sandbox = vm.createContext({
         Date:{now:() => fakeNow},
@@ -632,7 +744,9 @@ test('multi-task center halos derive a stable phase across regenerated markup', 
         escapeAttr:value => String(value),
         mediaKindForItem:item => item?.kind || 'image',
         imageForDisplay:item => item,
-        thumbMediaHtml:item => `<img src="${item?.url || ''}">`
+        thumbMediaHtml:item => `<img src="${item?.url || ''}">`,
+        historyGroupForNode:() => null,
+        smartMediaPreviewUrl:() => ''
     });
     vm.runInContext(`
         ${extractFunction('smartNodeProgressState')}
@@ -642,32 +756,35 @@ test('multi-task center halos derive a stable phase across regenerated markup', 
         ${extractFunction('smartProgressTaskStatusParts')}
         ${extractFunction('smartProgressTaskStatusText')}
         ${extractFunction('smartProgressTaskValuePath')}
+        ${extractFunction('smartGenerationBackdropItems')}
+        ${extractFunction('smartGenerationBackdropPreviewUrl')}
+        ${extractFunction('smartGenerationSurfaceHtml')}
         ${extractFunction('smartProgressTaskGridHtml')}
-        ${extractFunction('smartProgressTaskCellHasActiveHalo')}
+        ${extractFunction('smartProgressTaskCellHasActiveSurface')}
         const node = {runningHubProgress:{tasks:[
             {index:0,status:'running',nodeName:'K采样器',value:null,max:null,startedAt:1000},
             {index:1,status:'queued',value:null,max:null,startedAt:1000}
         ]}};
         globalThis.firstGrid = smartProgressTaskGridHtml(node);
-        const cell = (classes, hasDot=true) => ({
+        const cell = (classes, hasSurface=true) => ({
             classList:{contains:name => classes.includes(name)},
-            querySelector:() => hasDot ? {} : null
+            querySelector:() => hasSurface ? {} : null
         });
-        globalThis.runningHalo = smartProgressTaskCellHasActiveHalo(cell(['is-running']));
-        globalThis.determinateHalo = smartProgressTaskCellHasActiveHalo(cell(['is-determinate']));
-        globalThis.queuedHalo = smartProgressTaskCellHasActiveHalo(cell(['is-queued']));
-        globalThis.completeHalo = smartProgressTaskCellHasActiveHalo(cell(['is-complete']));
-        globalThis.missingHalo = smartProgressTaskCellHasActiveHalo(cell(['is-running'], false));
+        globalThis.runningSurface = smartProgressTaskCellHasActiveSurface(cell(['is-running']));
+        globalThis.determinateSurface = smartProgressTaskCellHasActiveSurface(cell(['is-determinate']));
+        globalThis.queuedSurface = smartProgressTaskCellHasActiveSurface(cell(['is-queued']));
+        globalThis.completeSurface = smartProgressTaskCellHasActiveSurface(cell(['is-complete']));
+        globalThis.missingSurface = smartProgressTaskCellHasActiveSurface(cell(['is-running'], false));
     `, sandbox);
     fakeNow = 5300;
     vm.runInContext('globalThis.secondGrid = smartProgressTaskGridHtml(node);', sandbox);
     assert.match(sandbox.firstGrid, /data-progress-task-index="0" style="--smart-task-pulse-delay:-400ms"/);
     assert.match(sandbox.secondGrid, /data-progress-task-index="0" style="--smart-task-pulse-delay:-700ms"/);
-    assert.equal(sandbox.runningHalo, true);
-    assert.equal(sandbox.determinateHalo, true);
-    assert.equal(sandbox.queuedHalo, false);
-    assert.equal(sandbox.completeHalo, false);
-    assert.equal(sandbox.missingHalo, false);
+    assert.equal(sandbox.runningSurface, true);
+    assert.equal(sandbox.determinateSurface, true);
+    assert.equal(sandbox.queuedSurface, false);
+    assert.equal(sandbox.completeSurface, false);
+    assert.equal(sandbox.missingSurface, false);
 });
 
 test('multi-task determinate borders interpolate a single partial path using the single-task timing', () => {
