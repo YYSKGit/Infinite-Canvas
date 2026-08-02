@@ -1131,6 +1131,20 @@ function keyboardSelectionContext(){
             }
         };
     }
+    if(activeTab === 'prompts'){
+        return {
+            selector:'[data-prompt-row]',
+            dataKey:'promptRow',
+            columns:true,
+            getSelected:() => selectedPromptId,
+            setSelected:(id) => {
+                selectedPromptId = id;
+                promptEditMode = false;
+                promptCreateMode = false;
+                pendingDeletePromptId = '';
+            }
+        };
+    }
     if(activeTab === 'local'){
         if(root.querySelector('[data-localup-card]')){
             return {
@@ -1210,7 +1224,8 @@ function moveSelectionByArrowKey(key){
     if(!nextId) return false;
     ctx.setSelected(nextId);
     pendingBatchDelete = '';
-    if(activeTab === 'canvas-assets') refreshCanvasAssetSelectionOnly();
+    if(activeTab === 'prompts') renderPromptSelectionOnly();
+    else if(activeTab === 'canvas-assets') refreshCanvasAssetSelectionOnly();
     else render();
     requestAnimationFrame(() => {
         const nextEl = [...root.querySelectorAll(ctx.selector)].find(el => (el.dataset?.[ctx.dataKey] || '') === nextId);
@@ -1421,7 +1436,8 @@ function scheduleSearchRender(id, pos=0, delay=140){
     clearTimeout(searchRenderTimer);
     searchRenderTimer = setTimeout(() => {
         clearSearchSelection(id);
-        render();
+        if(id === 'promptSearch' && activeTab === 'prompts') replacePromptSections(['.asset-content','.asset-detail']);
+        else render();
         requestAnimationFrame(() => {
             const input = document.getElementById(id);
             input?.focus();
@@ -2491,7 +2507,7 @@ function promptManagerMarkup(){
                 </div>
             </div>
             <div class="content-scroll">
-                ${items.length ? `<div class="prompt-list">${items.map(item => renderPromptRow(item, readonly)).join('')}</div>` : `<div class="empty-state">${escapeHtml(promptEmptyText)}</div>`}
+                ${items.length ? `<div class="prompt-grid">${items.map(item => renderPromptRow(item, readonly)).join('')}</div>` : `<div class="empty-state">${escapeHtml(promptEmptyText)}</div>`}
             </div>
         </section>
         <aside class="asset-panel asset-detail prompt-detail-panel">
@@ -2656,13 +2672,15 @@ function renderPromptTreeInlineEdit(kind){
 }
 function renderPromptRow(item, readonly){
     const assistant = item?.kind === 'assistant_recipe';
-    const preview = assistant ? (item.system_template || item.user_template || '') : (item.positive || '');
     return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}">
         <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly || item.builtin ? 'disabled' : ''}>
+        <div class="prompt-card-cover">
+            <i data-lucide="${assistant ? 'bot' : 'text-cursor-input'}"></i>
+            <span class="prompt-tag">${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span>
+        </div>
         <div class="prompt-row-main">
-            <div class="prompt-row-title"><strong>${escapeHtml(item.name || '提示词')}</strong><span class="prompt-tag">${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span>${item.builtin ? '<span class="prompt-tag prompt-tag-builtin">内置</span>' : ''}</div>
+            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong>${item.builtin ? '<span class="prompt-tag prompt-tag-builtin">内置</span>' : ''}</div>
             <div class="prompt-row-scene">${escapeHtml(item.scene || '未填写用途说明')}</div>
-            <div class="prompt-row-text">${escapeHtml(preview)}</div>
         </div>
     </article>`;
 }
@@ -4007,9 +4025,9 @@ async function handleClick(event){
         await deletePromptLibrary(); return;
     }
     const promptLib = target.closest?.('[data-prompt-lib]');
-    if(promptLib){ activePromptLibraryId = promptLib.dataset.promptLib || ''; activePromptCategory = 'all'; promptTreeFocus = 'library'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); render(); return; }
+    if(promptLib){ activePromptLibraryId = promptLib.dataset.promptLib || ''; activePromptCategory = 'all'; promptTreeFocus = 'library'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); renderPromptDataSections(); return; }
     const promptCat = target.closest?.('[data-prompt-cat]');
-    if(promptCat){ activePromptLibraryId = promptCat.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = promptCat.dataset.promptCat || 'all'; promptTreeFocus = 'category'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); render(); return; }
+    if(promptCat){ activePromptLibraryId = promptCat.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = promptCat.dataset.promptCat || 'all'; promptTreeFocus = 'category'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); renderPromptDataSections(); return; }
     const promptRow = target.closest?.('[data-prompt-row]');
     if(promptRow){
         const id = promptRow.dataset.promptRow || '';
@@ -4217,7 +4235,8 @@ function endMarqueeSelection(){
     marqueeState.box.remove();
     marqueeState = null;
     pendingBatchDelete = '';
-    render();
+    if(activeTab === 'prompts') updatePromptManageState();
+    else render();
 }
 async function createAssetLibrary(){
     const name = window.prompt('资产库名称', '新资产库');
