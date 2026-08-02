@@ -21976,6 +21976,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
         runAt:targetNode.runAt
     };
     outputNode.running = true;
+    clearSmartTaskResultOrder(outputNode);
     outputNode.runStartedAt = nowMs();
     delete outputNode.runFinishedAt;
     delete outputNode.runElapsedMs;
@@ -22074,6 +22075,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         const expectedCount = smartExpectedGenerationTaskCount(request.refs || [], runSettings);
         outputSlot.queued = false;
         outputSlot.running = true;
+        clearSmartTaskResultOrder(outputSlot);
         outputSlot.pending = expectedCount;
         outputSlot.runStartedAt = nowMs();
         delete outputSlot.runFinishedAt;
@@ -22571,6 +22573,7 @@ async function runGeneration(event=null, options={}){
     pendingNode.runRetrySnapshot = nextRetrySnapshot;
     pendingNode.runExpectedCount = Math.max(1, Number(expectedCount) || 1);
     pendingNode.runStatus = 'running';
+    clearSmartTaskResultOrder(pendingNode);
     delete pendingNode.runError;
     delete pendingNode.runFailed;
     delete pendingNode.runCancelled;
@@ -22644,7 +22647,7 @@ async function runGeneration(event=null, options={}){
                     const batch = resultMediaUrls(await runRunningHubGeneration(prompt, job.refs, activeSettings, runContext, {index, total:runningHubJobs.length}));
                     throwIfSmartGenerationCancelled(runSignal);
                     if(!batch.length) throw new Error(tr('smart.errNoOutImages'));
-                    const additions = finalizeSmartPendingTask(pendingNode, `runninghub_${index}`, batch, 'image');
+                    const additions = finalizeSmartPendingTask(pendingNode, `runninghub_${index}`, batch, 'image', {progressIndex:index});
                     setSmartProgressTaskResults(pendingNode, index, additions);
                     finishRunningHubProgressTask(runContext, index, 'succeeded');
                     render();
@@ -22666,6 +22669,7 @@ async function runGeneration(event=null, options={}){
             markSmartNodeComplete(pendingNode, pendingMeta);
             pendingNode.title = pendingNode.images.length > 1 ? 'Group' : 'Image';
             normalizeSmartMediaNodeLayout(pendingNode);
+            clearSmartTaskResultOrder(pendingNode);
             render();
             if(failures.length){
                 const message = failures[0]?.error?.message || tr('smart.errRunFailed');
@@ -23654,6 +23658,39 @@ function smartProgressTaskSlot(node, index=0){
     if(!Array.isArray(tasks)) return null;
     return tasks.find((task, taskIndex) => Number(task?.index ?? taskIndex) === normalizedIndex) || tasks[normalizedIndex] || null;
 }
+function smartTaskResultOrderKey(item){
+    if(!item?.url) return '';
+    return `${item.kind || ''}|${item.url}`;
+}
+function orderSmartTaskResults(node, items=[], taskIndex=null){
+    if(taskIndex === null || taskIndex === undefined) return;
+    const normalizedTaskIndex = Number(taskIndex);
+    if(!node || !Number.isFinite(normalizedTaskIndex)) return;
+    const order = node._smartTaskResultOrder && typeof node._smartTaskResultOrder === 'object'
+        ? node._smartTaskResultOrder
+        : {};
+    node._smartTaskResultOrder = order;
+    (items || []).forEach((item, itemIndex) => {
+        const key = smartTaskResultOrderKey(item);
+        if(key) order[key] = {taskIndex:normalizedTaskIndex, itemIndex};
+    });
+    node.images = (node.images || []).map((item, currentIndex) => {
+        const resultOrder = order[smartTaskResultOrderKey(item)] || null;
+        return {item, currentIndex, resultOrder};
+    }).sort((a, b) => {
+        if(a.resultOrder && b.resultOrder){
+            return (a.resultOrder.taskIndex - b.resultOrder.taskIndex)
+                || (a.resultOrder.itemIndex - b.resultOrder.itemIndex)
+                || (a.currentIndex - b.currentIndex);
+        }
+        if(a.resultOrder) return -1;
+        if(b.resultOrder) return 1;
+        return a.currentIndex - b.currentIndex;
+    }).map(entry => entry.item);
+}
+function clearSmartTaskResultOrder(node){
+    if(node) delete node._smartTaskResultOrder;
+}
 function setSmartProgressTaskResults(node, index, resultItems=[]){
     const task = smartProgressTaskSlot(node, index);
     if(!task) return [];
@@ -23669,15 +23706,6 @@ function setSmartProgressTaskResults(node, index, resultItems=[]){
     }).filter(item => item?.url);
     task.resultItems = items;
     task.updatedAt = nowMs();
-    const orderedItems = runningHubProgressTasks(node).flatMap(progressTask => smartProgressTaskResultItems(progressTask));
-    const orderedUrls = new Set(orderedItems.map(item => item.url));
-    const currentItems = Array.isArray(node?.images) ? node.images.filter(item => item?.url) : [];
-    if(currentItems.some(item => orderedUrls.has(item.url))){
-        node.images = [
-            ...orderedItems,
-            ...currentItems.filter(item => !orderedUrls.has(item.url))
-        ];
-    }
     scheduleRunningHubProgressRefresh(node);
     return items;
 }
@@ -24339,6 +24367,7 @@ async function cancelSmartNodeGeneration(nodeId, options=null){
     stopVeniceVideoProgressMonitor(context);
     delete node.runningHubProgress;
     delete node.veniceProgress;
+    clearSmartTaskResultOrder(node);
 
     const runningHubCancels = [...context.runningHubTasks.entries()].map(([taskId, taskMeta]) =>
         cancelRunningHubTask(taskId, taskMeta?.useWallet)
@@ -24657,7 +24686,7 @@ async function pollSmartCanvasTask(taskId, runContext=null, veniceProgressIndex=
         activeSmartTaskPolls.delete(pollKey);
     }
 }
-function finalizeSmartPendingTask(node, taskId, images, kind='image'){
+function finalizeSmartPendingTask(node, taskId, images, kind='image', options={}){
     if(!node || !taskId) return [];
     const taskMeta = smartPendingTasks(node).find(task => task.taskId === taskId) || null;
     const taskProviderId = String(taskMeta?.providerId || taskMeta?.provider_id || '');
@@ -24679,6 +24708,12 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     });
     const embeddedAdditions = embedGenPromptIntoImages(additions, node);
     node.images = [...existing, ...embeddedAdditions];
+    const taskIndex = options.progressIndex !== null && options.progressIndex !== undefined && Number.isFinite(Number(options.progressIndex))
+        ? Number(options.progressIndex)
+        : taskMeta?.progressIndex !== null && taskMeta?.progressIndex !== undefined && Number.isFinite(Number(taskMeta.progressIndex))
+            ? Number(taskMeta.progressIndex)
+            : null;
+    orderSmartTaskResults(node, embeddedAdditions, taskIndex);
     if(additions.length) node.outputKind = kind;
     if(!node.pending && smartPendingTasks(node).length === 0){
         clearSmartNodePreRunBox(node);
@@ -24695,6 +24730,7 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         node.running = false;
         node.title = node.images.length > 1 ? (kind === 'video' ? 'Videos' : kind === 'audio' ? 'Audios' : kind === 'text' ? 'Texts' : 'Group') : (kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : kind === 'text' ? 'Text' : 'Image');
         normalizeSmartMediaNodeLayout(node);
+        clearSmartTaskResultOrder(node);
         notifySmartTaskSuccess(kind, node.images.length);
     }
     if(isVeniceProviderId(taskProviderId)) scheduleVeniceCreditsRefresh(taskProviderId, 120);
@@ -24786,6 +24822,7 @@ async function resumeSmartPendingNode(node, logContext={}){
             scheduleSave();
         }
     }));
+    if(!smartPendingTasks(node).length) clearSmartTaskResultOrder(node);
     if(failures.length && (node.images || []).length){
         node.runStatus = 'partial';
         node.runError = smartRunErrorMessage(failures[0]);

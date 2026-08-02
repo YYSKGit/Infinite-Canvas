@@ -735,7 +735,7 @@ test('multi-task determinate borders interpolate a single partial path using the
     assert.equal(sandbox.completePath.dataset.progressPercent, '100');
 });
 
-test('multi-task progress keeps result media ordered by task slot instead of completion time', () => {
+test('multi-task progress slots do not mutate committed node media', () => {
     const sandbox = vm.createContext({
         nowMs:() => 1000,
         resultMediaUrls:value => value,
@@ -759,14 +759,16 @@ test('multi-task progress keeps result media ordered by task slot instead of com
         setSmartProgressTaskResults(node, 1, node.images);
         node.images.push({url:'/first.png',kind:'image',_genPrompt:{promptText:'first'}});
         setSmartProgressTaskResults(node, 0, [node.images[1]]);
-        globalThis.orderedUrls = node.images.map(item => item.url);
-        globalThis.orderedPrompts = node.images.map(item => item._genPrompt?.promptText);
+        globalThis.committedUrls = node.images.map(item => item.url);
+        globalThis.slotUrls = runningHubProgressTasks(node)
+            .flatMap(task => smartProgressTaskResultItems(task))
+            .map(item => item.url);
     `, sandbox);
-    assert.deepEqual([...sandbox.orderedUrls], ['/first.png', '/second.png']);
-    assert.deepEqual([...sandbox.orderedPrompts], ['first', 'second']);
+    assert.deepEqual([...sandbox.committedUrls], ['/second.png', '/first.png']);
+    assert.deepEqual([...sandbox.slotUrls], ['/first.png', '/second.png']);
 });
 
-test('finalizing then assigning a task result preserves its embedded prompt snapshot', () => {
+test('Venice results stay in input order when the second task finishes first', () => {
     const sandbox = vm.createContext({
         nowMs:() => 1000,
         resultMediaUrls:value => value,
@@ -781,13 +783,19 @@ test('finalizing then assigning a task result preserves its embedded prompt snap
         isVeniceProviderId:() => false,
         scheduleVeniceCreditsRefresh:() => {},
         scheduleRunningHubProgressRefresh:() => {},
-        mediaKindForUrls:() => 'image'
+        mediaKindForUrls:() => 'image',
+        MEDIA_NODE_DEFAULT_SCALE:2,
+        MEDIA_GROUP_DEFAULT_SCALE:0.8
     });
     vm.runInContext(`
+        ${extractFunction('normalizeSmartMediaNodeLayout')}
         ${extractFunction('smartNodeProgressState')}
         ${extractFunction('runningHubProgressTasks')}
         ${extractFunction('smartProgressTaskResultItems')}
         ${extractFunction('smartProgressTaskSlot')}
+        ${extractFunction('smartTaskResultOrderKey')}
+        ${extractFunction('orderSmartTaskResults')}
+        ${extractFunction('clearSmartTaskResultOrder')}
         ${extractFunction('setSmartProgressTaskResults')}
         ${extractFunction('finalizeSmartPendingTask')}
         const node = {
@@ -797,18 +805,70 @@ test('finalizing then assigning a task result preserves its embedded prompt snap
                 {taskId:'task-0', progressIndex:0, kind:'image'},
                 {taskId:'task-1', progressIndex:1, kind:'image'}
             ],
-            runningHubProgress:{tasks:[
+            veniceProgress:{tasks:[
                 {index:0,resultItems:[]},
                 {index:1,resultItems:[]}
             ]}
         };
-        const additions = finalizeSmartPendingTask(node, 'task-0', [{url:'/one.png',kind:'image'}], 'image');
-        setSmartProgressTaskResults(node, 0, additions);
-        globalThis.prompt = node.images[0]._genPrompt?.promptText;
-        globalThis.slotPrompt = node.runningHubProgress.tasks[0].resultItems[0]._genPrompt?.promptText;
+        const secondRaw = [{url:'/second.png',kind:'image'}];
+        setSmartProgressTaskResults(node, 1, secondRaw);
+        const secondAdditions = finalizeSmartPendingTask(node, 'task-1', secondRaw, 'image');
+        setSmartProgressTaskResults(node, 1, secondAdditions);
+        const firstRaw = [{url:'/first.png',kind:'image'}];
+        setSmartProgressTaskResults(node, 0, firstRaw);
+        const firstAdditions = finalizeSmartPendingTask(node, 'task-0', firstRaw, 'image');
+        setSmartProgressTaskResults(node, 0, firstAdditions);
+        globalThis.urls = node.images.map(item => item.url);
+        globalThis.prompts = node.images.map(item => item._genPrompt?.promptText);
+        globalThis.slotPrompts = node.veniceProgress.tasks.map(task => task.resultItems[0]?._genPrompt?.promptText);
+        globalThis.hasTransientOrder = '_smartTaskResultOrder' in node;
     `, sandbox);
-    assert.equal(sandbox.prompt, 'snapshot');
-    assert.equal(sandbox.slotPrompt, 'snapshot');
+    assert.deepEqual([...sandbox.urls], ['/first.png', '/second.png']);
+    assert.deepEqual([...sandbox.prompts], ['snapshot', 'snapshot']);
+    assert.deepEqual([...sandbox.slotPrompts], ['snapshot', 'snapshot']);
+    assert.equal(sandbox.hasTransientOrder, false);
+});
+
+test('generic API and RunningHub task commits use stable task order without progress state', () => {
+    const sandbox = vm.createContext({
+        nowMs:() => 1000,
+        resultMediaUrls:value => value,
+        cleanHistoryImages:value => value,
+        stripImageGenerationMeta:value => value,
+        copyMediaSizeFields:(item, base) => ({...base, ...item}),
+        embedGenPromptIntoImages:items => items,
+        smartPendingTasks:node => Array.isArray(node.pendingTasks) ? node.pendingTasks : [],
+        clearSmartNodePreRunBox:() => {},
+        notifySmartTaskSuccess:() => {},
+        isVeniceProviderId:() => false,
+        scheduleVeniceCreditsRefresh:() => {},
+        MEDIA_NODE_DEFAULT_SCALE:2,
+        MEDIA_GROUP_DEFAULT_SCALE:0.8
+    });
+    vm.runInContext(`
+        ${extractFunction('normalizeSmartMediaNodeLayout')}
+        ${extractFunction('smartTaskResultOrderKey')}
+        ${extractFunction('orderSmartTaskResults')}
+        ${extractFunction('clearSmartTaskResultOrder')}
+        ${extractFunction('finalizeSmartPendingTask')}
+        const generic = {
+            images:[], pending:2,
+            pendingTasks:[
+                {taskId:'generic-0', progressIndex:0, kind:'image'},
+                {taskId:'generic-1', progressIndex:1, kind:'image'}
+            ]
+        };
+        finalizeSmartPendingTask(generic, 'generic-1', [{url:'/generic-second.png'}]);
+        finalizeSmartPendingTask(generic, 'generic-0', [{url:'/generic-first.png'}]);
+        globalThis.genericUrls = generic.images.map(item => item.url);
+
+        const runningHub = {images:[], pending:2, pendingTasks:[]};
+        finalizeSmartPendingTask(runningHub, 'runninghub_2', [{url:'/rh-third.png'}], 'image', {progressIndex:2});
+        finalizeSmartPendingTask(runningHub, 'runninghub_0', [{url:'/rh-first.png'}], 'image', {progressIndex:0});
+        globalThis.runningHubUrls = runningHub.images.map(item => item.url);
+    `, sandbox);
+    assert.deepEqual([...sandbox.genericUrls], ['/generic-first.png', '/generic-second.png']);
+    assert.deepEqual([...sandbox.runningHubUrls], ['/rh-first.png', '/rh-third.png']);
 });
 
 test('Venice image and video tasks reuse the border with stable asymptotic estimates', () => {
