@@ -47,6 +47,28 @@ test('built-in badges occupy the prompt cover top-left opposite the category', a
   assert.match(managerCss, /prompt-row-check[^}]*top:10px[^}]*width:16px[^}]*height:16px/);
 });
 
+test('content-card selection uses a quiet static border without an outer glow ring', async () => {
+  const managerCss = await readFile(new URL('../static/css/asset-manager.css', import.meta.url), 'utf8');
+  const selectedCardStyles = [
+    managerCss.match(/\.asset-card\.active,\.prompt-row\.active\s*\{[^}]*\}/)?.[0] || '',
+    managerCss.match(/body\.theme-dark \.asset-card\.active,body\.theme-dark \.prompt-row\.active\s*\{[^}]*\}/)?.[0] || ''
+  ];
+  selectedCardStyles.forEach(style => {
+    assert.match(style, /box-shadow:0 6px 14px var\(--shadow\)/);
+    assert.doesNotMatch(style, /0 0 0 1px/);
+    assert.doesNotMatch(style, /animation:/);
+  });
+});
+
+test('asset reorder drag previews disable badge backdrop compositing artifacts', async () => {
+  const managerCss = await readFile(new URL('../static/css/asset-manager.css', import.meta.url), 'utf8');
+  assert.match(managerCss, /asset-card\.reorder-dragging \.asset-kind-badge[^}]*-webkit-backdrop-filter:none[^}]*backdrop-filter:none/);
+  assert.match(managerCss, /asset-thumb img,\.asset-thumb video[^}]*-webkit-user-drag:none[^}]*user-select:none/);
+  const assetThumbSource = managerSource.match(/function assetThumb\(item\)\{[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(assetThumbSource, /<video[^>]*draggable="false"/);
+  assert.match(assetThumbSource, /<img[^>]*draggable="false"/);
+});
+
 test('system built-ins cannot be selected for deletion and can be restored', () => {
   assert.match(managerSource, /readonly \|\| item\.builtin \? 'disabled'/);
   assert.match(managerSource, /currentPromptItems\(\)\.filter\(item => !item\.builtin\)/);
