@@ -6846,6 +6846,7 @@ function renderDynamicParams(){
     else if(settings.engine === 'modelscope') renderMsParams();
     else if(settings.engine === 'runninghub') renderRunningHubParams();
     else renderComfyParams();
+    const generationModeCleared = clearUnsupportedGenerationMode(activeComposerNode() || selectedNode(), settings);
     syncVeniceImageQuote();
     syncVeniceVideoQuote();
     bindDynamicParams();
@@ -6854,6 +6855,10 @@ function renderDynamicParams(){
     updatePromptPlaceholder();
     persistActiveSmartSettings();
     renderGenerationModeControl();
+    if(generationModeCleared){
+        closeGenerationModePanel();
+        scheduleSave();
+    }
     if(window.lucide) lucide.createIcons();
 }
 function renderApiParams(){
@@ -8569,12 +8574,19 @@ function compileGenerationModePrompt(node, prompt){
 }
 function generationModeSupported(sourceSettings=settings){
     sourceSettings = sourceSettings || settings;
-    if(sourceSettings.apiKind === 'video') return false;
-    if(sourceSettings.engine === 'runninghub') return true;
-    if(sourceSettings.engine !== 'api') return false;
+    const engine = String(sourceSettings.engine || '').trim().toLowerCase();
+    if(engine === 'runninghub') return true;
+    if(engine !== 'api' || sourceSettings.apiKind === 'video') return false;
     const provider = apiProviderById(sourceSettings.provider_id || '');
     return String(provider?.protocol || '').trim().toLowerCase() === 'venice'
         || isVeniceProviderId(sourceSettings.provider_id || '');
+}
+function clearUnsupportedGenerationMode(node, sourceSettings=settings){
+    if(!node || generationModeSupported(sourceSettings)) return false;
+    if(!node.generationPromptId && !node.generationPromptSnapshot) return false;
+    delete node.generationPromptId;
+    delete node.generationPromptSnapshot;
+    return true;
 }
 function generationModeIcon(name){
     const allowed = new Set(['grid-3x3','grid-2x2','scan-face','panels-top-left','layout-grid','sun-medium','user-round','smile','gallery-horizontal-end']);
@@ -20225,8 +20237,10 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
     const displayPrompt = originalPrompt || body;
     const rawBody = body;
     const rawVeniceBody = veniceBody || rawBody;
-    body = typeof compileGenerationModePrompt === 'function' ? compileGenerationModePrompt(node, rawBody) : rawBody;
-    veniceBody = typeof compileGenerationModePrompt === 'function' ? compileGenerationModePrompt(node, rawVeniceBody) : rawVeniceBody;
+    const compileGenerationMode = generationModeSupported(requestSettings)
+        && typeof compileGenerationModePrompt === 'function';
+    body = compileGenerationMode ? compileGenerationModePrompt(node, rawBody) : rawBody;
+    veniceBody = compileGenerationMode ? compileGenerationModePrompt(node, rawVeniceBody) : rawVeniceBody;
     if(hasMentionToken && refs.length){
         return {
             prompt:body,

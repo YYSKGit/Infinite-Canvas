@@ -153,6 +153,82 @@ def normalize_prompt_catalog(data):
     }
 
 
+def find_builtin_prompt_catalog_item(defaults, resource_key, item_id):
+    defaults = defaults if isinstance(defaults, dict) else {}
+    items = defaults.get(resource_key) if isinstance(defaults.get(resource_key), list) else []
+    wanted = str(item_id or "")
+    return next((item for item in items if str(item.get("id") or "") == wanted), None)
+
+
+def mark_prompt_catalog_builtins(catalog, defaults):
+    catalog = catalog if isinstance(catalog, dict) else default_prompt_catalog()
+    defaults = defaults if isinstance(defaults, dict) else {}
+    marked = {**catalog}
+    for resource_key in ("generation_prompts", "system_instructions"):
+        builtin_ids = {
+            str(item.get("id") or "")
+            for item in defaults.get(resource_key, [])
+            if isinstance(item, dict) and str(item.get("id") or "")
+        }
+        marked[resource_key] = [
+            {**item, "builtin": str(item.get("id") or "") in builtin_ids}
+            for item in catalog.get(resource_key, [])
+            if isinstance(item, dict)
+        ]
+    return marked
+
+
+def merge_missing_prompt_catalog_builtins(catalog, defaults, *, timestamp=None):
+    catalog = catalog if isinstance(catalog, dict) else default_prompt_catalog()
+    defaults = defaults if isinstance(defaults, dict) else {}
+    merged = {**catalog}
+    added = 0
+    current_time = int(timestamp or now_ms())
+    for resource_key, normalizer in (
+        ("generation_prompts", normalize_generation_prompt),
+        ("system_instructions", normalize_system_instruction),
+    ):
+        items = list(catalog.get(resource_key, []))
+        existing_ids = {str(item.get("id") or "") for item in items if isinstance(item, dict)}
+        for default_item in defaults.get(resource_key, []):
+            item_id = str(default_item.get("id") or "") if isinstance(default_item, dict) else ""
+            if not item_id or item_id in existing_ids:
+                continue
+            items.append(normalizer({
+                **default_item,
+                "created_at": current_time,
+                "updated_at": current_time,
+            }, timestamp=current_time))
+            existing_ids.add(item_id)
+            added += 1
+        merged[resource_key] = items
+    return merged, added
+
+
+def restore_builtin_prompt_catalog_item(catalog, defaults, resource_key, item_id, *, timestamp=None):
+    default_item = find_builtin_prompt_catalog_item(defaults, resource_key, item_id)
+    if not default_item:
+        return catalog, None
+    normalizer = normalize_generation_prompt if resource_key == "generation_prompts" else normalize_system_instruction
+    items = list(catalog.get(resource_key, []) if isinstance(catalog, dict) else [])
+    index = next((index for index, item in enumerate(items) if item.get("id") == item_id), -1)
+    current_time = int(timestamp or now_ms())
+    restored = normalizer({
+        **default_item,
+        "created_at": items[index].get("created_at") if index >= 0 else current_time,
+        "updated_at": current_time,
+    }, timestamp=current_time)
+    if index >= 0:
+        items[index] = restored
+    else:
+        items.append(restored)
+    next_catalog = {
+        **(catalog if isinstance(catalog, dict) else default_prompt_catalog()),
+        resource_key: items,
+    }
+    return next_catalog, restored
+
+
 def load_prompt_catalog(path, defaults=None):
     if not os.path.exists(path):
         return save_prompt_catalog(path, defaults if isinstance(defaults, dict) else default_prompt_catalog())

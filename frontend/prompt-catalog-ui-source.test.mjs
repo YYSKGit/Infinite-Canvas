@@ -31,9 +31,17 @@ test('standalone prompt manager uses the compact navigation and expanded templat
   const managerCss = await readFile(new URL('../static/css/asset-manager.css', import.meta.url), 'utf8');
   assert.doesNotMatch(managerSource, /全部生成提示词/);
   assert.match(managerCss, /-webkit-line-clamp:2/);
-  assert.match(managerCss, /prompt-row-main[^}]*height:63px/);
+  assert.match(managerCss, /prompt-row-main[^}]*height:70px/);
   assert.match(managerCss, /prompt-generation-template[^}]*min-height:330px/);
   assert.match(managerCss, /prompt-description-input[^}]*min-height:60px/);
   assert.match(managerCss, /prompt-generation-template-body[^}]*height:408px/);
   assert.match(managerCss, /generation-params-list[^}]*grid-template-columns:repeat\(2/);
+});
+
+test('system built-ins cannot be selected for deletion and can be restored', () => {
+  assert.match(managerSource, /readonly \|\| item\.builtin \? 'disabled'/);
+  assert.match(managerSource, /currentPromptItems\(\)\.filter\(item => !item\.builtin\)/);
+  assert.match(managerSource, /if\(item\.builtin\)\{ setStatus\('系统内置内容不能删除/);
+  assert.match(managerSource, /data-prompt-reset/);
+  assert.match(managerSource, /\/api\/prompt-catalog\/\$\{promptCatalogResource\(\)\}\/\$\{encodeURIComponent\(id\)\}\/reset/);
 });

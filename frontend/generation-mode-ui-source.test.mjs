@@ -101,9 +101,9 @@ test('generation catalog reads the API response wrapper used by the backend', ()
 test('generation modes are limited to RunningHub and Venice image generation', () => {
   const fn = js.match(/function generationModeSupported\([\s\S]*?\n\}/)?.[0] || '';
   assert.match(fn, /engine === 'runninghub'/);
-  assert.match(fn, /engine !== 'api'/);
+  assert.match(fn, /engine !== 'api' \|\| sourceSettings\.apiKind === 'video'/);
   assert.match(fn, /protocol[^\n]*venice/);
-  assert.match(fn, /apiKind === 'video'/);
+  assert.match(js, /clearUnsupportedGenerationMode\(activeComposerNode\(\) \|\| selectedNode\(\), settings\)/);
 });
 
 test('mode selection snapshots the hidden template and overwrites only existing size settings', () => {
@@ -119,6 +119,7 @@ test('mode selection snapshots the hidden template and overwrites only existing 
 test('hidden templates compile only while building the provider request', () => {
   const request = js.match(/function buildPromptRequest\([\s\S]*?\n\}/)?.[0] || '';
   assert.match(request, /const displayPrompt = originalPrompt \|\| body/);
+  assert.match(request, /generationModeSupported\(requestSettings\)/);
   assert.match(request, /compileGenerationModePrompt\(node, rawBody\)/);
   assert.match(request, /providerPrompts:\{api_image:body, venice_video:veniceBody \|\| body\}/);
   assert.doesNotMatch(html, /prompt_template/);

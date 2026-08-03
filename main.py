@@ -44,9 +44,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.middleware.cors import CORSMiddleware
 from prompt_catalog import (
     PromptCatalogValidationError,
+    find_builtin_prompt_catalog_item,
     load_prompt_catalog as load_prompt_catalog_file,
+    mark_prompt_catalog_builtins,
+    merge_missing_prompt_catalog_builtins,
     normalize_generation_prompt,
     normalize_system_instruction,
+    restore_builtin_prompt_catalog_item,
     save_prompt_catalog as save_prompt_catalog_file,
 )
 
@@ -6953,7 +6957,38 @@ def builtin_prompt_catalog():
         return None
 
 def load_prompt_catalog_data():
-    return load_prompt_catalog_file(PROMPT_CATALOG_PATH, builtin_prompt_catalog())
+    defaults = builtin_prompt_catalog()
+    catalog, added = merge_missing_prompt_catalog_builtins(
+        load_prompt_catalog_file(PROMPT_CATALOG_PATH, defaults),
+        defaults,
+    )
+    if added:
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return mark_prompt_catalog_builtins(
+        catalog,
+        defaults,
+    )
+
+def save_prompt_catalog_data(catalog):
+    return mark_prompt_catalog_builtins(
+        save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog),
+        builtin_prompt_catalog(),
+    )
+
+def prompt_catalog_builtin_item(resource_key, item_id):
+    return find_builtin_prompt_catalog_item(builtin_prompt_catalog(), resource_key, item_id)
+
+def reset_prompt_catalog_builtin_item(catalog, resource_key, item_id):
+    catalog, item = restore_builtin_prompt_catalog_item(
+        catalog,
+        builtin_prompt_catalog(),
+        resource_key,
+        item_id,
+        timestamp=now_ms(),
+    )
+    if not item:
+        raise HTTPException(status_code=400, detail="只有系统内置内容支持恢复默认")
+    return save_prompt_catalog_data(catalog), item
 
 def prompt_catalog_patch_item(payload, existing, field_names):
     fields = prompt_catalog_payload_fields(payload)
@@ -6965,13 +7000,6 @@ def prompt_catalog_patch_item(payload, existing, field_names):
 
 def prompt_catalog_validation_error(error):
     return HTTPException(status_code=400, detail=str(error))
-
-def find_prompt_library(data, library_id=""):
-    if not isinstance(data, dict):
-        return None
-    libraries = data.get("libraries") if isinstance(data.get("libraries"), list) else []
-    library_id = str(library_id or data.get("active_library_id") or "").strip()
-    return next((item for item in libraries if item.get("id") == library_id), None) or (libraries[0] if libraries else None)
 
 def sanitize_asset_name(name, fallback="asset"):
     name = re.sub(r'[\\/:*?"<>|]+', "_", str(name or fallback)).strip()
@@ -16219,7 +16247,7 @@ async def create_generation_prompt(payload: GenerationPromptRequest):
     with PROMPT_CATALOG_LOCK:
         catalog = load_prompt_catalog_data()
         catalog["generation_prompts"].insert(0, item)
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "item": item}
 
 @app.patch("/api/prompt-catalog/generation-prompts/{item_id}")
@@ -16240,11 +16268,21 @@ async def update_generation_prompt(item_id: str, payload: GenerationPromptReques
             raise prompt_catalog_validation_error(error)
         items[index] = item
         catalog["generation_prompts"] = items
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
+    return {"catalog": catalog, "item": item}
+
+@app.post("/api/prompt-catalog/generation-prompts/{item_id}/reset")
+async def reset_generation_prompt(item_id: str):
+    with PROMPT_CATALOG_LOCK:
+        catalog, item = reset_prompt_catalog_builtin_item(
+            load_prompt_catalog_data(), "generation_prompts", item_id
+        )
     return {"catalog": catalog, "item": item}
 
 @app.delete("/api/prompt-catalog/generation-prompts/{item_id}")
 async def delete_generation_prompt(item_id: str):
+    if prompt_catalog_builtin_item("generation_prompts", item_id):
+        raise HTTPException(status_code=400, detail="系统内置生成提示词不能删除，可以编辑或恢复默认")
     with PROMPT_CATALOG_LOCK:
         catalog = load_prompt_catalog_data()
         items = catalog.get("generation_prompts") or []
@@ -16252,12 +16290,14 @@ async def delete_generation_prompt(item_id: str):
         if len(kept) == len(items):
             raise HTTPException(status_code=404, detail="生成提示词不存在")
         catalog["generation_prompts"] = kept
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "removed": 1}
 
 @app.post("/api/prompt-catalog/generation-prompts/delete")
 async def batch_delete_generation_prompts(payload: PromptCatalogBatchDeleteRequest):
     ids = {str(item) for item in (payload.ids or []) if str(item)}
+    if any(prompt_catalog_builtin_item("generation_prompts", item_id) for item_id in ids):
+        raise HTTPException(status_code=400, detail="所选内容包含不能删除的系统内置生成提示词")
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择生成提示词")
     with PROMPT_CATALOG_LOCK:
@@ -16266,7 +16306,7 @@ async def batch_delete_generation_prompts(payload: PromptCatalogBatchDeleteReque
         kept = [item for item in items if item.get("id") not in ids]
         removed = len(items) - len(kept)
         catalog["generation_prompts"] = kept
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "removed": removed}
 
 @app.post("/api/prompt-catalog/system-instructions")
@@ -16283,7 +16323,7 @@ async def create_system_instruction(payload: SystemInstructionRequest):
     with PROMPT_CATALOG_LOCK:
         catalog = load_prompt_catalog_data()
         catalog["system_instructions"].insert(0, item)
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "item": item}
 
 @app.patch("/api/prompt-catalog/system-instructions/{item_id}")
@@ -16304,11 +16344,21 @@ async def update_system_instruction(item_id: str, payload: SystemInstructionRequ
             raise prompt_catalog_validation_error(error)
         items[index] = item
         catalog["system_instructions"] = items
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
+    return {"catalog": catalog, "item": item}
+
+@app.post("/api/prompt-catalog/system-instructions/{item_id}/reset")
+async def reset_system_instruction(item_id: str):
+    with PROMPT_CATALOG_LOCK:
+        catalog, item = reset_prompt_catalog_builtin_item(
+            load_prompt_catalog_data(), "system_instructions", item_id
+        )
     return {"catalog": catalog, "item": item}
 
 @app.delete("/api/prompt-catalog/system-instructions/{item_id}")
 async def delete_system_instruction(item_id: str):
+    if prompt_catalog_builtin_item("system_instructions", item_id):
+        raise HTTPException(status_code=400, detail="系统内置指令不能删除，可以编辑或恢复默认")
     with PROMPT_CATALOG_LOCK:
         catalog = load_prompt_catalog_data()
         items = catalog.get("system_instructions") or []
@@ -16316,12 +16366,14 @@ async def delete_system_instruction(item_id: str):
         if len(kept) == len(items):
             raise HTTPException(status_code=404, detail="系统指令不存在")
         catalog["system_instructions"] = kept
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "removed": 1}
 
 @app.post("/api/prompt-catalog/system-instructions/delete")
 async def batch_delete_system_instructions(payload: PromptCatalogBatchDeleteRequest):
     ids = {str(item) for item in (payload.ids or []) if str(item)}
+    if any(prompt_catalog_builtin_item("system_instructions", item_id) for item_id in ids):
+        raise HTTPException(status_code=400, detail="所选内容包含不能删除的系统内置指令")
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择系统指令")
     with PROMPT_CATALOG_LOCK:
@@ -16330,7 +16382,7 @@ async def batch_delete_system_instructions(payload: PromptCatalogBatchDeleteRequ
         kept = [item for item in items if item.get("id") not in ids]
         removed = len(items) - len(kept)
         catalog["system_instructions"] = kept
-        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+        catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "removed": removed}
 
 @app.post("/api/asset-library/libraries")

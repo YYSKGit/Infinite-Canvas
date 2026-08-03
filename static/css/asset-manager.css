@@ -251,7 +251,7 @@ body.theme-dark .asset-card.active,body.theme-dark .prompt-row.active { border-c
 .prompt-card-cover > svg { width:28px; height:28px; stroke-width:1.7; }
 .prompt-card-cover .prompt-tag { position:absolute; right:8px; top:8px; max-width:calc(100% - 16px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .asset-content.manage-on .prompt-card-cover .prompt-tag { max-width:calc(100% - 42px); }
-.prompt-row-main { min-width:0; min-height:63px; height:63px; padding:7px 9px; display:flex; flex-direction:column; gap:4px; }
+.prompt-row-main { min-width:0; min-height:70px; height:70px; padding:7px 9px; display:flex; flex-direction:column; gap:4px; }
 .prompt-row-title { display:flex; align-items:center; gap:7px; min-width:0; }
 .prompt-row-title strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:1.2; font-weight:900; }
 .prompt-tag { flex:0 0 auto; height:20px; border-radius:999px; padding:0 8px; display:inline-flex; align-items:center; background:var(--soft-2); color:var(--muted); font-size:9.5px; font-weight:900; }
@@ -307,8 +307,6 @@ body.theme-dark .asset-card.active,body.theme-dark .prompt-row.active { border-c
 .canvas-asset-tree .tree-child { grid-template-columns:14px 16px minmax(0,1fr) auto; }
 .selection-marquee { position:absolute; z-index:20; border:1px solid rgba(59,130,246,.65); background:rgba(59,130,246,.12); border-radius:6px; pointer-events:none; }
 .inline-edit-form { display:flex; flex-direction:column; gap:10px; }
-.prompt-builtin-notice { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; background:var(--soft); color:var(--muted); font-size:10.5px; font-weight:700; line-height:1.45; }
-.prompt-builtin-notice svg { flex:0 0 auto; width:14px; height:14px; margin-top:1px; }
 .prompt-create-kind { padding-bottom:10px; border-bottom:1px solid var(--line); }
 .inline-edit-field { display:flex; flex-direction:column; gap:6px; }
 .inline-edit-field > span { color:var(--faint); font-size:10px; font-weight:900; }

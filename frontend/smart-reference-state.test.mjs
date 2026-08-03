@@ -77,6 +77,72 @@ function loadProductionFunctions(names, context={}){
     return {sandbox, ...sandbox.__functions};
 }
 
+test('generation mode support ignores stale API video state for RunningHub', () => {
+    const {generationModeSupported} = loadProductionFunctions(['generationModeSupported'], {
+        settings:{},
+        apiProviderById:id => id === 'venice-by-protocol' ? {protocol:'venice'} : null,
+        isVeniceProviderId:id => id === 'venice'
+    });
+
+    assert.equal(generationModeSupported({engine:'runninghub', apiKind:'video'}), true);
+    assert.equal(generationModeSupported({engine:'api', apiKind:'video', provider_id:'venice'}), false);
+    assert.equal(generationModeSupported({engine:'api', apiKind:'image', provider_id:'venice-by-protocol'}), true);
+    assert.equal(generationModeSupported({engine:'comfy', apiKind:'image', provider_id:'venice'}), false);
+});
+
+test('unsupported settings clear saved generation mode state', () => {
+    const {generationModeSupported, clearUnsupportedGenerationMode} = loadProductionFunctions([
+        'generationModeSupported',
+        'clearUnsupportedGenerationMode'
+    ], {
+        settings:{},
+        apiProviderById:() => null,
+        isVeniceProviderId:id => id === 'venice'
+    });
+    const unsupportedNode = {generationPromptId:'character-sheet', generationPromptSnapshot:{id:'character-sheet'}};
+    assert.equal(clearUnsupportedGenerationMode(unsupportedNode, {engine:'modelscope', apiKind:'image'}), true);
+    assert.equal('generationPromptId' in unsupportedNode, false);
+    assert.equal('generationPromptSnapshot' in unsupportedNode, false);
+
+    const runningHubNode = {generationPromptId:'character-sheet', generationPromptSnapshot:{id:'character-sheet'}};
+    assert.equal(clearUnsupportedGenerationMode(runningHubNode, {engine:'runninghub', apiKind:'video'}), false);
+    assert.equal(runningHubNode.generationPromptId, 'character-sheet');
+});
+
+test('buildPromptRequest compiles generation mode only for supported request settings', () => {
+    let compileCalls = 0;
+    const {buildPromptRequest} = loadProductionFunctions(['buildPromptRequest'], {
+        collectPromptParts:() => [{type:'text', text:'plain prompt'}],
+        originalPromptTextFromParts:() => 'plain prompt',
+        blockedInputRefKeys:() => new Set(),
+        defaultReferenceImagesFor:() => [],
+        uniqueReferenceImages:refs => refs,
+        inputRefKey:() => '',
+        promptReferenceKind:() => 'image',
+        promptMentionTokenLabel:(kind, index) => `${kind}${index}`,
+        venicePromptReferenceLabel:(kind, index) => `@${kind}${index}`,
+        isSmartGroupNode:() => false,
+        textForNode:() => '',
+        inputPromptTextFor:() => '',
+        smartGenerationRequestRef:ref => ref,
+        generationModeSupported:sourceSettings => sourceSettings.engine === 'runninghub',
+        compileGenerationModePrompt:(_node, prompt) => {
+            compileCalls++;
+            return `compiled:${prompt}`;
+        },
+        settings:{engine:'api'},
+        SMART_REFERENCE_IMAGE_MAX:10
+    });
+
+    const unsupported = buildPromptRequest({id:'target'}, [], false, null, {engine:'comfy', apiKind:'image'});
+    assert.equal(unsupported.prompt, 'plain prompt');
+    assert.equal(compileCalls, 0);
+
+    const runningHub = buildPromptRequest({id:'target'}, [], false, null, {engine:'runninghub', apiKind:'video'});
+    assert.equal(runningHub.prompt, 'compiled:plain prompt');
+    assert.equal(compileCalls, 2);
+});
+
 test('Venice image edits and single-slot RunningHub workflows fan out input images', () => {
     const imageRefs = [
         {url:'/a.png', kind:'image'},
@@ -222,6 +288,7 @@ test('buildPromptRequest preserves upstream provenance in the refs saved for rer
         textForNode:() => '',
         inputPromptTextFor:() => '',
         mediaKindForItem:ref => ref.kind || 'image',
+        generationModeSupported:() => false,
         settings:{engine:'api'},
         SMART_REFERENCE_IMAGE_MAX:10
     });

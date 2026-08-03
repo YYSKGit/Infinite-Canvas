@@ -39,3 +39,12 @@ test('legacy prompt-library backend and markdown parser are removed', () => {
   assert.doesNotMatch(backendSource, /parse_prompt_template_markdown/);
   assert.doesNotMatch(backendSource, /PromptLibrary(?:Request|ItemRequest|CategoryRequest|BatchDeleteRequest)/);
 });
+
+test('prompt catalog derives built-ins server-side and protects both resource types', () => {
+  assert.match(backendSource, /mark_prompt_catalog_builtins/);
+  assert.match(backendSource, /generation-prompts\/\{item_id\}\/reset/);
+  assert.match(backendSource, /system-instructions\/\{item_id\}\/reset/);
+  assert.match(backendSource, /prompt_catalog_builtin_item\("generation_prompts", item_id\)/);
+  assert.match(backendSource, /prompt_catalog_builtin_item\("system_instructions", item_id\)/);
+  assert.doesNotMatch(backendSource, /def find_prompt_library\(/);
+});

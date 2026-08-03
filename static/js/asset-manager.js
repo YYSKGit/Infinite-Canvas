@@ -1325,7 +1325,10 @@ function normalizePromptState(){
     const items = currentPromptItems();
     if(selectedPromptId && !items.some(item => item.id === selectedPromptId)) selectedPromptId = '';
     if(!selectedPromptId && items.length) selectedPromptId = items[0].id;
-    selectedPromptIds = new Set([...selectedPromptIds].filter(id => Boolean(findPromptItem(id))));
+    selectedPromptIds = new Set([...selectedPromptIds].filter(id => {
+        const item = findPromptItem(id);
+        return item && !item.builtin;
+    }));
 }
 function normalizeCanvasAssetState(){
     const cats = canvasAssetCategories();
@@ -2476,7 +2479,7 @@ function promptManagerMarkup(){
             <div class="manage-tools">
                 <span data-prompt-selection-summary>已选择 ${selectedPromptIds.size} 条内容，支持拖拽框选或逐个勾选。</span>
                 <div class="asset-tools">
-                    <button class="asset-btn" type="button" data-prompt-select-all ${items.length && !readonly ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
+                    <button class="asset-btn" type="button" data-prompt-select-all ${items.some(item => !item.builtin) && !readonly ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
                     <button class="asset-btn" type="button" data-prompt-clear-selection ${selectedPromptIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
                     <button class="asset-btn danger ${pendingBatchDelete === 'prompt' ? 'detail-confirm' : ''}" type="button" data-prompt-delete-selected ${readonly || !selectedPromptIds.size ? 'disabled' : ''}><i data-lucide="trash-2"></i><span>${pendingBatchDelete === 'prompt' ? '确认删除' : '删除所选'}</span></button>
                 </div>
@@ -2602,13 +2605,13 @@ function renderPromptTreeBranch(lib){
 function renderPromptRow(item, readonly){
     const assistant = item?.kind === 'system_instruction';
     return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}">
-        <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly ? 'disabled' : ''}>
+        <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly || item.builtin ? 'disabled' : ''}>
         <div class="prompt-card-cover">
             <i data-lucide="${assistant ? 'bot' : (item.icon || 'sparkles')}"></i>
             <span class="prompt-tag">${escapeHtml(assistant ? '系统指令' : promptCategoryLabel(item.category))}</span>
         </div>
         <div class="prompt-row-main">
-            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong></div>
+            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong>${item.builtin ? '<span class="prompt-tag prompt-tag-builtin">内置</span>' : ''}</div>
             <div class="prompt-row-scene">${escapeHtml(item.description || '未填写用途说明')}</div>
         </div>
     </article>`;
@@ -2661,8 +2664,9 @@ function renderPromptDetail(item, readonly){
         const assistant = item.kind === 'system_instruction';
         return `
             <div class="panel-head">
-                <div class="panel-title"><strong>${assistant ? '编辑系统指令' : '编辑生成提示词'}</strong><span>保存到当前目录</span></div>
+                <div class="panel-title"><strong>${assistant ? '编辑系统指令' : '编辑生成提示词'}</strong><span>${item.builtin ? '系统内置 · 保存后覆盖本地配置' : '保存到当前目录'}</span></div>
                 <div class="panel-actions">
+                    ${item.builtin ? `<button class="asset-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复项目内置的默认内容"><i data-lucide="rotate-ccw"></i><span>恢复默认</span></button>` : ''}
                     <button class="asset-btn primary" type="button" data-prompt-edit-save="${escapeAttr(item.id)}"><i data-lucide="check"></i><span>保存</span></button>
                     <button class="asset-icon-btn" type="button" data-prompt-edit-cancel title="取消"><i data-lucide="x"></i></button>
                 </div>
@@ -2678,8 +2682,9 @@ function renderPromptDetail(item, readonly){
         <div class="panel-head">
             <div class="panel-title"><strong>系统指令预览</strong><span>发送给提示词助手的完整模板</span></div>
             <div class="panel-actions">
+                ${item.builtin ? `<button class="asset-icon-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复默认"><i data-lucide="rotate-ccw"></i></button>` : ''}
                 <button class="asset-icon-btn" type="button" data-prompt-edit-start="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="编辑"><i data-lucide="pencil"></i></button>
-                <button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
+                ${item.builtin ? '' : `<button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>`}
             </div>
         </div>
         <div class="detail-scroll">
@@ -2696,8 +2701,9 @@ function renderPromptDetail(item, readonly){
         <div class="panel-head">
             <div class="panel-title"><strong>生成提示词预览</strong><span>${escapeHtml(promptCategoryLabel(item.category))}</span></div>
             <div class="panel-actions">
+                ${item.builtin ? `<button class="asset-icon-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复默认"><i data-lucide="rotate-ccw"></i></button>` : ''}
                 <button class="asset-icon-btn" type="button" data-prompt-edit-start="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="编辑"><i data-lucide="pencil"></i></button>
-                <button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
+                ${item.builtin ? '' : `<button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>`}
             </div>
         </div>
         <div class="detail-scroll">
@@ -3416,7 +3422,7 @@ async function handleClick(event){
             event.stopPropagation();
             const id = promptCheck?.dataset.promptCheck || promptRow?.dataset.promptRow || '';
             if(findPromptItem(id)?.builtin){
-                setStatus('内置助手指令不能删除，可以编辑或恢复默认');
+                setStatus('系统内置内容不能删除，可以编辑或恢复默认');
                 return;
             }
             const selected = toggleSelectionSet(selectedPromptIds, id);
@@ -3874,11 +3880,13 @@ async function handleClick(event){
         updatePromptManageState();
         return;
     }
-    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; updatePromptManageState(); return; }
+    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().filter(item => !item.builtin).forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; updatePromptManageState(); return; }
     if(target.closest?.('[data-prompt-clear-selection]')){ selectedPromptIds.clear(); pendingBatchDelete = ''; updatePromptManageState(); return; }
     const promptDelete = target.closest?.('[data-prompt-delete]');
     if(promptDelete){ await deletePromptItem(promptDelete.dataset.promptDelete || ''); return; }
     if(target.closest?.('[data-prompt-delete-selected]')){ await deleteSelectedPrompts(); return; }
+    const promptReset = target.closest?.('[data-prompt-reset]');
+    if(promptReset){ await resetPromptItem(promptReset.dataset.promptReset || ''); return; }
     const promptNewBtn = target.closest?.('[data-prompt-new]');
     if(promptNewBtn){
         const libId = promptNewBtn.dataset.libId || target.closest('[data-prompt-resource]')?.dataset.promptResource;
@@ -4601,6 +4609,7 @@ async function savePromptEdit(id){
 async function deletePromptItem(id){
     const item = findPromptItem(id);
     if(!item) return;
+    if(item.builtin){ setStatus('系统内置内容不能删除，可以编辑或恢复默认'); return; }
     if(pendingDeletePromptId !== id){
         pendingDeletePromptId = id;
         renderPromptSelectionOnly();
@@ -4614,6 +4623,19 @@ async function deletePromptItem(id){
     pendingDeletePromptId = '';
     renderPromptDataSections();
     setStatus(activePromptResourceId === 'system' ? '系统指令已删除' : '生成提示词已删除');
+}
+async function resetPromptItem(id){
+    const item = findPromptItem(id);
+    if(!item?.builtin) return;
+    if(!window.confirm(`将系统内置内容「${item.name || '提示词'}」恢复为项目默认内容？`)) return;
+    const data = await apiJson(`/api/prompt-catalog/${promptCatalogResource()}/${encodeURIComponent(id)}/reset`, {method:'POST'});
+    applyPromptCatalogResponse(data);
+    selectedPromptId = id;
+    promptEditMode = false;
+    promptCreateMode = false;
+    pendingDeletePromptId = '';
+    renderPromptRowAndDetail(id);
+    setStatus('系统内置内容已恢复默认');
 }
 async function deleteSelectedPrompts(){
     if(!selectedPromptIds.size) return;
