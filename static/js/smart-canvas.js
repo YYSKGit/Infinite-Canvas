@@ -97,23 +97,9 @@ const assetDialogInput = document.getElementById('assetDialogInput');
 const assetDialogCancel = document.getElementById('assetDialogCancel');
 const assetDialogOk = document.getElementById('assetDialogOk');
 const assetHoverPreview = document.getElementById('assetHoverPreview');
-const promptPresetPanel = document.getElementById('promptPresetPanel');
-const promptPresetClose = document.getElementById('promptPresetClose');
-const promptPresetStatus = document.getElementById('promptPresetStatus');
-const promptPresetSelect = document.getElementById('promptPresetSelect');
-const promptPresetName = document.getElementById('promptPresetName');
-const promptPresetText = document.getElementById('promptPresetText');
-const promptPresetApply = document.getElementById('promptPresetApply');
-const promptPresetDelete = document.getElementById('promptPresetDelete');
-const promptPresetNew = document.getElementById('promptPresetNew');
-const promptPresetSave = document.getElementById('promptPresetSave');
-const promptTemplatePanel = document.getElementById('promptTemplatePanel');
-const promptTemplateClose = document.getElementById('promptTemplateClose');
-const promptTemplateSearch = document.getElementById('promptTemplateSearch');
-const promptTemplateLibrarySelect = document.getElementById('promptTemplateLibrarySelect');
-const promptTemplateCats = document.getElementById('promptTemplateCats');
-const promptTemplateBody = document.getElementById('promptTemplateBody');
-const composerTemplateBtn = document.getElementById('composerTemplateBtn');
+const generationModeControl = document.getElementById('generationModeControl');
+const generationModeBtn = document.getElementById('generationModeBtn');
+const generationModePanel = document.getElementById('generationModePanel');
 const composerExpandBtn = document.getElementById('composerExpandBtn');
 const promptAssistantBtn = document.getElementById('promptAssistantBtn');
 const composerWorkspace = document.getElementById('composerWorkspace');
@@ -214,22 +200,10 @@ let assetReorderScrollFrame = 0;
 let assetDragPreview = null;
 let activeAssetSmartClassId = '';
 const ASSET_SMART_CATEGORY_PREFIX = '__smart_class__::';
-const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
-const PROMPT_TEMPLATE_GROUPS_KEY = 'smart_canvas_prompt_template_groups_v1';
-const PROMPT_TEMPLATE_OVERRIDES_KEY = 'smart_canvas_prompt_template_overrides_v1';
 const PROMPT_NODE_LLM_SETTINGS_KEY = 'smart_canvas_prompt_node_llm_settings_v1';
 const PROMPT_ASSISTANT_SETTINGS_KEY = 'smart_canvas_prompt_assistant_settings_v1';
-let promptPresets = [];
-let builtinPromptTemplates = [];
-let promptLibraries = [];
-let activePromptLibraryId = 'system';
-let promptTemplateGroups = [];
-let promptTemplateOverrides = {hiddenBuiltinIds:[], editedBuiltins:{}};
-let promptTemplateCategory = 'all';
-let promptTemplateSelectedId = '';
-let promptTemplateEditing = false;
-let promptTemplateGroupEditMode = false;
-let promptPresetDeleteArmed = false;
+let generationPromptCatalog = [];
+let systemInstructionCatalog = [];
 let createMenuPoint = {x:0, y:0};
 let createMenuGroupId = '';
 let nodeClipboard = null;
@@ -6711,7 +6685,7 @@ function videoSettingsHasKeyboardFocus(ctrl){
 }
 function videoSettingsShouldBeOpen(ctrl){
     return Boolean(ctrl && (
-        ctrl.matches(':hover')
+        (ctrl.matches(':hover') && ctrl.classList.contains('hover-armed'))
         || ctrl.classList.contains('pinned')
         || ctrl.classList.contains('interacting')
         || videoSettingsHasKeyboardFocus(ctrl)
@@ -6879,6 +6853,7 @@ function renderDynamicParams(){
     restoreDynamicParamsScroll(scrollState);
     updatePromptPlaceholder();
     persistActiveSmartSettings();
+    renderGenerationModeControl();
     if(window.lucide) lucide.createIcons();
 }
 function renderApiParams(){
@@ -7491,7 +7466,7 @@ function rhFieldRole(field){
     const kind = rhFieldKind(field);
     if(['image','video','audio','number','slider','boolean'].includes(kind)) return kind;
     const text = `${field?.fieldName || ''} ${field?.label || ''} ${field?.group || ''}`.toLowerCase();
-    if(/prompt|positive|negative|text|caption|description|关键词|提示词|正向|负向/.test(text)) return 'prompt';
+    if(/prompt|positive|text|caption|description|关键词|提示词|正向/.test(text)) return 'prompt';
     return 'text';
 }
 function rhExtractFieldOptions(field){
@@ -8050,6 +8025,13 @@ function closeAllSmartPopovers(){
         c.classList.remove('pinned', 'interacting');
         if(c.classList.contains('video-settings-control')) closeVideoSettingsControl(c);
     });
+    disarmDynamicParamHover();
+}
+function disarmDynamicParamHover(){
+    dynamicParams?.querySelectorAll('.smart-control.hover-armed').forEach(ctrl => {
+        ctrl.classList.remove('hover-armed');
+        if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+    });
 }
 // 悬浮打开弹层后点了里面的参数：标记 interacting，让它熬过重渲染不收起；鼠标真正离开该控件时才关闭。
 function markControlInteracting(el){
@@ -8169,14 +8151,24 @@ function bindDynamicParams(){
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
-            ctrl.classList.remove('interacting');
+            ctrl.classList.remove('interacting', 'hover-armed');
             if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
         };
         ctrl.onmouseenter = () => {
+            if(ctrl.classList.contains('hover-armed')){
+                if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+                revealCurrentPickerOption(ctrl);
+            }
+        };
+        ctrl.onpointermove = event => {
+            if((event.pointerType && event.pointerType !== 'mouse') || event.buttons) return;
+            if(!ctrl.classList.contains('hover-armed')) ctrl.classList.add('hover-armed');
             if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
             revealCurrentPickerOption(ctrl);
         };
-        ctrl.onmouseover = () => revealCurrentPickerOption(ctrl);
+        ctrl.onmouseover = () => {
+            if(ctrl.classList.contains('hover-armed')) revealCurrentPickerOption(ctrl);
+        };
         ctrl.onfocusin = () => {
             revealCurrentPickerOption(ctrl);
             if(ctrl.classList.contains('video-settings-control')){
@@ -8545,680 +8537,177 @@ async function refreshSmartConfigFromSettings(){
         render();
     }
 }
-function loadPromptPresets(){
+async function loadGenerationPromptCatalog(){
     try {
-        const list = JSON.parse(localStorage.getItem(PROMPT_PRESETS_KEY) || '[]');
-        promptPresets = Array.isArray(list) ? list.filter(p => p?.id && typeof p.text === 'string') : [];
-    } catch(e) {
-        promptPresets = [];
-    }
-}
-function savePromptPresets(){
-    localStorage.setItem(PROMPT_PRESETS_KEY, JSON.stringify(promptPresets));
-}
-function defaultPromptTemplateGroups(){
-    return [
-        {id:'view', name:tr('smart.tplCatView')},
-        {id:'storyboard', name:tr('smart.tplCatStoryboard')},
-        {id:'character', name:tr('smart.tplCatCharacter')},
-        {id:'product', name:tr('smart.tplCatProduct')},
-        {id:'lighting', name:tr('smart.tplCatLighting')},
-        {id:'mine', name:tr('smart.tplCatMine')}
-    ];
-}
-function loadPromptTemplateGroups(){
-    try {
-        const list = JSON.parse(localStorage.getItem(PROMPT_TEMPLATE_GROUPS_KEY) || '[]');
-        const valid = Array.isArray(list) ? list.filter(g => g?.id && g?.name) : [];
-        const defaults = defaultPromptTemplateGroups();
-        promptTemplateGroups = defaults.map(group => valid.find(g => g.id === group.id) || group);
-        valid.filter(g => !promptTemplateGroups.some(x => x.id === g.id)).forEach(g => promptTemplateGroups.push(g));
-    } catch(e) {
-        promptTemplateGroups = defaultPromptTemplateGroups();
-    }
-}
-function savePromptTemplateGroups(){
-    localStorage.setItem(PROMPT_TEMPLATE_GROUPS_KEY, JSON.stringify(promptTemplateGroups));
-}
-function loadPromptTemplateOverrides(){
-    try {
-        const data = JSON.parse(localStorage.getItem(PROMPT_TEMPLATE_OVERRIDES_KEY) || '{}');
-        promptTemplateOverrides = {
-            hiddenBuiltinIds:Array.isArray(data.hiddenBuiltinIds) ? data.hiddenBuiltinIds : [],
-            editedBuiltins:data.editedBuiltins && typeof data.editedBuiltins === 'object' ? data.editedBuiltins : {}
-        };
-    } catch(e) {
-        promptTemplateOverrides = {hiddenBuiltinIds:[], editedBuiltins:{}};
-    }
-}
-function savePromptTemplateOverrides(){
-    localStorage.setItem(PROMPT_TEMPLATE_OVERRIDES_KEY, JSON.stringify(promptTemplateOverrides));
-}
-async function loadPromptTemplates(){
-    try {
-        const data = await fetch('/api/prompt-libraries').then(r => r.ok ? r.json() : {library:{libraries:[]}});
-        promptLibraries = Array.isArray(data.library?.libraries) ? data.library.libraries : [];
-        if(!promptLibraries.length) {
-            const fallback = await fetch('/api/smart-canvas/prompt-templates').then(r => r.ok ? r.json() : {templates:[]});
-            builtinPromptTemplates = Array.isArray(fallback.templates) ? fallback.templates.filter(t => t?.id && t?.positive) : [];
-            promptLibraries = [{id:'system', name:'系统提示词库', readonly:true, items:builtinPromptTemplates}];
-        } else {
-            const system = promptLibraries.find(lib => lib.id === 'system') || promptLibraries[0];
-            builtinPromptTemplates = Array.isArray(system?.items) ? system.items.filter(t => t?.id && t?.positive) : [];
-        }
-        if(!promptLibraries.some(lib => lib.id === activePromptLibraryId)) activePromptLibraryId = promptLibraries[0]?.id || 'system';
-        renderPromptLibrarySelect();
+        const data = await fetch('/api/prompt-catalog').then(response => response.ok ? response.json() : null);
+        generationPromptCatalog = Array.isArray(data?.catalog?.generation_prompts) ? data.catalog.generation_prompts : [];
+        systemInstructionCatalog = Array.isArray(data?.catalog?.system_instructions) ? data.catalog.system_instructions : [];
         if(promptAssistantOpen) renderPromptAssistantControls();
     } catch(e) {
-        builtinPromptTemplates = [];
-        promptLibraries = [];
+        generationPromptCatalog = [];
+        systemInstructionCatalog = [];
     }
 }
-function activePromptLibrary(){
-    return promptLibraries.find(lib => lib.id === activePromptLibraryId) || promptLibraries[0] || {id:'system', name:'系统提示词库', readonly:true, items:builtinPromptTemplates};
+function generationPromptSnapshot(item){
+    return window.GenerationPromptModel?.generationPromptSnapshot?.(item) || null;
 }
-function renderPromptLibrarySelect(){
-    if(!promptTemplateLibrarySelect) return;
-    promptTemplateLibrarySelect.innerHTML = promptLibraries.map(lib => `<option value="${escapeAttr(lib.id)}" ${lib.id === activePromptLibraryId ? 'selected' : ''}>${escapeHtml(lib.name || '提示词库')}</option>`).join('');
+function generationPromptModeForNode(node){
+    const stored = generationPromptSnapshot(node?.generationPromptSnapshot);
+    if(stored) return stored;
+    const id = String(node?.generationPromptId || '').trim();
+    return id ? generationPromptSnapshot(generationPromptCatalog.find(item => String(item?.id || '') === id)) : null;
 }
-function promptTemplateItems(){
-    const activeLibrary = activePromptLibrary();
-    if(activeLibrary.id !== 'system'){
-        return (activeLibrary.items || []).filter(t => t?.id && t?.positive && t.kind !== 'assistant_recipe').map(t => ({
-            ...t,
-            sourceId:t.id,
-            builtin:false,
-            remote:true,
-            libraryId:activeLibrary.id
-        }));
-    }
-    // 系统库的条目同样走后端（/api/prompt-libraries），与素材库管理共用一套数据。
-    // 这样画布里修改/删除系统提示词会实时同步，不再依赖各端不互通的 localStorage 覆盖。
-    // 仍保留 builtin:true 用于“内置”标签与完整提示词（含负向/参数）的展示。
-    const source = Array.isArray(activeLibrary.items) && activeLibrary.items.length ? activeLibrary.items : builtinPromptTemplates;
-    const builtins = source
-        .filter(t => t?.id && t?.positive && t.kind !== 'assistant_recipe')
-        .map(t => ({...t, sourceId:t.id, builtin:true, remote:true, libraryId:'system'}));
-    const mine = promptPresets.map(p => ({
-        id:`mine:${p.id}`,
-        sourceId:p.id,
-        name:p.name || tr('smart.promptPresetUnnamed'),
-        // 系统库分组以后端为准（custom=“我的”），本地旧预设归到 custom 分组下展示，避免无对应标签。
-        category:(p.category && p.category !== 'mine') ? p.category : 'custom',
-        scene:'我的提示词预设',
-        positive:p.text || '',
-        negative:'',
-        params:{},
-        builtin:false
-    }));
-    return [...builtins, ...mine];
-}
-function promptTemplateText(template, mode='positive'){
-    const positive = String(template?.positive || '').trim();
-    if(mode === 'positive' || !template?.builtin) return positive;
-    const negative = String(template?.negative || '').trim();
-    const params = Object.entries(template?.params || {})
-        .map(([key, value]) => `${key}: ${value}`)
-        .join('\n');
-    return [positive, negative ? `Negative prompt:\n${negative}` : '', params ? `Params:\n${params}` : ''].filter(Boolean).join('\n\n');
-}
-function promptTemplateName(template){
-    if(window.StudioI18n?.lang?.() === 'en' && template?.name_en) return template.name_en;
-    return template?.name || '';
-}
-function promptTemplateScene(template){
-    if(window.StudioI18n?.lang?.() === 'en' && template?.scene_en) return template.scene_en;
-    return template?.scene || '';
-}
-function promptTemplateSearchText(template){
-    return [
-        template?.name,
-        template?.name_en,
-        template?.scene,
-        template?.scene_en,
-        template?.positive,
-        template?.negative
-    ].join(' ').toLowerCase();
-}
-function activePromptTemplateGroups(){
-    const lib = activePromptLibrary();
-    // 系统库的分组也以后端 categories 为准，与素材库管理共用同一份分组数据（可重命名/删除并同步）。
-    const fromLib = Array.isArray(lib?.categories) ? lib.categories.filter(c => c?.id && c?.name && c.id !== 'assistant') : [];
-    if(fromLib.length) return fromLib;
-    if(!lib || lib.id === 'system') return promptTemplateGroups;
-    return [];
-}
-function promptTemplateCategoryLabel(category){
-    if(category === 'all') return tr('smart.tplAll');
-    // 分组名优先以后端 categories 为准（含内置分组重命名），保证两端显示一致。
-    const fromGroups = activePromptTemplateGroups().find(g => g.id === category)?.name;
-    if(fromGroups) return fromGroups;
-    const builtin = {
-        view:tr('smart.tplCatView'),
-        storyboard:tr('smart.tplCatStoryboard'),
-        character:tr('smart.tplCatCharacter'),
-        product:tr('smart.tplCatProduct'),
-        lighting:tr('smart.tplCatLighting'),
-        custom:tr('smart.tplCatMine'),
-        mine:tr('smart.tplCatMine')
-    };
-    return builtin[category] || promptTemplateGroups.find(g => g.id === category)?.name || category;
-}
-function promptTemplateSelectedItem(){
-    return promptTemplateItems().find(item => item.id === promptTemplateSelectedId) || promptTemplateItems()[0] || null;
-}
-function currentPromptPreset(id){
-    return promptPresets.find(p => p.id === id) || null;
-}
-function defaultPromptPresetName(text){
-    return (String(text || '').trim().split(/\r?\n/)[0] || tr('smart.promptPresetDefault')).slice(0, 28);
-}
-function promptPresetPanelNode(){
-    return nodes.find(n => n.id === promptPresetPanel?.dataset.nodeId) || null;
-}
-function setPromptPresetStatus(text='', tone=''){
-    if(!promptPresetStatus) return;
-    promptPresetStatus.textContent = text;
-    promptPresetStatus.classList.toggle('warn', tone === 'warn');
-    promptPresetStatus.classList.toggle('ok', tone === 'ok');
-}
-function resetPromptPresetDeleteState(){
-    promptPresetDeleteArmed = false;
-    if(promptPresetDelete){
-        promptPresetDelete.textContent = tr('common.delete');
-        promptPresetDelete.classList.remove('confirm-danger');
+function compileGenerationModePrompt(node, prompt){
+    const mode = generationPromptModeForNode(node);
+    if(!mode) return String(prompt || '').trim();
+    try {
+        return window.GenerationPromptModel.compileGenerationPromptSnapshot(mode, prompt);
+    } catch(e) {
+        console.warn('Generation prompt mode skipped:', e);
+        return String(prompt || '').trim();
     }
 }
-function createPromptPresetFromNode(node, {openPanel=true, openTemplatePanel=false}={}){
-    const text = String(node?.text || '').trim();
-    if(!text){ toast(tr('smart.promptPresetEmpty')); return null; }
-    const preset = {id:uid('preset'), name:defaultPromptPresetName(text), text, createdAt:Date.now(), updatedAt:Date.now()};
-    promptPresets.unshift(preset);
-    savePromptPresets();
-    if(node) node.promptPresetId = preset.id;
-    render();
-    scheduleSave();
-    if(openPanel) openPromptPresetPanel(node?.id || '', preset.id, {status:tr('smart.promptPresetSavedNew'), tone:'ok'});
-    if(openTemplatePanel) {
-        promptTemplateCategory = 'mine';
-        promptTemplateSelectedId = `mine:${preset.id}`;
-        promptTemplateEditing = true;
-        openPromptTemplatePanel(node?.id || '', promptTemplateSelectedId);
+function generationModeSupported(sourceSettings=settings){
+    sourceSettings = sourceSettings || settings;
+    if(sourceSettings.apiKind === 'video') return false;
+    if(sourceSettings.engine === 'runninghub') return true;
+    if(sourceSettings.engine !== 'api') return false;
+    const provider = apiProviderById(sourceSettings.provider_id || '');
+    return String(provider?.protocol || '').trim().toLowerCase() === 'venice'
+        || isVeniceProviderId(sourceSettings.provider_id || '');
+}
+function generationModeIcon(name){
+    const allowed = new Set(['grid-3x3','grid-2x2','scan-face','panels-top-left','layout-grid','sun-medium','user-round','smile','gallery-horizontal-end']);
+    return allowed.has(String(name || '')) ? String(name) : 'blocks';
+}
+function generationModeRhFieldValue(field, recommendation, kind){
+    const raw = String(recommendation || '').trim();
+    if(!raw) return '';
+    const options = rhExtractFieldOptions(field) || [];
+    const normalized = value => String(value || '').trim().toLowerCase().replace(/[×x]/g, 'x').replace(/\s+/g, '');
+    const aliases = kind === 'ratio'
+        ? [raw, raw.replace(':', 'x'), raw.replace(':', '/')]
+        : [raw, raw.toLowerCase(), raw.replace('×', 'x')];
+    if(options.length){
+        return options.find(option => aliases.some(alias => normalized(option) === normalized(alias))) || '';
     }
-    return preset;
+    return raw;
 }
-function createPromptPresetFromComposer(){
-    const text = promptPlainText();
-    if(!text){ toast(tr('smart.promptPresetEmpty')); return null; }
-    const preset = {id:uid('preset'), name:defaultPromptPresetName(text), text, category:'mine', createdAt:Date.now(), updatedAt:Date.now()};
-    promptPresets.unshift(preset);
-    savePromptPresets();
-    savePromptDraftForCurrent();
-    scheduleSave();
-    return preset;
+function applyGenerationModeRhRecommendations(sourceSettings, snapshot){
+    const next = cloneSmartSettings(sourceSettings || {});
+    next.rhParams = next.rhParams || {};
+    rhActiveFields(next).forEach(field => {
+        const descriptor = `${field?.fieldName || ''} ${field?.label || ''} ${field?.group || ''}`.toLowerCase();
+        const kind = /aspect|ratio|宽高比|画幅比例|比例/.test(descriptor)
+            ? 'ratio'
+            : (/resolution|image.?size|output.?size|分辨率|输出尺寸/.test(descriptor) ? 'resolution' : '');
+        if(!kind) return;
+        const recommendation = kind === 'ratio' ? snapshot?.recommended_ratio : snapshot?.recommended_resolution;
+        const value = generationModeRhFieldValue(field, recommendation, kind);
+        if(!value) return;
+        const key = rhParamKey(field.nodeId, field.fieldName);
+        next.rhParams[key] = {...(next.rhParams[key] || {}), value};
+    });
+    return next;
 }
-function savePromptNodeAsPreset(node){
-    createPromptPresetFromNode(node);
+function applyGenerationModeRecommendations(sourceSettings, snapshot){
+    if(sourceSettings?.engine === 'runninghub') return applyGenerationModeRhRecommendations(sourceSettings, snapshot);
+    return window.GenerationPromptModel?.applyGenerationPromptRecommendations?.(sourceSettings, snapshot) || cloneSmartSettings(sourceSettings);
 }
-function renderPromptPresetPanel(selectedId='', message=''){
-    if(!promptPresetSelect) return;
-    resetPromptPresetDeleteState();
-    promptPresetSelect.innerHTML = promptPresets.length
-        ? promptPresets.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name || tr('smart.promptPresetUnnamed'))}</option>`).join('')
-        : `<option value="">${escapeHtml(tr('smart.promptPresetNone'))}</option>`;
-    const preset = currentPromptPreset(selectedId) || promptPresets[0] || null;
-    if(preset && promptPresetSelect.value !== preset.id) promptPresetSelect.value = preset.id;
-    promptPresetName.value = preset?.name || '';
-    promptPresetText.value = preset?.text || '';
-    const hasPreset = Boolean(preset);
-    const nodeHasText = Boolean(String(promptPresetPanelNode()?.text || '').trim());
-    promptPresetApply.disabled = !hasPreset;
-    promptPresetDelete.disabled = !hasPreset;
-    promptPresetSave.disabled = !hasPreset;
-    if(promptPresetNew) promptPresetNew.disabled = !nodeHasText;
-    setPromptPresetStatus(message || (hasPreset ? tr('smart.promptPresetPanelHint') : tr('smart.promptPresetPanelEmpty')));
-}
-function openPromptPresetPanel(nodeId='', presetId='', options={}){
-    if(!promptPresetPanel) return;
-    promptPresetPanel.dataset.nodeId = nodeId || '';
-    const node = nodes.find(n => n.id === nodeId);
-    const preferred = presetId || node?.promptPresetId || promptPresets[0]?.id || '';
-    renderPromptPresetPanel(preferred, options.status || '');
-    if(options.tone) setPromptPresetStatus(options.status || '', options.tone);
-    const nodeEl = nodeId ? world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`) : null;
-    const rect = nodeEl?.getBoundingClientRect();
-    const shellRect = shell.getBoundingClientRect();
-    const maxLeft = Math.max(18, shellRect.width - 410);
-    const maxTop = Math.max(18, shellRect.height - 330);
-    const left = rect ? Math.min(maxLeft, Math.max(18, rect.right - shellRect.left + 12)) : 80;
-    const top = rect ? Math.min(maxTop, Math.max(18, rect.top - shellRect.top)) : 80;
-    promptPresetPanel.style.left = `${left}px`;
-    promptPresetPanel.style.top = `${top}px`;
-    promptPresetPanel.classList.add('open');
+function renderGenerationModeControl(){
+    if(!generationModeControl || !generationModePanel) return;
+    const subject = activeComposerNode() || selectedNode();
+    const supported = Boolean(subject && generationModeSupported(settings));
+    generationModeControl.hidden = !supported;
+    if(!supported){
+        generationModePanel.classList.remove('open');
+        generationModeBtn?.setAttribute('aria-expanded', 'false');
+    }
+    const selected = subject ? generationPromptModeForNode(subject) : null;
+    generationModeBtn?.classList.toggle('active', Boolean(selected));
+    promptEditor?.setInlinePrefix?.(selected ? {
+        id:selected.id,
+        label:selected.name,
+        description:selected.description,
+        icon:generationModeIcon(selected.icon)
+    } : null);
+    if(generationModePanel.classList.contains('open')) renderGenerationModePanel();
     refreshIcons();
 }
-function closePromptPresetPanel(){
-    promptPresetPanel?.classList.remove('open');
-    resetPromptPresetDeleteState();
-}
-function promptTemplateScrollSnapshot(){
-    if(!promptTemplatePanel) return null;
-    return {
-        panelTop:promptTemplatePanel.scrollTop || 0,
-        tabLeft:promptTemplatePanel.querySelector('.prompt-template-tabs')?.scrollLeft || 0,
-        listTop:promptTemplatePanel.querySelector('.prompt-template-list')?.scrollTop || 0,
-        detailTop:promptTemplatePanel.querySelector('.prompt-template-preview-content')?.scrollTop || 0
-    };
-}
-function restorePromptTemplateScroll(snapshot){
-    if(!snapshot || !promptTemplatePanel) return;
-    requestAnimationFrame(() => {
-        promptTemplatePanel.scrollTop = snapshot.panelTop || 0;
-        const tabs = promptTemplatePanel.querySelector('.prompt-template-tabs');
-        const list = promptTemplatePanel.querySelector('.prompt-template-list');
-        const detail = promptTemplatePanel.querySelector('.prompt-template-preview-content');
-        if(tabs) tabs.scrollLeft = snapshot.tabLeft || 0;
-        if(list) list.scrollTop = snapshot.listTop || 0;
-        if(detail) detail.scrollTop = snapshot.detailTop || 0;
+function renderGenerationModePanel(){
+    if(!generationModePanel) return;
+    const subject = activeComposerNode() || selectedNode();
+    const selected = subject ? generationPromptModeForNode(subject) : null;
+    const categories = [];
+    generationPromptCatalog.forEach(item => {
+        const category = String(item?.category || '其他');
+        let group = categories.find(entry => entry.name === category);
+        if(!group){ group = {name:category, items:[]}; categories.push(group); }
+        group.items.push(item);
     });
-}
-function renderPromptTemplatePanel(options={}){
-    if(!promptTemplatePanel || !promptTemplateBody || !promptTemplateCats) return;
-    renderPromptLibrarySelect();
-    const scrollSnapshot = options.preserveScroll === false ? null : promptTemplateScrollSnapshot();
-    const query = String(promptTemplateSearch?.value || '').trim().toLowerCase();
-    const allTemplates = promptTemplateItems();
-    const activeGroups = activePromptTemplateGroups();
-    // 防御：若当前分类筛选不属于当前词库（例如刚切换词库或分类已被删除），回到“全部”，避免列表被过滤为空。
-    if(promptTemplateCategory !== 'all' && !activeGroups.some(g => g.id === promptTemplateCategory)) promptTemplateCategory = 'all';
-    const categories = [{id:'all', name:tr('smart.tplAll')}, ...activeGroups.map(group => ({...group, name:promptTemplateCategoryLabel(group.id)}))];
-    const groupCounts = allTemplates.reduce((map, item) => {
-        map[item.category || 'mine'] = (map[item.category || 'mine'] || 0) + 1;
-        return map;
-    }, {all:allTemplates.length});
-    promptTemplateCats.innerHTML = promptTemplateGroupEditMode ? `
-        <div class="prompt-template-group-panel">
-            <div class="prompt-template-group-title">
-                <div>
-                    <strong>${escapeHtml(tr('smart.tplGroupManage'))}</strong>
-                    <span>${escapeHtml(tr('smart.tplGroupHint'))}</span>
-                </div>
-                <div class="prompt-template-group-tools">
-                    <button type="button" data-template-cat-new><i data-lucide="plus"></i><span>${escapeHtml(tr('smart.tplAdd'))}</span></button>
-                    <button type="button" class="primary" data-template-group-edit><i data-lucide="check"></i><span>${escapeHtml(tr('smart.tplDone'))}</span></button>
-                </div>
-            </div>
-            <div class="prompt-template-group-list">
-                ${activeGroups.map(group => `
-                    <div class="prompt-template-group-row has-delete">
-                        <button type="button" class="group-name ${group.id === promptTemplateCategory ? 'active' : ''}" data-template-cat="${escapeHtml(group.id)}">
-                            <span>${escapeHtml(promptTemplateCategoryLabel(group.id))}</span>
-                            <small>${groupCounts[group.id] || 0}</small>
-                        </button>
-                        <button type="button" class="group-tool" data-template-cat-edit="${escapeHtml(group.id)}" title="${escapeAttr(tr('smart.tplRename'))}"><i data-lucide="pencil"></i></button>
-                        <button type="button" class="group-tool danger" data-template-cat-delete="${escapeHtml(group.id)}" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>
-                    </div>
-                `).join('')}
-            </div>
+    generationModePanel.innerHTML = `
+        <div class="generation-mode-panel-head">
+            <strong>生成模式</strong>
+            <span>只应用隐藏模板、推荐比例和分辨率</span>
+            ${selected ? '<button type="button" data-generation-mode-clear>清除</button>' : ''}
         </div>
-    ` : `
-        <div class="prompt-template-nav">
-            <div class="prompt-template-tabs">
-                ${categories.map(cat => `
-                    <button type="button" class="${cat.id === promptTemplateCategory ? 'active' : ''}" data-template-cat="${escapeHtml(cat.id)}">
-                        <span>${escapeHtml(cat.name)}</span>
-                        <small>${groupCounts[cat.id] || 0}</small>
-                    </button>
-                `).join('')}
-            </div>
-            <button type="button" class="prompt-template-manage-groups" data-template-group-edit><i data-lucide="settings-2"></i><span>${escapeHtml(tr('smart.tplManageGroups'))}</span></button>
-        </div>
-    `;
-    const items = allTemplates.filter(item => {
-        if(promptTemplateCategory !== 'all' && item.category !== promptTemplateCategory) return false;
-        if(!query) return true;
-        return promptTemplateSearchText(item).includes(query);
-    });
-    if(items.length && !items.some(item => item.id === promptTemplateSelectedId)) promptTemplateSelectedId = items[0].id;
-    const selected = items.find(item => item.id === promptTemplateSelectedId) || items[0] || null;
-    const selectedPreset = selected?.builtin || selected?.remote
-        ? {id:selected.id, name:selected.name || '', text:selected.positive || '', category:selected.category || 'storyboard', builtin:Boolean(selected.builtin)}
-        : (selected ? currentPromptPreset(selected.sourceId) : null);
-    const target = promptTemplatePanel.dataset.target || 'node';
-    const node = nodes.find(n => n.id === promptTemplatePanel.dataset.nodeId);
-    const activeLibrary = activePromptLibrary();
-    // 系统库 readonly=false，其条目也可编辑/删除（经后端持久化），因此只看 readonly。
-    const canEditCurrentLibrary = !activeLibrary.readonly;
-    const editMode = Boolean(promptTemplateEditing && selectedPreset);
-    promptTemplateBody.innerHTML = `
-        <div class="prompt-template-list">
-            <div class="prompt-template-list-tools">
-                <button type="button" data-template-save-current><i data-lucide="bookmark-plus"></i><span>${escapeHtml(tr('smart.tplSaveCurrent'))}</span></button>
-                <button type="button" data-template-new><i data-lucide="file-plus-2"></i><span>${escapeHtml(tr('smart.tplNewTemplate'))}</span></button>
-            </div>
-            ${items.length ? items.map(item => `<button type="button" class="prompt-template-card ${item.id === selected?.id ? 'active' : ''}" data-template-id="${escapeHtml(item.id)}">
-                <span class="prompt-template-card-top">
-                    <span class="prompt-template-name">${escapeHtml(promptTemplateName(item))}</span>
-                    <span class="prompt-template-card-meta">
-                        <span class="prompt-template-tag">${escapeHtml(promptTemplateCategoryLabel(item.category || 'mine'))}</span>
-                        <span class="prompt-template-source">${escapeHtml(item.builtin ? tr('smart.tplBuiltin') : tr('smart.tplMine'))}</span>
-                    </span>
-                </span>
-                <span class="prompt-template-scene">${escapeHtml(promptTemplateScene(item) || item.positive || '')}</span>
-            </button>`).join('') : `<div class="prompt-template-list-empty">${escapeHtml(tr('smart.tplNoMatches'))}</div>`}
-        </div>
-        <div class="prompt-template-detail">
-            ${selected ? `
-                <div class="prompt-template-detail-head">
-                    <div>
-                        <strong>${escapeHtml(promptTemplateName(selected) || '')}</strong>
-                        <span>${escapeHtml(promptTemplateCategoryLabel(selected.category || ''))} · ${escapeHtml(selected.builtin ? tr('smart.tplBuiltinTemplate') : tr('smart.tplMineTemplate'))}</span>
-                    </div>
-                    ${editMode ? '' : `
-                        <div class="prompt-template-icon-actions">
-                            <button type="button" ${!canEditCurrentLibrary ? 'disabled' : ''} data-template-edit title="${escapeAttr(tr('smart.tplEditTemplate'))}" aria-label="${escapeAttr(tr('smart.tplEditTemplate'))}"><i data-lucide="pencil"></i></button>
-                            <button type="button" ${!canEditCurrentLibrary ? 'disabled' : ''} class="danger" data-template-delete title="${escapeAttr(tr('smart.tplDeleteTemplate'))}" aria-label="${escapeAttr(tr('smart.tplDeleteTemplate'))}"><i data-lucide="trash-2"></i></button>
-                        </div>
-                    `}
-                </div>
-            ${editMode ? `
-                <div class="prompt-template-edit-fields">
-                    <label>${escapeHtml(tr('smart.tplName'))}</label>
-                    <input data-template-edit-name value="${escapeAttr(selectedPreset.name || '')}" placeholder="${escapeAttr(tr('smart.tplName'))}">
-                    <label>${escapeHtml(tr('smart.tplGroup'))}</label>
-                    <select data-template-edit-category>
-                        ${activeGroups.map(group => `<option value="${escapeAttr(group.id)}" ${group.id === (selectedPreset.category || selected?.category || 'mine') ? 'selected' : ''}>${escapeHtml(promptTemplateCategoryLabel(group.id))}</option>`).join('')}
-                    </select>
-                    <label>${escapeHtml(tr('smart.tplContent'))}</label>
-                    <textarea data-template-edit-text placeholder="${escapeAttr(tr('smart.tplContent'))}">${escapeHtml(selectedPreset.text || '')}</textarea>
-                </div>
-            ` : `
-                <div class="prompt-template-preview-content">
-                <div class="prompt-template-section">
-                    <label>${escapeHtml(tr('smart.tplPositive'))}</label>
-                    <p>${escapeHtml(selected?.positive || '')}</p>
-                </div>
-                ${selected?.negative ? `<div class="prompt-template-section">
-                    <label>${escapeHtml(tr('smart.tplNegative'))}</label>
-                    <p>${escapeHtml(selected.negative)}</p>
-                </div>` : ''}
-                ${Object.keys(selected?.params || {}).length ? `<div class="prompt-template-section">
-                    <label>${escapeHtml(tr('smart.tplParams'))}</label>
-                    <p>${escapeHtml(Object.entries(selected.params).map(([k,v]) => `${k}: ${v}`).join('\n'))}</p>
-                </div>` : ''}
-                </div>
-            `}
-            <div class="prompt-template-actions">
-                ${editMode ? `
-                    <button type="button" data-template-edit-cancel><i data-lucide="x"></i><span>${escapeHtml(tr('common.cancel'))}</span></button>
-                    <button type="button" class="danger" data-template-delete><i data-lucide="trash-2"></i><span>${escapeHtml(tr('common.delete'))}</span></button>
-                    <button type="button" class="primary" data-template-edit-save><i data-lucide="save"></i><span>${escapeHtml(tr('common.save'))}</span></button>
-                ` : `
-                    <button type="button" data-template-apply="positive"><i data-lucide="corner-down-left"></i><span>${escapeHtml(tr('smart.tplApplyPositive'))}</span></button>
-                    <button type="button" class="primary" data-template-apply="full"><i data-lucide="wand-sparkles"></i><span>${escapeHtml(tr('smart.tplApplyFull'))}</span></button>
-                `}
-            </div>
-            ` : `<div class="prompt-template-empty">${escapeHtml(tr('smart.tplPickOrCreate'))}</div>`}
+        <div class="generation-mode-groups">
+            ${categories.map(group => `<section class="generation-mode-group">
+                <h4>${escapeHtml(group.name)}</h4>
+                ${group.items.map(item => {
+                    const snapshot = generationPromptSnapshot(item);
+                    if(!snapshot) return '';
+                    const active = selected?.id === snapshot.id;
+                    return `<button type="button" class="generation-mode-option ${active ? 'active' : ''}" data-generation-mode-id="${escapeAttr(snapshot.id)}">
+                        <span class="generation-mode-option-icon"><i data-lucide="${generationModeIcon(snapshot.icon)}"></i></span>
+                        <span class="generation-mode-option-copy"><strong>${escapeHtml(snapshot.name)}</strong><small>${escapeHtml(snapshot.description)}</small></span>
+                        ${active ? '<i class="generation-mode-check" data-lucide="check"></i>' : ''}
+                    </button>`;
+                }).join('')}
+            </section>`).join('') || '<div class="generation-mode-empty">暂无可用生成模式</div>'}
         </div>
     `;
     refreshIcons();
-    restorePromptTemplateScroll(scrollSnapshot);
 }
-function activePromptTemplateNodeId(){
-    return promptTemplatePanel?.classList?.contains('open') && promptTemplatePanel.dataset.target !== 'composer' ? (promptTemplatePanel.dataset.nodeId || '') : '';
+function closeGenerationModePanel(){
+    generationModePanel?.classList.remove('open');
+    generationModeBtn?.setAttribute('aria-expanded', 'false');
+    disarmDynamicParamHover();
 }
-function syncComposerTemplateButton(){
-    if(!composerTemplateBtn || !promptTemplatePanel) return;
-    const active = promptTemplatePanel.classList.contains('open') && promptTemplatePanel.dataset.target === 'composer';
-    composerTemplateBtn.classList.toggle('active', active);
-    composerTemplateBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+async function openGenerationModePanel(){
+    if(!generationModeSupported(settings) || !generationModePanel) return;
+    try { await loadGenerationPromptCatalog(); } catch(e){}
+    renderGenerationModePanel();
+    generationModePanel.classList.add('open');
+    generationModeBtn?.setAttribute('aria-expanded', 'true');
 }
-async function openPromptTemplatePanel(nodeId='', templateId='', options={}){
-    if(!promptTemplatePanel) return;
-    const target = options.target === 'composer' ? 'composer' : 'node';
-    promptTemplatePanel.dataset.target = target;
-    promptTemplatePanel.dataset.nodeId = nodeId || '';
-    if(promptTemplatePanel.parentElement !== shell) shell.appendChild(promptTemplatePanel);
-    if(templateId) promptTemplateSelectedId = templateId;
-    promptTemplatePanel.classList.add('open');
-    // 每次打开都从后端拉取最新提示词库，确保素材库管理里的新增/修改/删除实时反映到画布（同根同源）。
-    try { await loadPromptTemplates(); } catch(e){}
-    if(!promptTemplateSelectedId || !promptTemplateItems().some(it => it.id === promptTemplateSelectedId)){
-        promptTemplateSelectedId = promptTemplateItems()[0]?.id || '';
-    }
-    renderPromptTemplatePanel();
-    if(target === 'node' && nodeId){
-        selectedId = nodeId;
-        selectedIds = [];
-        selectedImage = {nodeId:'', index:-1};
-    }
-    render();
-    syncComposerTemplateButton();
-    promptTemplateSearch?.focus();
-}
-function closePromptTemplatePanel(){
-    promptTemplatePanel?.classList.remove('open');
-    syncComposerTemplateButton();
-    render();
-}
-function applyPromptTemplateToNode(mode='positive'){
-    const template = promptTemplateItems().find(item => item.id === promptTemplateSelectedId);
-    if(!template) return;
-    if(promptTemplatePanel?.dataset.target === 'composer'){
-        const text = promptTemplateText(template, mode);
-        setPromptText(text);
-        delete promptInput.dataset.preserveDraftOnce;
-        savePromptDraftForCurrent();
-        renderInputThumbsRow(selectedNode());
-        closePromptTemplatePanel();
-        scheduleSave();
-        return;
-    }
-    const node = nodes.find(n => n.id === promptTemplatePanel?.dataset.nodeId);
-    if(!node) return;
-    node.text = promptTemplateText(template, mode);
-    node.promptPresetId = template.builtin ? '' : template.sourceId || '';
-    closePromptTemplatePanel();
-    render();
+function clearGenerationMode(){
+    const subject = activeComposerNode() || selectedNode();
+    if(!subject) return;
+    capturePendingUndo();
+    delete subject.generationPromptId;
+    delete subject.generationPromptSnapshot;
+    commitPendingUndo();
+    closeGenerationModePanel();
+    renderGenerationModeControl();
     scheduleSave();
 }
-async function saveCurrentPromptAsTemplate(){
-    const library = activePromptLibrary();
-    // 系统库 readonly=false，也允许新增条目（走后端，与素材库管理同步）。
-    if(library.readonly){ toast('请选择可编辑的提示词库'); return; }
-    const text = promptTemplatePanel?.dataset.target === 'composer'
-        ? promptPlainText()
-        : String(nodes.find(n => n.id === promptTemplatePanel?.dataset.nodeId)?.text || '').trim();
-    if(!text){ toast(tr('smart.promptPresetEmpty')); return; }
-    try {
-        const data = await fetch('/api/prompt-libraries/items', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:library.id, name:defaultPromptPresetName(text), category:promptTemplateCategory === 'all' ? 'custom' : promptTemplateCategory, positive:text, scene:'我的提示词预设'})
-        }).then(async r => {
-            if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '保存失败');
-            return r.json();
-        });
-        promptLibraries = data.library?.libraries || promptLibraries;
-        activePromptLibraryId = library.id;
-        promptTemplateCategory = data.item?.category || 'custom';
-        promptTemplateSelectedId = data.item?.id || '';
-        promptTemplateEditing = true;
-        renderPromptTemplatePanel({preserveScroll:false});
-    } catch(err) {
-        toast(err.message || '保存失败');
-    }
-}
-async function createBlankPromptTemplate(){
-    const library = activePromptLibrary();
-    // 系统库 readonly=false，也允许新建空白条目（走后端，与素材库管理同步）。
-    if(library.readonly){ toast('请选择可编辑的提示词库'); return; }
-    const category = promptTemplateCategory && promptTemplateCategory !== 'all' ? promptTemplateCategory : 'custom';
-    try {
-        const data = await fetch('/api/prompt-libraries/items', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:library.id, name:tr('smart.tplNewTemplateName'), category, positive:'新提示词', scene:'我的提示词预设'})
-        }).then(async r => {
-            if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '创建失败');
-            return r.json();
-        });
-        promptLibraries = data.library?.libraries || promptLibraries;
-        activePromptLibraryId = library.id;
-        promptTemplateCategory = category;
-        promptTemplateSelectedId = data.item?.id || '';
-        promptTemplateEditing = true;
-        renderPromptTemplatePanel({preserveScroll:false});
-    } catch(err) {
-        toast(err.message || '创建失败');
-    }
-}
-async function savePromptTemplateEdit(){
-    const item = promptTemplateSelectedItem();
-    if(!item) return;
-    const name = promptTemplatePanel.querySelector('[data-template-edit-name]')?.value?.trim() || '';
-    const text = promptTemplatePanel.querySelector('[data-template-edit-text]')?.value?.trim() || '';
-    const category = promptTemplatePanel.querySelector('[data-template-edit-category]')?.value || 'mine';
-    if(!name || !text){ toast(tr('smart.tplRequired')); return; }
-    if(item.remote){
-        try {
-            const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {
-                method:'PATCH',
-                headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({library_id:item.libraryId || activePromptLibrary().id, name, category, positive:text, scene:item.scene || '', negative:item.negative || ''})
-            }).then(async r => {
-                if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '保存失败');
-                return r.json();
-            });
-            promptLibraries = data.library?.libraries || promptLibraries;
-            promptTemplateSelectedId = data.item?.id || item.id;
-        } catch(err) {
-            toast(err.message || '保存失败');
-            return;
-        }
-    } else if(item.builtin){
-        promptTemplateOverrides.editedBuiltins = promptTemplateOverrides.editedBuiltins || {};
-        promptTemplateOverrides.editedBuiltins[item.id] = {
-            ...(promptTemplateOverrides.editedBuiltins[item.id] || {}),
-            name,
-            positive:text,
-            category
-        };
-        savePromptTemplateOverrides();
-    } else {
-        const preset = currentPromptPreset(item.sourceId);
-        if(!preset) return;
-        const idx = promptPresets.findIndex(p => p.id === preset.id);
-        if(idx >= 0) promptPresets[idx] = {...promptPresets[idx], name, text, category, updatedAt:Date.now()};
-        savePromptPresets();
-        nodes.forEach(node => { if(node.promptPresetId === preset.id) node.text = text; });
-    }
-    promptTemplateEditing = false;
-    renderPromptTemplatePanel();
-    render();
+function selectGenerationMode(id){
+    const subject = activeComposerNode() || selectedNode();
+    const snapshot = generationPromptSnapshot(generationPromptCatalog.find(item => String(item?.id || '') === String(id || '')));
+    if(!subject || !snapshot || !generationModeSupported(settings)) return;
+    capturePendingUndo();
+    subject.generationPromptId = snapshot.id;
+    subject.generationPromptSnapshot = snapshot;
+    const nextSettings = applyGenerationModeRecommendations(settings, snapshot);
+    Object.keys(settings).forEach(key => delete settings[key]);
+    Object.assign(settings, nextSettings);
+    subject.runSettings = settingsForStorage(settings);
+    commitPendingUndo();
+    closeGenerationModePanel();
+    renderDynamicParams();
+    renderGenerationModeControl();
     scheduleSave();
-}
-async function deletePromptTemplate(){
-    const item = promptTemplateSelectedItem();
-    if(!item) return;
-    if(item.remote){
-        try {
-            const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {method:'DELETE'}).then(async r => {
-                if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '删除失败');
-                return r.json();
-            });
-            promptLibraries = data.library?.libraries || promptLibraries;
-        } catch(err) {
-            toast(err.message || '删除失败');
-            return;
-        }
-    } else if(item.builtin){
-        promptTemplateOverrides.hiddenBuiltinIds = [...new Set([...(promptTemplateOverrides.hiddenBuiltinIds || []), item.id])];
-        savePromptTemplateOverrides();
-    } else {
-        promptPresets = promptPresets.filter(p => p.id !== item.sourceId);
-        nodes.forEach(node => { if(node.promptPresetId === item.sourceId) node.promptPresetId = ''; });
-        savePromptPresets();
-    }
-    promptTemplateSelectedId = '';
-    promptTemplateEditing = false;
-    renderPromptTemplatePanel({preserveScroll:false});
-    render();
-    scheduleSave();
-}
-async function createPromptTemplateGroup(){
-    const name = window.prompt(tr('smart.tplNewGroupPrompt'), tr('smart.tplNewGroupDefault'));
-    if(!String(name || '').trim()) return;
-    const lib = activePromptLibrary();
-    // 系统库（readonly=false）也走后端新增分组，与素材库管理同步。
-    if(lib && !lib.readonly){
-        try {
-            const data = await fetch('/api/prompt-libraries/categories', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({name:String(name).trim().slice(0, 24), library_id:lib.id})
-            }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '新增分组失败'); return r.json(); });
-            promptLibraries = data.library?.libraries || promptLibraries;
-            promptTemplateCategory = data.category?.id || promptTemplateCategory;
-            renderPromptTemplatePanel({preserveScroll:false});
-        } catch(err){ if(typeof setStatus === 'function') setStatus(err.message || '新增分组失败'); }
-        return;
-    }
-    const group = {id:uid('tpl_group'), name:String(name).trim().slice(0, 24)};
-    promptTemplateGroups.push(group);
-    savePromptTemplateGroups();
-    promptTemplateCategory = group.id;
-    renderPromptTemplatePanel({preserveScroll:false});
-}
-async function renamePromptTemplateGroup(groupId){
-    const lib = activePromptLibrary();
-    const group = activePromptTemplateGroups().find(g => g.id === groupId);
-    if(!group) return;
-    const name = window.prompt(tr('smart.tplGroupNamePrompt'), group.name || '');
-    if(!String(name || '').trim()) return;
-    // 系统库的内置分组也走后端重命名（后端已放开内置分组限制），两端同步。
-    if(lib && !lib.readonly){
-        try {
-            const data = await fetch(`/api/prompt-libraries/categories/${encodeURIComponent(groupId)}`, {
-                method:'PATCH', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({name:String(name).trim().slice(0, 24), library_id:lib.id})
-            }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '重命名失败'); return r.json(); });
-            promptLibraries = data.library?.libraries || promptLibraries;
-            renderPromptTemplatePanel();
-        } catch(err){ if(typeof setStatus === 'function') setStatus(err.message || '重命名失败'); }
-        return;
-    }
-    group.name = String(name).trim().slice(0, 24);
-    savePromptTemplateGroups();
-    renderPromptTemplatePanel();
-}
-async function deletePromptTemplateGroup(groupId){
-    const lib = activePromptLibrary();
-    // 系统库的内置分组也走后端删除（后端已放开限制并把孤立条目改挂到剩余分组），两端同步。
-    if(lib && !lib.readonly){
-        if(!window.confirm(tr('smart.tplDeleteGroupConfirm'))) return;
-        try {
-            const data = await fetch(`/api/prompt-libraries/categories/${encodeURIComponent(groupId)}`, {method:'DELETE'})
-                .then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '删除失败'); return r.json(); });
-            promptLibraries = data.library?.libraries || promptLibraries;
-            if(promptTemplateCategory === groupId) promptTemplateCategory = 'all';
-            renderPromptTemplatePanel({preserveScroll:false});
-        } catch(err){ if(typeof setStatus === 'function') setStatus(err.message || '删除失败'); }
-        return;
-    }
-    if(!window.confirm(tr('smart.tplDeleteGroupConfirm'))) return;
-    promptTemplateGroups = promptTemplateGroups.filter(g => g.id !== groupId);
-    promptPresets = promptPresets.map(p => p.category === groupId ? {...p, category:'mine'} : p);
-    Object.entries(promptTemplateOverrides.editedBuiltins || {}).forEach(([id, item]) => {
-        if(item?.category === groupId) promptTemplateOverrides.editedBuiltins[id] = {...item, category:'mine'};
-    });
-    if(promptTemplateCategory === groupId) promptTemplateCategory = 'all';
-    savePromptTemplateGroups();
-    savePromptPresets();
-    savePromptTemplateOverrides();
-    renderPromptTemplatePanel({preserveScroll:false});
-}
-function editPromptPresetForNode(node){
-    openPromptTemplatePanel(node?.id || '', node?.promptPresetId ? `mine:${node.promptPresetId}` : '');
 }
 function assetCategories(type='image'){
     const library = activeAssetLibrary();
@@ -12094,6 +11583,7 @@ function smartRequestPromptForRun(prompt, runSettings={}, kind='image', requestM
 }
 function smartRunSnapshot(node, prompt, refs=[], kind='image', requestMeta=null, runSettings=settings){
     const settingsSnapshot = cloneSmartSettings(runSettings || settings);
+    const generationMode = typeof generationPromptModeForNode === 'function' ? generationPromptModeForNode(node) : null;
     return {
         nodeId:node?.id || '',
         nodeType:node?.type || 'smart-image',
@@ -12102,6 +11592,8 @@ function smartRunSnapshot(node, prompt, refs=[], kind='image', requestMeta=null,
         runningHub:settingsSnapshot.engine === 'runninghub' ? runningHubLogDescriptor(settingsSnapshot) : undefined,
         prompt:prompt || '',
         requestPrompt:smartRequestPromptForRun(prompt, settingsSnapshot, kind, requestMeta),
+        generationPromptId:generationMode?.id || '',
+        generationPromptSnapshot:generationMode,
         refs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || 'image', kind:ref.kind || ''})).filter(ref => ref.url),
         size: kind === 'image' && isApiLikeEngine(settingsSnapshot.engine) ? sizeForRun(settingsSnapshot) : ''
     };
@@ -12373,7 +11865,6 @@ function promptNodeBodyHtml(node){
     const readonly = node.llmEnabled ? 'readonly' : '';
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     const inputThumbs = smartNodeInputThumbsHtml(promptNodeInputImages(node));
-    const templateActive = activePromptTemplateNodeId() === node.id;
     const promptItems = promptNodePromptItems(node);
     const promptSplitPreviewH = promptNodeSplitPreviewHeight(node);
     const upstreamPromptItems = promptNodeUpstreamPromptItems(node);
@@ -12404,7 +11895,6 @@ function promptNodeBodyHtml(node){
     return `<div class="prompt-node-card">
         <textarea class="prompt-node-text prompt-node-control" ${readonly} placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>
         <div class="prompt-node-tools">
-            <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
             <button class="prompt-node-pill prompt-llm-toggle ${node.llmEnabled ? 'active' : ''}" type="button"><i data-lucide="sparkles"></i><span>LLM</span></button>
         </div>
@@ -13677,12 +13167,6 @@ function bindPromptNodeControls(el, node){
         syncPromptNodeHeightForSplit(node, prevExtra);
         render();
         scheduleSave();
-    };
-    const presetEdit = el.querySelector('.prompt-preset-edit');
-    if(presetEdit) presetEdit.onclick = e => {
-        e.preventDefault();
-        e.stopPropagation();
-        editPromptPresetForNode(node);
     };
     const toggle = el.querySelector('.prompt-llm-toggle');
     if(toggle) toggle.onclick = e => {
@@ -17997,11 +17481,15 @@ function savePromptAssistantSettings(patch={}){
     return next;
 }
 function promptAssistantRecipes(){
-    const recipes = promptLibraries.flatMap(library => (library.items || [])
-        .filter(item => item?.id && item.kind === 'assistant_recipe')
-        .map(item => ({...item, libraryId:library.id, builtin:item.builtin === true})));
+    const builtinIds = new Set([
+        'assistant_complete', 'assistant_polish', 'assistant_expand', 'assistant_translate_en',
+        'assistant_translate_optimize_en', 'assistant_image_prompt', 'assistant_video_prompt'
+    ]);
+    const recipes = systemInstructionCatalog
+        .filter(item => item?.id && item?.system_template && item?.user_template)
+        .map(item => ({...item, builtin:builtinIds.has(item.id)}));
     return [...recipes, {
-        id:'__custom__', name:'自定义指令', kind:'assistant_recipe', libraryId:'', builtin:false,
+        id:'__custom__', name:'自定义指令', builtin:false,
         system_template:'', user_template:'{{prompt}}', preserve_references:true,
         recommended_reasoning_effort:'medium'
     }];
@@ -18105,10 +17593,10 @@ function renderPromptAssistantControls(options={}){
     promptAssistantRecipe.value = recipes.some(recipe => recipe.id === previousRecipe) ? previousRecipe : (recipes[0]?.id || '__custom__');
     const recipe = selectedPromptAssistantRecipe();
     const recipeMemory = saved.byRecipe?.[recipe?.id] || {};
-    const providerId = resolveChatProviderId(options.providerId || recipeMemory.provider || recipe?.recommended_provider || saved.provider || '');
+    const providerId = resolveChatProviderId(options.providerId || recipeMemory.provider || saved.provider || '');
     promptAssistantProvider.innerHTML = chatProviderOptions(providerId);
     promptAssistantProvider.value = providerId;
-    const model = resolveChatModel(options.model || recipeMemory.model || recipe?.recommended_model || '', providerId);
+    const model = resolveChatModel(options.model || recipeMemory.model || '', providerId);
     promptAssistantModel.innerHTML = chatModelOptions(model, providerId);
     promptAssistantModel.value = model;
     promptAssistantEffort.value = options.effort ?? recipeMemory.effort ?? recipe?.recommended_reasoning_effort ?? saved.effort ?? '';
@@ -18404,20 +17892,23 @@ async function savePromptAssistantRecipe(){
     if(!instruction){ toast('请输入自定义处理指令'); return; }
     const name = await openAssetNameDialog({title:'保存提示词助手指令', value:selectedPromptAssistantRecipe()?.id === '__custom__' ? '' : selectedPromptAssistantRecipe()?.name || '', placeholder:'指令名称'});
     if(!name) return;
-    const library = promptLibraries.find(item => item.id === activePromptLibraryId) || promptLibraries.find(item => item.id === 'system') || promptLibraries[0];
-    if(!library){ toast('没有可用的提示词库'); return; }
     const payload = {
-        library_id:library.id, name, category:'assistant', kind:'assistant_recipe', positive:'', negative:'', scene:'提示词助手',
-        system_template:instruction, user_template:'Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>', preserve_references:true,
-        recommended_reasoning_effort:promptAssistantEffort.value || 'medium', recommended_provider:promptAssistantProvider.value, recommended_model:promptAssistantModel.value
+        name,
+        description:'自定义提示词助手指令',
+        system_template:instruction,
+        user_template:'请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>',
+        preserve_references:true,
+        default_target_language:'',
+        recommended_reasoning_effort:promptAssistantEffort.value || 'medium'
     };
     const selected = selectedPromptAssistantRecipe();
-    const update = selected && selected.id !== '__custom__' && !selected.builtin;
-    const url = update ? `/api/prompt-libraries/items/${encodeURIComponent(selected.id)}` : '/api/prompt-libraries/items';
+    const update = selected && selected.id !== '__custom__' && !selected.builtin
+        && systemInstructionCatalog.some(item => item.id === selected.id);
+    const url = update ? `/api/prompt-catalog/system-instructions/${encodeURIComponent(selected.id)}` : '/api/prompt-catalog/system-instructions';
     const response = await fetch(url, {method:update ? 'PATCH' : 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     if(!response.ok){ toast(await smartResponseErrorMessage(response, '保存指令失败')); return; }
     const data = await response.json();
-    promptLibraries = data.library?.libraries || promptLibraries;
+    systemInstructionCatalog = Array.isArray(data.catalog?.system_instructions) ? data.catalog.system_instructions : systemInstructionCatalog;
     renderPromptAssistantControls({recipeId:data.item?.id || selected?.id || ''});
     toast('指令已保存');
 }
@@ -18478,39 +17969,12 @@ function positionComposerForNode(node){
 }
 let composerExpandAnimationSeq = 0;
 function capturePromptSelection(){
-    const selection = window.getSelection?.();
-    if(!selection?.rangeCount || !promptInput) return null;
-    const anchorNode = selection.anchorNode;
-    const focusNode = selection.focusNode;
-    if(!anchorNode || !focusNode || !promptInput.contains(anchorNode) || !promptInput.contains(focusNode)) return null;
-    return {
-        anchorNode,
-        anchorOffset:selection.anchorOffset,
-        focusNode,
-        focusOffset:selection.focusOffset
-    };
+    return promptEditor?.getSelectionRange?.() || null;
 }
-function restorePromptSelection(snapshot){
+function restorePromptSelection(snapshot, options={}){
     if(!snapshot || !promptInput?.isConnected) return false;
-    const {anchorNode, anchorOffset, focusNode, focusOffset} = snapshot;
-    if(!anchorNode?.isConnected || !focusNode?.isConnected || !promptInput.contains(anchorNode) || !promptInput.contains(focusNode)) return false;
-    const selection = window.getSelection?.();
-    if(!selection) return false;
-    promptEditor?.focus?.();
-    try {
-        if(typeof selection.setBaseAndExtent === 'function'){
-            selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
-        } else {
-            const range = document.createRange();
-            range.setStart(anchorNode, anchorOffset);
-            range.setEnd(focusNode, focusOffset);
-            selection.removeAllRanges();
-            selection.addRange(range);
-        }
-        return true;
-    } catch(e){
-        return false;
-    }
+    if(options.endIfUntouched) return Boolean(promptEditor?.focusForExpansion?.(snapshot));
+    return Boolean(promptEditor?.restoreSelection?.(snapshot, {focus:true}));
 }
 function setComposerExpanded(expanded){
     const nextExpanded = Boolean(expanded && selectedNode());
@@ -18529,7 +17993,6 @@ function setComposerExpanded(expanded){
         composer.style.removeProperty('width');
         composer.style.removeProperty('left');
         composer.style.removeProperty('top');
-        restorePromptSelection(promptSelection);
         composer.classList.add('expanded');
         composerExpandBackdrop?.classList.add('open');
         if(!reduceMotion){
@@ -18576,12 +18039,11 @@ function setComposerExpanded(expanded){
     if(composerExpandBtn) composerExpandBtn.innerHTML = `<i data-lucide="${composerExpanded ? 'minimize-2' : 'maximize-2'}"></i><span>${composerExpanded ? '收起输入框' : '放大输入框'}</span>`;
     if(composerExpanded){
         closeAllSmartPopovers();
-        closePromptTemplatePanel();
     }
     composerWorkspace?.classList.toggle('assistant-open', composerExpanded && promptAssistantOpen);
     composer?.classList.toggle('assistant-active', composerExpanded && promptAssistantOpen);
     refreshIcons();
-    if(composerExpanded && !promptSelection) promptEditor?.focus?.();
+    if(composerExpanded && !restorePromptSelection(promptSelection, {endIfUntouched:true})) promptEditor?.focusEnd?.();
 }
 function setComposerOpen(open){
     if(!composer) return;
@@ -18611,7 +18073,10 @@ function updateComposer(){
         activeComposerSubject = null;
         lastComposerNodeId = '';
         setPromptInputLocked(false);
-        if(!node) setPromptText('');
+        // Keep the saved draft mounted while the composer fades out. Clearing
+        // the ProseMirror document here exposes an empty frame before the
+        // visibility transition finishes; the next runnable node reloads its
+        // own draft because lastComposerNodeId was reset above.
         return;
     }
     // composer 只绑定节点本身：图片只是素材/结果，不携带提示词或参数状态。
@@ -19645,6 +19110,7 @@ function snapshotRunMeta(sourceNode, prompt, displayPrompt='', refs=[], runSetti
             || displayPrompt
             || prompt
     };
+    const generationMode = typeof generationPromptModeForNode === 'function' ? generationPromptModeForNode(sourceNode) : null;
     return {
         prompt,
         displayPrompt:displayPrompt || promptSnapshot.text || prompt,
@@ -19655,6 +19121,8 @@ function snapshotRunMeta(sourceNode, prompt, displayPrompt='', refs=[], runSetti
         inputRefs:(refs || []).map(savedSmartRunInputRef).filter(ref => ref.url),
         sourceNodeId:sourceId,
         settings:JSON.parse(JSON.stringify(runSettings || {})),
+        generationPromptId:generationMode?.id || '',
+        generationPromptSnapshot:generationMode,
         createdAt:Date.now()
     };
 }
@@ -19697,6 +19165,15 @@ function attachRunMeta(targetNode, meta){
     targetNode.runInputRefs = cleanInputRefs.map(savedSmartRunInputRef).filter(ref => ref.url);
     targetNode.runSettings = meta.settings;
     targetNode.runSnapshotSettings = meta.settings ? cloneSmartSettings(meta.settings) : undefined;
+    if(meta.generationPromptSnapshot){
+        targetNode.generationPromptId = meta.generationPromptId || meta.generationPromptSnapshot.id || '';
+        targetNode.generationPromptSnapshot = typeof generationPromptSnapshot === 'function'
+            ? generationPromptSnapshot(meta.generationPromptSnapshot)
+            : JSON.parse(JSON.stringify(meta.generationPromptSnapshot));
+    } else {
+        delete targetNode.generationPromptId;
+        delete targetNode.generationPromptSnapshot;
+    }
     if(meta.sourceNodeId) targetNode.sourceNodeId = meta.sourceNodeId;
     else delete targetNode.sourceNodeId;
     targetNode.runAt = meta.createdAt;
@@ -20746,6 +20223,10 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         if(!veniceBody) veniceBody = body;
     }
     const displayPrompt = originalPrompt || body;
+    const rawBody = body;
+    const rawVeniceBody = veniceBody || rawBody;
+    body = typeof compileGenerationModePrompt === 'function' ? compileGenerationModePrompt(node, rawBody) : rawBody;
+    veniceBody = typeof compileGenerationModePrompt === 'function' ? compileGenerationModePrompt(node, rawVeniceBody) : rawVeniceBody;
     if(hasMentionToken && refs.length){
         return {
             prompt:body,
@@ -23105,7 +22586,7 @@ async function runPromptLLMNode(nodeId, options={}){
 function comfyFieldKind(field){
     if(['image','video','audio'].includes(field?.type)) return field.type;
     const key = `${field?.input || ''} ${field?.name || ''}`.toLowerCase();
-    if(field?.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
+    if(field?.type === 'textarea' || /prompt|text|提示词|正向/.test(key)) return 'prompt';
     return 'setting';
 }
 function smartReferenceMediaCounts(refs=[]){
@@ -26493,80 +25974,29 @@ assetPanel?.addEventListener('wheel', e => {
 assetDialogBackdrop?.addEventListener('pointerdown', e => e.stopPropagation());
 assetDialogBackdrop?.addEventListener('mousedown', e => e.stopPropagation());
 assetDialogBackdrop?.addEventListener('click', e => e.stopPropagation());
-promptPresetPanel?.addEventListener('pointerdown', e => e.stopPropagation());
-promptPresetPanel?.addEventListener('mousedown', e => e.stopPropagation());
-promptPresetPanel?.addEventListener('click', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('pointerdown', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('mousedown', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
-promptTemplatePanel?.addEventListener('click', e => {
-    e.stopPropagation();
-    const apply = e.target.closest('[data-template-apply]');
-    if(apply){ applyPromptTemplateToNode(apply.dataset.templateApply || 'positive'); return; }
-    if(e.target.closest('[data-template-save-current]')){ saveCurrentPromptAsTemplate(); return; }
-    if(e.target.closest('[data-template-new]')){ createBlankPromptTemplate(); return; }
-    if(e.target.closest('[data-template-edit]')) { promptTemplateEditing = true; renderPromptTemplatePanel(); return; }
-    if(e.target.closest('[data-template-edit-cancel]')) { promptTemplateEditing = false; renderPromptTemplatePanel(); return; }
-    if(e.target.closest('[data-template-edit-save]')){ savePromptTemplateEdit(); return; }
-    if(e.target.closest('[data-template-delete]')){ deletePromptTemplate(); return; }
-    const cat = e.target.closest('[data-template-cat]');
-    if(cat){
-        promptTemplateCategory = cat.dataset.templateCat || 'all';
-        promptTemplateSelectedId = '';
-        promptTemplateEditing = false;
-        renderPromptTemplatePanel({preserveScroll:false});
-        return;
-    }
-    const catEdit = e.target.closest('[data-template-cat-edit]');
-    if(catEdit){
-        const id = catEdit.dataset.templateCatEdit || '';
-        renamePromptTemplateGroup(id);
-        return;
-    }
-    const catDelete = e.target.closest('[data-template-cat-delete]');
-    if(catDelete){
-        deletePromptTemplateGroup(catDelete.dataset.templateCatDelete || '');
-        return;
-    }
-    if(e.target.closest('[data-template-group-edit]')){
-        promptTemplateGroupEditMode = !promptTemplateGroupEditMode;
-        renderPromptTemplatePanel({preserveScroll:false});
-        return;
-    }
-    if(e.target.closest('[data-template-cat-new]')) { createPromptTemplateGroup(); return; }
-    const card = e.target.closest('[data-template-id]');
-    if(card){
-        promptTemplateSelectedId = card.dataset.templateId || '';
-        promptTemplateEditing = false;
-        renderPromptTemplatePanel();
-        return;
-    }
-});
-if(promptPresetClose) promptPresetClose.onclick = closePromptPresetPanel;
-if(promptTemplateClose) promptTemplateClose.onclick = closePromptTemplatePanel;
-if(promptTemplateSearch) promptTemplateSearch.oninput = () => renderPromptTemplatePanel({preserveScroll:false});
-if(promptTemplateLibrarySelect) promptTemplateLibrarySelect.onchange = async () => {
-    activePromptLibraryId = promptTemplateLibrarySelect.value || 'system';
-    promptTemplateSelectedId = '';
-    // 切换词库必须重置分类筛选，否则上一个库的分类（如系统的“视角”）会把新库内容过滤为空。
-    promptTemplateCategory = 'all';
-    promptTemplateEditing = false;
-    // 拉取最新数据，确保素材库管理里新建/新增的词库与提示词在画布即时可见。
-    const want = activePromptLibraryId;
-    try { await loadPromptTemplates(); } catch(e){}
-    if(promptLibraries.some(lib => lib.id === want)) activePromptLibraryId = want;
-    renderPromptLibrarySelect();
-    renderPromptTemplatePanel({preserveScroll:false});
-};
-if(composerTemplateBtn) composerTemplateBtn.onclick = event => {
+generationModeBtn?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-    if(promptTemplatePanel?.classList?.contains('open') && promptTemplatePanel.dataset.target === 'composer'){
-        closePromptTemplatePanel();
-        return;
-    }
-    openPromptTemplatePanel(activeComposerNode()?.id || selectedNode()?.id || '', promptTemplateSelectedId, {target:'composer'});
-};
+    if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
+    else openGenerationModePanel();
+});
+generationModePanel?.addEventListener('pointerdown', event => event.stopPropagation());
+generationModePanel?.addEventListener('click', event => {
+    event.stopPropagation();
+    const option = event.target.closest('[data-generation-mode-id]');
+    if(option){ selectGenerationMode(option.dataset.generationModeId || ''); return; }
+    if(event.target.closest('[data-generation-mode-clear]')) clearGenerationMode();
+});
+promptInput?.addEventListener('smart-prompt-prefix-activate', event => {
+    event.stopPropagation();
+    if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
+    else openGenerationModePanel();
+});
+document.addEventListener('click', event => {
+    if(!generationModePanel?.classList.contains('open')) return;
+    if(event.target.closest?.('#generationModeControl, .smart-prompt-inline-prefix-chip')) return;
+    closeGenerationModePanel();
+}, true);
 if(composerExpandBtn) composerExpandBtn.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
@@ -26721,66 +26151,6 @@ composerExpandBackdrop?.addEventListener('click', event => {
     composerBackdropPointer = null;
     if(shouldCollapse) setComposerExpanded(false);
 });
-if(promptPresetSelect) promptPresetSelect.onchange = () => renderPromptPresetPanel(promptPresetSelect.value);
-[promptPresetName, promptPresetText].forEach(input => {
-    input?.addEventListener('input', () => {
-        resetPromptPresetDeleteState();
-        setPromptPresetStatus(tr('smart.promptPresetEditing'));
-    });
-});
-if(promptPresetApply) promptPresetApply.onclick = () => {
-    const preset = currentPromptPreset(promptPresetSelect.value);
-    const node = promptPresetPanelNode();
-    if(!preset || !node) return;
-    node.promptPresetId = preset.id;
-    node.text = preset.text || '';
-    closePromptPresetPanel();
-    render();
-    scheduleSave();
-};
-if(promptPresetSave) promptPresetSave.onclick = () => {
-    const preset = currentPromptPreset(promptPresetSelect.value);
-    if(!preset) return;
-    const name = promptPresetName.value.trim();
-    const text = promptPresetText.value.trim();
-    if(!name || !text){ setPromptPresetStatus(tr('smart.promptPresetRequired'), 'warn'); return; }
-    const idx = promptPresets.findIndex(p => p.id === preset.id);
-    if(idx >= 0) promptPresets[idx] = {...promptPresets[idx], name, text, updatedAt:Date.now()};
-    savePromptPresets();
-    const node = promptPresetPanelNode();
-    if(node?.promptPresetId === preset.id) node.text = text;
-    renderPromptPresetPanel(preset.id, tr('smart.promptPresetSaved'));
-    setPromptPresetStatus(tr('smart.promptPresetSaved'), 'ok');
-    render();
-    scheduleSave();
-};
-if(promptPresetNew) promptPresetNew.onclick = () => {
-    const node = promptPresetPanelNode();
-    const preset = createPromptPresetFromNode(node, {openPanel:false});
-    if(!preset) return;
-    renderPromptPresetPanel(preset.id, tr('smart.promptPresetSavedNew'));
-    setPromptPresetStatus(tr('smart.promptPresetSavedNew'), 'ok');
-    promptPresetName?.focus();
-    promptPresetName?.select();
-};
-if(promptPresetDelete) promptPresetDelete.onclick = () => {
-    const preset = currentPromptPreset(promptPresetSelect.value);
-    if(!preset) return;
-    if(!promptPresetDeleteArmed){
-        promptPresetDeleteArmed = true;
-        promptPresetDelete.textContent = tr('smart.promptPresetDeleteAgain');
-        promptPresetDelete.classList.add('confirm-danger');
-        setPromptPresetStatus(tr('smart.promptPresetDeleteConfirm').replace('{name}', preset.name || tr('smart.promptPresetUnnamed')), 'warn');
-        return;
-    }
-    promptPresets = promptPresets.filter(p => p.id !== preset.id);
-    nodes.forEach(node => { if(node.promptPresetId === preset.id) node.promptPresetId = ''; });
-    savePromptPresets();
-    renderPromptPresetPanel(promptPresets[0]?.id || '', tr('smart.promptPresetDeleted'));
-    setPromptPresetStatus(tr('smart.promptPresetDeleted'), 'ok');
-    render();
-    scheduleSave();
-};
 document.querySelectorAll('[data-asset-tab]').forEach(btn => {
     btn.onclick = () => {
         assetTab = btn.dataset.assetTab;
@@ -27103,19 +26473,9 @@ promptInput.addEventListener('dragstart', hideMentionPreview, true);
 promptInput.addEventListener('dragend', hideMentionPreview, true);
 promptInput.addEventListener('scroll', hideMentionPreview, {passive:true});
 mentionPicker.addEventListener('mousedown', event => event.stopPropagation());
-// The canvas and composer intentionally stop bubbling pointer events. Close the
-// template library during capture so every click outside it behaves consistently.
-document.addEventListener('pointerdown', event => {
-    if(!promptTemplatePanel?.classList?.contains('open')) return;
-    if(event.target.closest?.('.prompt-template-panel')) return;
-    if(event.target.closest?.('.prompt-preset-edit, #composerTemplateBtn')) return;
-    closePromptTemplatePanel();
-}, true);
 document.addEventListener('click', event => {
     if(!event.target.closest('.smart-control')) closeAllSmartPopovers();
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
-    if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
-    if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
     if(!event.target.closest('#veniceCreditsBadge') && !event.target.closest('#veniceCreditsPanel')) closeVeniceCreditsPanel();
 });
 // Capture-phase listener so stopPropagation on inner elements can't block it.
@@ -27134,7 +26494,7 @@ document.addEventListener('keydown', event => {
         handleMentionPickerKeydown(event);
         if(event.defaultPrevented) return;
     }
-    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); closePromptPresetPanel(); closePromptTemplatePanel(); }
+    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); closeGenerationModePanel(); }
 });
 function cropDragModeFromPointer(event){
     const explicit = event.target.closest?.('[data-crop-handle]')?.dataset?.cropHandle;
@@ -27466,7 +26826,6 @@ window.addEventListener('studio-lang-change', () => {
     if(document.getElementById('imageEditModal')?.classList.contains('open')){
         setImageEditMode(imageEditMode);
     }
-    if(promptTemplatePanel?.classList?.contains('open')) renderPromptTemplatePanel();
     render();
 });
 // 全局转圈动画循环 - 保持动画连续性，不受 DOM 重新渲染影响
@@ -27494,10 +26853,7 @@ window.onload = async () => {
         state:Number.isFinite(Number(veniceCreditsState.total)) && Number(veniceCreditsState.total) > 0 ? 'ready' : 'idle',
         title:''
     });
-    loadPromptPresets();
-    loadPromptTemplateGroups();
-    loadPromptTemplateOverrides();
-    await loadPromptTemplates();
+    await loadGenerationPromptCatalog();
     if(window.StudioI18n) window.StudioI18n.apply();
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();

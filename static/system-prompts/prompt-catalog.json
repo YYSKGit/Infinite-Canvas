@@ -1,0 +1,168 @@
+{
+  "version": 1,
+  "generation_prompts": [
+    {
+      "id": "multi_angle_grid",
+      "name": "多机位九宫格",
+      "category": "空间与机位",
+      "description": "用九个固定机位同时展示同一角色、产品或场景，便于观察完整空间与外观关系。",
+      "icon": "grid-3x3",
+      "prompt_template": "根据提供的参考图和用户要求，生成一张严格的 3×3 多机位九宫格参考图。九个画面必须展示同一个主体，并按从左到右、从上到下的顺序分别呈现：正面平视、正面四分之三角度、纯侧面、低机位仰视、正面视平线、高机位俯视、背面、背面四分之三角度和顶部俯视。\n\n用户对主体、场景或风格的补充要求：\n{{user_prompt}}\n\n九个画面中的主体身份、脸部特征、身体比例、服装或产品结构、材质、颜色、配饰和环境必须保持一致，只允许观察角度发生变化。所有画面使用统一的光源方向、曝光、色温和背景，主体完整呈现，不被画框裁切。网格尺寸均匀、间距清晰，不添加编号、标题、标签、角标、水印或其他文字。",
+      "recommended_ratio": "1:1",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "storyboard_four_panel",
+      "name": "剧情推演四宫格",
+      "category": "分镜叙事",
+      "description": "用四个连续画面表达同一事件的发展、转折与结果。",
+      "icon": "grid-2x2",
+      "prompt_template": "生成一张 2×2 四宫格电影故事板，用四个连续画面完整表现同一事件的叙事推进。左上建立人物、环境和初始状态；右上展示行动开始或关系变化；左下呈现冲突、转折或情绪升级；右下给出高潮、结果或具有余韵的收束。\n\n用户提供的故事、人物和画面要求：\n{{user_prompt}}\n\n四格必须遵循明确的时间顺序和因果关系。人物身份、脸部、发型、服装、道具和场景空间保持一致，动作衔接自然，视线方向和位置关系合理。可以通过景别、构图和镜头角度推动叙事，但色彩体系和整体视觉风格必须统一。画面中不出现对白框、字幕、编号、标签、水印或解释性文字。",
+      "recommended_ratio": "1:1",
+      "recommended_resolution": "2K"
+    },
+    {
+      "id": "character_face_three_views",
+      "name": "角色脸部三视图",
+      "category": "设定图",
+      "description": "并排生成同一角色的正面、四分之三侧面和纯侧面脸部参考。",
+      "icon": "scan-face",
+      "prompt_template": "根据提供的角色参考图，生成一张横向排列的角色脸部三视图设定图。左侧为正面平视，中间为四分之三侧面，右侧为纯侧面。三个视图采用相同的头部尺度和肩部取景，完整展示头型、五官结构、发际线、耳朵、颈部以及妆容细节。\n\n用户对角色外观的补充要求：\n{{user_prompt}}\n\n三个视图必须属于同一个角色，脸型、五官比例、肤色、瞳色、发型、妆容和年龄特征完全一致。表情保持放松中性，避免表情变化影响结构判断。使用统一、柔和且方向明确的棚拍光线和干净背景，保留自然皮肤纹理，不进行过度磨皮。画面不添加编号、文字、标签、水印或装饰边框。",
+      "recommended_ratio": "16:9",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "product_three_views",
+      "name": "产品三视图",
+      "category": "设定图",
+      "description": "并排展示同一产品的正面、侧面和顶面正交视图。",
+      "icon": "panels-top-left",
+      "prompt_template": "根据提供的产品参考图，生成一张横向排列的产品三视图设计参考。三个画面从左到右依次为正面、侧面和顶面，全部采用正交视图，保持相同的比例基准，避免广角或透视变形。\n\n用户对产品设计和展示方式的补充要求：\n{{user_prompt}}\n\n三个视图必须展示同一件产品，外轮廓、尺寸比例、结构分件、开孔、按键、接缝、材质、颜色和表面工艺保持一致。采用中性、均匀的棚拍光线与干净背景，保留接触阴影和真实材质细节，同时让轮廓清晰可辨。产品必须完整位于画面内，不添加尺寸线、编号、文字、品牌标识、水印或无关道具。",
+      "recommended_ratio": "16:9",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "storyboard_twenty_five_panel",
+      "name": "25宫格连贯分镜",
+      "category": "分镜叙事",
+      "description": "用 5×5 连续画面拆解一段完整动作或短剧情。",
+      "icon": "layout-grid",
+      "prompt_template": "生成一张严格的 5×5 连续电影分镜，共二十五个按时间顺序阅读的画面。第一排建立环境、人物和行动目标；第二排展开动作并建立空间关系；第三排推动冲突并出现关键变化；第四排进入高潮并展示主要动作结果；第五排呈现人物反应、环境余波和结尾。\n\n用户提供的剧情、动作和视觉要求：\n{{user_prompt}}\n\n相邻画面必须具有清晰的动作连续性，人物的位置、朝向、视线和动作阶段逐步变化，不能无故跳跃。所有画面中的角色身份、服装、道具、场景结构、时间和天气保持一致。允许使用远景、中景、近景和特写组织节奏，但镜头切换必须保持空间方位清楚。网格尺寸统一、分隔清晰，不在画面中生成帧号、字幕、对白、标签、水印或任何解释文字。",
+      "recommended_ratio": "1:1",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "cinematic_lighting_comparison",
+      "name": "电影级光影校正",
+      "category": "质感调节",
+      "description": "保持主体与构图不变，对比六种具有代表性的电影光线方案。",
+      "icon": "sun-medium",
+      "prompt_template": "生成一张 2×3 六宫格电影光影对比图。六个画面使用完全相同的主体、姿势、表情、服装、环境和相机构图，只改变光线方案。上排从左到右依次为金色时刻暖逆光、阴天柔和漫射光、霓虹夜景光；下排从左到右依次为正午硬质直射光、伦勃朗式四十五度侧光、低调明暗对比光。\n\n用户对主体、场景或目标氛围的补充要求：\n{{user_prompt}}\n\n每种光线都应具有可信的光源方向、阴影、反射和环境色，并清楚展示它对情绪和材质的影响。除光线、曝光和与光线直接相关的色彩变化外，不得改变人物身份、动作、服装、场景布置或镜头位置。画面不添加光线名称、编号、说明、标签或水印。",
+      "recommended_ratio": "3:2",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "character_reference_sheet",
+      "name": "角色设定图",
+      "category": "设定图",
+      "description": "用脸部近景和正、侧、背全身视图建立完整角色视觉基准。",
+      "icon": "user-round",
+      "prompt_template": "根据提供的角色参考图，生成一张完整角色设定图。版面左侧约三分之一为胸口以上的正面近景，用于清晰展示脸型、五官、发型、妆容和自然皮肤纹理；右侧约三分之二横向排列三个等大的全身视图，依次为正面、纯侧面和背面，人物采用自然直立姿势，手臂放松，身体和鞋子完整可见。\n\n用户对角色设定的补充要求：\n{{user_prompt}}\n\n四个视图必须是同一个角色，年龄、脸部特征、身材比例、发型、服装结构、材质、颜色、配饰和鞋履完全一致。侧面与背面需要合理补全参考图中不可见的结构，但不能擅自重新设计角色。所有区域采用统一的中性棚拍光线和干净背景，比例协调、间距清楚，不添加编号、文字、标签、水印或说明。",
+      "recommended_ratio": "16:9",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "character_expression_grid",
+      "name": "六种基础表情",
+      "category": "质感调节",
+      "description": "用 2×3 胸像网格展示同一角色的六种基础表情。",
+      "icon": "smile",
+      "prompt_template": "根据提供的角色参考图，生成一张 2×3 六宫格胸像表情设定图。所有画面采用相同的肩部以上取景和正面视角。上排从左到右依次为平静中性、温和微笑、开怀大笑；下排从左到右依次为悲伤含泪、愤怒冷峻、惊讶错愕。每种表情应通过眉毛、眼睛、面部肌肉和嘴部的协调变化自然呈现。\n\n用户对角色或表情强度的补充要求：\n{{user_prompt}}\n\n六个画面必须是同一个角色，脸型、五官比例、发型、妆容、服装和配饰保持一致，只改变表情。保持统一的柔和正面光线、自然肤质、中性背景、相同头部尺度和画面构图。不要因表情变化改变角色年龄或身份，不添加表情名称、编号、文字、标签、水印或装饰元素。",
+      "recommended_ratio": "3:2",
+      "recommended_resolution": "4K"
+    },
+    {
+      "id": "equirectangular_panorama",
+      "name": "360全景图",
+      "category": "空间与机位",
+      "description": "生成标准 2:1 等距柱状投影全景，用于 VR 预览和水平无缝环绕。",
+      "icon": "gallery-horizontal-end",
+      "prompt_template": "生成一张标准 2:1 等距柱状投影的 360 度全景图，完整覆盖水平方向一周以及从顶部到底部的垂直视野，可直接用于 VR 全景查看。\n\n用户对空间、环境和视觉风格的补充要求：\n{{user_prompt}}\n\n场景的建筑结构、道路、墙面、家具、光源和地平线必须具有连续且合理的空间关系。画面最左侧与最右侧表示同一个接缝位置，两侧的几何结构、纹理、光照和物体边缘必须自然衔接，循环查看时不能出现明显断层。顶部和底部极点保持自然，避免拉伸、扭曲或重复物体。封闭空间必须具有符合逻辑的入口或出口。画面中不添加文字、标识、水印、边框或全景预览界面。",
+      "recommended_ratio": "2:1",
+      "recommended_resolution": "4K"
+    }
+  ],
+  "system_instructions": [
+    {
+      "id": "assistant_complete",
+      "name": "智能补全",
+      "description": "在不改变原意的前提下补齐缺失但有助于生成的信息。",
+      "system_template": "你是一名专业的提示词编辑器。只返回修改后的提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：在保持用户核心意图不变的前提下，补充表达不完整的部分。仅在确有帮助时补充主体特征、构图、空间关系、光线、风格、镜头、动作和必要约束；不要擅自加入与原意无关的情节、对象或审美偏好。",
+      "user_template": "请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "",
+      "recommended_reasoning_effort": ""
+    },
+    {
+      "id": "assistant_polish",
+      "name": "专业润色",
+      "description": "提高提示词的清晰度、准确性和前后连贯性。",
+      "system_template": "你是一名专业的提示词编辑器。只返回修改后的提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：在不改变用户核心意图、信息范围和目标媒介的前提下，重新组织提示词，使表达更自然、准确、具体且前后一致。消除歧义和重复，但不要凭空增加新的主体、情节或风格。",
+      "user_template": "请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "",
+      "recommended_reasoning_effort": ""
+    },
+    {
+      "id": "assistant_expand",
+      "name": "扩写细节",
+      "description": "围绕已有意图补充具体视觉信息和连贯约束。",
+      "system_template": "你是一名专业的提示词编辑器。只返回修改后的提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：围绕用户已经提出的意图扩写具体细节，包括主体外观、空间关系、材质、光线、氛围、镜头语言、动作和必要约束。新增内容必须彼此一致并服务于原始目标，不得改变主体身份、核心事件或用户明确指定的风格。",
+      "user_template": "请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "",
+      "recommended_reasoning_effort": ""
+    },
+    {
+      "id": "assistant_translate_en",
+      "name": "精确翻译为英文",
+      "description": "只做忠实英文翻译，不增删或优化内容。",
+      "system_template": "你是一名专业的提示词翻译编辑器。只返回翻译后的英文提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：将用户提示词准确翻译为自然英文。完整保留原有信息、顺序、语气和约束，不得增加、删除、重组或优化内容。",
+      "user_template": "请翻译下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "English",
+      "recommended_reasoning_effort": ""
+    },
+    {
+      "id": "assistant_translate_optimize_en",
+      "name": "翻译并优化为英文",
+      "description": "翻译为自然英文，并整理成适合媒体生成的提示词。",
+      "system_template": "你是一名专业的提示词翻译与编辑助手。只返回修改后的英文提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：把用户提示词翻译成自然、准确的英文，并在保持原始意图和信息边界的前提下，整理为连贯、明确、适合媒体生成的提示词。可以消除歧义和重复，但不得擅自增加新主体或改变核心内容。",
+      "user_template": "请翻译并优化下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "English",
+      "recommended_reasoning_effort": ""
+    },
+    {
+      "id": "assistant_image_prompt",
+      "name": "优化为生图提示词",
+      "description": "将已有要求整理成结构完整的图像生成提示词。",
+      "system_template": "你是一名专业的图像生成提示词编辑器。只返回修改后的提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：在不改变用户核心意图的前提下，把内容整理为可直接用于图像生成的自然语言提示词。明确主体、环境、构图、空间关系、光线、材质、色彩、镜头或视角以及必要约束；没有依据的信息不要擅自补充。",
+      "user_template": "请将下面的内容优化为图像生成提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "",
+      "recommended_reasoning_effort": ""
+    },
+    {
+      "id": "assistant_video_prompt",
+      "name": "优化为视频提示词",
+      "description": "将已有要求整理成包含动作、镜头和连续性的生成提示词。",
+      "system_template": "你是一名专业的视频生成提示词编辑器。只返回修改后的提示词正文，不要使用 Markdown 代码块、标题、解释或评论。格式为 __SMART_REF_[A-Z]+_[0-9]+__ 的内容是不可变的媒体引用标记：每个已有标记必须原样保留且只出现一次，不得翻译、改名、删除或创造新的标记。\n\n任务：在不改变用户核心意图的前提下，把内容整理为可直接用于视频生成的自然语言提示词。明确镜头景别、主体动作、环境变化、相机运动、时间节奏、前后连续性、氛围和必要约束；没有依据的信息不要擅自添加。",
+      "user_template": "请将下面的内容优化为视频生成提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>",
+      "preserve_references": true,
+      "default_target_language": "",
+      "recommended_reasoning_effort": ""
+    }
+  ],
+  "updated_at": 0
+}

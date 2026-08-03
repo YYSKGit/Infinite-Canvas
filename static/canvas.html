@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1784115476"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1784194894"></script>
-    <link rel="stylesheet" href="/static/css/canvas.css?v=2027.01.1.1.1784085241">
+    <link rel="stylesheet" href="/static/css/canvas.css?v=2027.01.1.1.1785723651">
     <link rel="stylesheet" href="/static/css/theme.css?v=2027.01.1.1.1784085241">
     <link rel="stylesheet" href="/static/css/app-select.css?v=2027.01.1.1.1784562205">
     <script defer src="/static/js/app-select.js?v=2027.01.1.1.1785142870"></script>
@@ -176,22 +176,21 @@
             </div>
             </div>
         </div>
-        <div id="promptTemplateModal" class="prompt-template-modal" onclick="closePromptTemplateModal()">
-            <div id="promptTemplatePanel" class="prompt-template-panel" onclick="event.stopPropagation()">
-                <div class="prompt-template-head">
+        <div id="generationModeModal" class="generation-mode-modal" onclick="closeGenerationModeModal()">
+            <div id="generationModePanel" class="generation-mode-panel" onclick="event.stopPropagation()">
+                <div class="generation-mode-head">
                     <div>
-                        <strong data-i18n="smart.promptTemplateLibrary">模板库</strong>
-                        <span data-i18n="canvas.promptTemplateSystem">系统提示词</span>
+                        <strong>生成模式</strong>
+                        <span>选择隐藏模板，不在画布中编辑模板内容</span>
                     </div>
-                    <button id="promptTemplateClose" type="button" title="关闭" aria-label="关闭" data-i18n-title="common.close"><i data-lucide="x"></i></button>
+                    <button id="generationModeClose" type="button" title="关闭" aria-label="关闭" data-i18n-title="common.close"><i data-lucide="x"></i></button>
                 </div>
-                <select id="promptTemplateLibrarySelect" class="prompt-template-library-select" title="选择提示词库"></select>
-                <div class="prompt-template-search">
+                <div class="generation-mode-search">
                     <i data-lucide="search"></i>
-                    <input id="promptTemplateSearch" type="search" placeholder="搜索模板..." data-i18n-placeholder="canvas.promptTemplateSearch">
+                    <input id="generationModeSearch" type="search" placeholder="搜索生成模式...">
                 </div>
-                <div id="promptTemplateCats" class="prompt-template-cats"></div>
-                <div id="promptTemplateBody" class="prompt-template-body"></div>
+                <div id="generationModeCats" class="generation-mode-cats"></div>
+                <div id="generationModeBody" class="generation-mode-body"></div>
             </div>
         </div>
         <div id="logModal" class="log-modal" onclick="closeCanvasLog()">
@@ -208,14 +207,13 @@
                 <div class="asset-manager-head">
                     <div>
                         <div class="asset-manager-title">资产库管理</div>
-                        <div class="asset-manager-sub">管理图片资产库和提示词库</div>
+                        <div class="asset-manager-sub">管理图片资产库和工作流</div>
                     </div>
                     <button class="preview-icon-btn" type="button" onclick="closeAssetManager()" title="关闭"><i data-lucide="x" class="w-4 h-4"></i></button>
                 </div>
                 <div class="asset-manager-tabs">
                     <button class="active" type="button" data-manager-tab="assets"><i data-lucide="image" class="w-4 h-4"></i><span>图片资产</span></button>
                     <button type="button" data-manager-tab="workflows"><i data-lucide="workflow" class="w-4 h-4"></i><span>工作流</span></button>
-                    <button type="button" data-manager-tab="prompts"><i data-lucide="text-cursor-input" class="w-4 h-4"></i><span>提示词库</span></button>
                 </div>
                 <div id="assetManagerBody" class="asset-manager-body"></div>
             </div>
@@ -353,6 +351,7 @@
     </div>
 
     <script src="/static/js/ltx-director-timeline.js?v=2027.01.1.1.1784085241"></script>
-    <script src="/static/js/canvas.js?v=2027.01.1.1.1784557533"></script>
+    <script src="/static/js/generation-prompt-model.js?v=2027.01.1.1.1785687241"></script>
+    <script src="/static/js/canvas.js?v=2027.01.1.1.1785723979"></script>
 </body>
 </html>

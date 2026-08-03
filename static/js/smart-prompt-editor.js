@@ -12758,11 +12758,25 @@
       this.selectionCaretElement = null;
       this.selectionCaretFrame = 0;
       this.selectionCaretPosition = null;
+      this.initialPointerPlacementPending = true;
       this.caretResizeObserver = null;
       this.referenceDragActive = false;
       this.destroyed = false;
       this.silent = 0;
       this.locked = false;
+      this.inlinePrefix = null;
+      this.inlinePrefixPluginKey = new PluginKey("smartPromptInlinePrefix");
+      this.inlinePrefixPlugin = new Plugin({
+        key: this.inlinePrefixPluginKey,
+        state: {
+          init: () => this.inlinePrefix,
+          apply: (transaction, current) => {
+            const next = transaction.getMeta(this.inlinePrefixPluginKey);
+            return next === void 0 ? current : next;
+          }
+        },
+        props: { decorations: (state) => this.inlinePrefixDecorations(state) }
+      });
       this.view = new EditorView(host, {
         state: this.createState(emptyPromptDocument()),
         dispatchTransaction: (transaction) => {
@@ -12794,6 +12808,8 @@
         },
         handlePaste: (view, event) => this.handlePaste(view, event)
       });
+      this.initialPointerPlacementCapture = (event) => this.prepareInitialPointerPlacement(event);
+      this.view.dom.addEventListener("pointerdown", this.initialPointerPlacementCapture, true);
       host.classList.add("smart-prompt-editor-host");
       if (typeof ResizeObserver === "function") {
         this.caretResizeObserver = new ResizeObserver(() => this.scheduleSelectionCaretSync());
@@ -12815,9 +12831,64 @@
         plugins: [
           history(),
           keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }),
-          keymap(baseKeymap)
+          keymap(baseKeymap),
+          this.inlinePrefixPlugin
         ]
       });
+    }
+    inlinePrefixDecorations(state) {
+      const prefix = this.inlinePrefixPluginKey.getState(state);
+      const firstBlock = state.doc.firstChild;
+      if (!prefix || !firstBlock?.isTextblock) return DecorationSet.empty;
+      const key = `smart-prompt-inline-prefix:${prefix.id || prefix.label || ""}`;
+      return DecorationSet.create(state.doc, [
+        Decoration.widget(1, () => this.createInlinePrefixDom(prefix), { side: -1, key })
+      ]);
+    }
+    createInlinePrefixDom(prefix) {
+      const root = document.createElement("span");
+      root.className = "smart-prompt-inline-prefix";
+      root.contentEditable = "false";
+      root.dataset.prefixId = String(prefix.id || "");
+      const chip = document.createElement("span");
+      chip.className = "smart-prompt-inline-prefix-chip";
+      chip.setAttribute("role", "button");
+      chip.setAttribute("aria-label", String(prefix.label || "\u751F\u6210\u6A21\u5F0F"));
+      const iconName = String(prefix.icon || "blocks");
+      const iconKey = iconName.split(/[-_\s]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+      const iconData = window.lucide?.icons?.[iconKey] || window.lucide?.icons?.Blocks;
+      const icon = iconData && window.lucide?.createElement ? window.lucide.createElement(iconData, { "aria-hidden": "true" }) : document.createElement("span");
+      icon.classList.add("smart-prompt-inline-prefix-icon");
+      const label = document.createElement("span");
+      label.textContent = String(prefix.label || "\u751F\u6210\u6A21\u5F0F");
+      chip.append(icon, label);
+      root.append(chip);
+      root.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      root.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.host.dispatchEvent(new CustomEvent("smart-prompt-prefix-activate", {
+          bubbles: true,
+          detail: { id: String(prefix.id || "") }
+        }));
+      });
+      return root;
+    }
+    setInlinePrefix(prefix) {
+      const next = prefix ? {
+        id: String(prefix.id || ""),
+        label: String(prefix.label || ""),
+        description: String(prefix.description || ""),
+        icon: String(prefix.icon || "blocks")
+      } : null;
+      if (JSON.stringify(next) === JSON.stringify(this.inlinePrefix)) return;
+      this.inlinePrefix = next;
+      this.host.classList.toggle("has-inline-prefix", Boolean(next));
+      this.view.dispatch(this.view.state.tr.setMeta(this.inlinePrefixPluginKey, next));
     }
     caretOverlayGeometry(position, lineHint = null, xHint = null) {
       let coords;
@@ -12964,11 +13035,13 @@
       const { selection } = this.view.state;
       const media = schema.nodes.media_reference;
       const besideMedia = selection.empty && selection.$from.parent.isTextblock && (selection.$from.nodeBefore?.type === media || selection.$from.nodeAfter?.type === media);
-      if (!besideMedia) {
+      const prefix = this.host.querySelector(".smart-prompt-inline-prefix");
+      const besidePrefix = Boolean(selection.empty && selection.from === 1 && prefix);
+      if (!besideMedia && !besidePrefix) {
         this.clearSelectionCaret();
         return;
       }
-      const geometry = this.caretOverlayGeometry(selection.from);
+      const geometry = besidePrefix ? this.inlinePrefixCaretGeometry(prefix) : this.caretOverlayGeometry(selection.from);
       if (!geometry) {
         this.clearSelectionCaret();
         return;
@@ -12991,6 +13064,56 @@
         height: `${geometry.height}px`,
         backgroundColor: geometry.color
       });
+    }
+    prepareInitialPointerPlacement(event) {
+      if (!this.initialPointerPlacementPending || event.button !== 0 || this.locked) return;
+      if (event.target.closest?.(".smart-prompt-inline-prefix, .prompt-reference-token")) return;
+      let hit = null;
+      try {
+        hit = this.view.posAtCoords({ left: event.clientX, top: event.clientY });
+      } catch (_) {
+        return;
+      }
+      if (!hit || !Number.isFinite(hit.pos)) return;
+      try {
+        const position = Math.max(0, Math.min(this.view.state.doc.content.size, hit.pos));
+        const selection = Selection.near(this.view.state.doc.resolve(position), 1);
+        this.initialPointerPlacementPending = false;
+        if (!selection.eq(this.view.state.selection)) {
+          this.view.dispatch(this.view.state.tr.setSelection(selection).setMeta("pointer", true));
+        }
+      } catch (_) {
+      }
+    }
+    inlinePrefixCaretGeometry(prefix) {
+      if (!prefix?.getBoundingClientRect) return null;
+      const prefixRect = prefix.getBoundingClientRect();
+      const hostRect = this.host.getBoundingClientRect();
+      const scaleX = this.host.offsetWidth ? hostRect.width / this.host.offsetWidth : 1;
+      const scaleY = this.host.offsetHeight ? hostRect.height / this.host.offsetHeight : scaleX;
+      const prefixStyle = window.getComputedStyle(prefix);
+      const editorStyle = window.getComputedStyle(this.view.dom);
+      const marginRight = parseFloat(prefixStyle.marginRight) || 0;
+      const fontSize = parseFloat(editorStyle.fontSize) || 16;
+      const caretHeight = Math.max(12, fontSize + 1) * Math.max(0.1, scaleY);
+      const caretTop = (prefixRect.top + prefixRect.bottom - caretHeight) / 2;
+      const contentLeft = hostRect.left + this.host.clientLeft * scaleX;
+      const contentTop = hostRect.top + this.host.clientTop * scaleY;
+      const computedCaretColor = String(editorStyle.caretColor || "").trim();
+      const transparentCaret = !computedCaretColor || computedCaretColor === "auto" || computedCaretColor === "transparent" || computedCaretColor === "rgba(0, 0, 0, 0)";
+      return {
+        left: (prefixRect.right + marginRight * scaleX - contentLeft) / Math.max(0.1, scaleX) + this.host.scrollLeft,
+        top: (caretTop - contentTop) / Math.max(0.1, scaleY) + this.host.scrollTop,
+        height: caretHeight / Math.max(0.1, scaleY),
+        color: transparentCaret ? editorStyle.color : computedCaretColor,
+        viewportLeft: prefixRect.right + marginRight * scaleX,
+        viewportTop: caretTop,
+        viewportBottom: caretTop + caretHeight,
+        hitTop: prefixRect.top,
+        hitBottom: prefixRect.bottom,
+        scaleX,
+        scaleY
+      };
     }
     clearSelectionCaret(options = {}) {
       if (this.selectionCaretFrame) {
@@ -13024,8 +13147,8 @@
       return promptDocumentExchangeText(this.getJSON(), this.references, this.displayReferences());
     }
     getSelectionRange() {
-      const { from: from2, to, empty: empty2 } = this.view.state.selection;
-      return { from: from2, to, empty: empty2 };
+      const { from: from2, to, anchor, head, empty: empty2 } = this.view.state.selection;
+      return { from: from2, to, anchor, head, empty: empty2 };
     }
     getSelectionExchangeText() {
       const selection = this.view.state.selection;
@@ -13049,6 +13172,7 @@
     setValue(docJson, references = [], options = {}) {
       this.silent += 1;
       try {
+        this.initialPointerPlacementPending = true;
         this.references = mergeReferenceLists(references);
         this.referenceArchive = mergeReferenceLists(references);
         this.view.updateState(this.createState(docJson || emptyPromptDocument()));
@@ -13101,7 +13225,10 @@
         transaction = transaction.replaceWith(0, this.view.state.doc.content.size, replacement.content);
       }
       this.view.dispatch(transaction.scrollIntoView());
-      if (options.focus !== false) this.view.focus();
+      if (options.focus !== false) {
+        this.initialPointerPlacementPending = false;
+        this.view.focus();
+      }
       return this.snapshot();
     }
     undo() {
@@ -13165,15 +13292,52 @@
       if (addLeftSpace) transaction = transaction.insertText(" ", insertionFrom);
       transaction = transaction.scrollIntoView();
       this.view.dispatch(transaction);
+      this.initialPointerPlacementPending = false;
       this.view.focus();
       return ref;
     }
     focus() {
+      this.initialPointerPlacementPending = false;
+      this.view.focus();
+      this.scheduleSelectionCaretSync();
+    }
+    restoreSelection(range, options = {}) {
+      if (!range) return false;
+      const max = this.view.state.doc.content.size;
+      const rawAnchor = Number(range.anchor ?? range.from);
+      const rawHead = Number(range.head ?? range.to ?? rawAnchor);
+      if (!Number.isFinite(rawAnchor) || !Number.isFinite(rawHead)) return false;
+      const anchor = Math.max(0, Math.min(max, rawAnchor));
+      const head = Math.max(0, Math.min(max, rawHead));
+      try {
+        const selection = TextSelection.create(this.view.state.doc, anchor, head);
+        if (!selection.eq(this.view.state.selection)) {
+          this.view.dispatch(this.view.state.tr.setSelection(selection));
+        }
+        this.initialPointerPlacementPending = false;
+        if (options.focus !== false) this.view.focus();
+        this.scheduleSelectionCaretSync();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    focusForExpansion(range) {
+      if (this.initialPointerPlacementPending) {
+        this.focusEnd();
+        return true;
+      }
+      return this.restoreSelection(range, { focus: true });
+    }
+    focusStart() {
+      this.view.dispatch(this.view.state.tr.setSelection(TextSelection.atStart(this.view.state.doc)).scrollIntoView());
+      this.initialPointerPlacementPending = false;
       this.view.focus();
       this.scheduleSelectionCaretSync();
     }
     focusEnd() {
       this.view.dispatch(this.view.state.tr.setSelection(TextSelection.atEnd(this.view.state.doc)).scrollIntoView());
+      this.initialPointerPlacementPending = false;
       this.view.focus();
       this.scheduleSelectionCaretSync();
     }
@@ -13312,7 +13476,8 @@
       ));
       const position = this.inlineInsertionPosition(this.view.state.doc, rawPosition);
       if (!Number.isFinite(position)) return null;
-      const geometry = this.caretOverlayGeometry(position, line, clientX);
+      const prefix = position === 1 ? this.host.querySelector(".smart-prompt-inline-prefix") : null;
+      const geometry = prefix ? this.inlinePrefixCaretGeometry(prefix) : this.caretOverlayGeometry(position, line, clientX);
       if (!geometry) return null;
       const pointedElement = document.elementFromPoint(clientX, clientY);
       const pointedToken = pointedElement?.closest?.(".prompt-reference-token");
@@ -13565,6 +13730,7 @@
       this.caretResizeObserver = null;
       this.clearReferenceDragCursor();
       this.clearSelectionCaret();
+      this.view.dom.removeEventListener("pointerdown", this.initialPointerPlacementCapture, true);
       this.view.destroy();
     }
     static emptyDocument() {

@@ -42,6 +42,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.middleware.cors import CORSMiddleware
+from prompt_catalog import (
+    PromptCatalogValidationError,
+    load_prompt_catalog as load_prompt_catalog_file,
+    normalize_generation_prompt,
+    normalize_system_instruction,
+    save_prompt_catalog as save_prompt_catalog_file,
+)
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
@@ -274,7 +281,8 @@ MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
 MEDIA_TRASH_DIR = os.path.join(DATA_DIR, "media_trash")
 MEDIA_TRASH_MANIFEST = os.path.join(MEDIA_TRASH_DIR, "manifest.json")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
-PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
+PROMPT_CATALOG_PATH = os.path.join(DATA_DIR, "prompt_catalog.json")
+PROMPT_CATALOG_DEFAULTS_PATH = os.path.join(STATIC_DIR, "system-prompts", "prompt-catalog.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
@@ -293,6 +301,7 @@ CANVAS_LOCK = Lock()
 STORAGE_CLEANUP_LOCK = Lock()
 LOAD_LOCK = Lock()
 RUNNINGHUB_WORKFLOW_LOCK = Lock()
+PROMPT_CATALOG_LOCK = Lock()
 NEXT_TASK_ID = 1
 UPDATE_LOCK = Lock()
 JIMENG_LOGIN_SESSION = {
@@ -1654,113 +1663,6 @@ def static_html_response(filename: str):
         headers={"Cache-Control": "no-cache"},
     )
 
-STATIC_PROMPT_TEMPLATE_MD = os.path.join(STATIC_DIR, "system-prompts", "infinite-canvas-prompt-templates.md")
-PROMPT_TEMPLATE_PATHS = [STATIC_PROMPT_TEMPLATE_MD]
-PROMPT_TEMPLATE_EN = {
-    "多机位九宫格": {
-        "name": "9-Angle Multi-Camera Grid",
-        "scene": "Show the same subject or scene from 9 camera angles for character turnarounds, product views, or space scouting.",
-    },
-    "多机位九宫格4K": {
-        "name": "9-Angle Multi-Camera Grid 4K",
-        "scene": "A high-resolution 9-angle reference sheet for print-grade output, large displays, and fine material study.",
-    },
-    "剧情推演四宫格": {
-        "name": "4-Panel Story Progression",
-        "scene": "Preview four consecutive story beats or emotional stages for storyboard planning and narrative rhythm tests.",
-    },
-    "角色脸部三视图": {
-        "name": "Character Face 3-View Sheet",
-        "scene": "Front, side, and three-quarter face references for Actor ID locking and expression consistency.",
-    },
-    "产品三视图": {
-        "name": "Product 3-View Sheet",
-        "scene": "Front, side, and top product views for industrial design, ecommerce detail pages, and technical documents.",
-    },
-    "25宫格连贯分镜": {
-        "name": "25-Panel Continuous Storyboard",
-        "scene": "A full 5x5 storyboard for continuous scene or action flow, useful for film previews and motion continuity tests.",
-    },
-    "电影级光影校正": {
-        "name": "Cinematic Lighting Comparison",
-        "scene": "Compare the same subject or scene under different lighting conditions for mood, color, and lighting choices.",
-    },
-    "角色设定参考表（胸口特写+全身三视图）": {
-        "name": "Character Reference Sheet: Portrait + Full-Body Views",
-        "scene": "A consistency reference combining a face anchor and full-body front, side, and back views for Actor ID and costume lock.",
-    },
-    "6种基础表情胸像（2×3六宫格）": {
-        "name": "6 Basic Expression Busts",
-        "scene": "Six basic expressions of the same character for expression consistency, emotion baselines, and Seedance Talk-to-Edit reference.",
-    },
-    "360全景图": {
-        "name": "360 Panorama VR Image",
-        "scene": "Generate a seamless 360-degree VR panorama with continuous left and right edges and natural pole transitions.",
-    },
-}
-
-def prompt_template_markdown_path() -> str:
-    for path in PROMPT_TEMPLATE_PATHS:
-        if os.path.exists(path):
-            return path
-    return ""
-
-def prompt_template_category(name: str, scene: str) -> str:
-    text = f"{name} {scene}"
-    if any(k in text for k in ["光影", "灯光", "光效", "电影级"]):
-        return "lighting"
-    if any(k in text for k in ["视角", "全景", "VR", "镜头", "俯拍", "仰拍", "景别", "构图", "透视"]):
-        return "view"
-    if any(k in text for k in ["角色", "脸部", "表情", "Actor", "服装"]):
-        return "character"
-    if any(k in name for k in ["产品", "电商", "工业"]):
-        return "product"
-    return "storyboard"
-
-def extract_prompt_template_section(block: str, title: str) -> str:
-    pattern = rf"###\s*{re.escape(title)}\s*\n(?P<body>.*?)(?=\n###\s+|\Z)"
-    match = re.search(pattern, block, re.S)
-    if not match:
-        return ""
-    body = match.group("body").strip()
-    fence = re.search(r"```(?:\w+)?\s*\n(?P<code>.*?)\n```", body, re.S)
-    return (fence.group("code") if fence else body).strip()
-
-def parse_prompt_template_markdown(text: str):
-    templates = []
-    matches = list(re.finditer(r"^##\s*预设\s*(\d+)\s*[：:]\s*(.+?)\s*$", text, re.M))
-    for index, match in enumerate(matches):
-        number = match.group(1).strip()
-        name = match.group(2).strip()
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        block = text[start:end]
-        scene = extract_prompt_template_section(block, "适用场景")
-        positive = extract_prompt_template_section(block, "正向提示词")
-        negative = extract_prompt_template_section(block, "负向提示词")
-        params_raw = extract_prompt_template_section(block, "平台参数建议")
-        params = {}
-        for line in params_raw.splitlines():
-            item = re.match(r"[-*]\s*\*\*(.+?)\*\*\s*[：:]\s*(.+)", line.strip())
-            if item:
-                params[item.group(1).strip()] = item.group(2).strip()
-        if not positive:
-            continue
-        templates.append({
-            "id": f"builtin_md_{number}",
-            "number": number,
-            "name": name,
-            "name_en": PROMPT_TEMPLATE_EN.get(name, {}).get("name", name),
-            "category": prompt_template_category(name, scene),
-            "scene": scene,
-            "scene_en": PROMPT_TEMPLATE_EN.get(name, {}).get("scene", scene),
-            "positive": positive,
-            "negative": negative,
-            "params": params,
-            "builtin": True,
-        })
-    return templates
-
 @app.get("/api/app-info")
 def app_info():
     version = current_app_version()
@@ -2913,32 +2815,26 @@ class AssetLibraryClassifyRequest(BaseModel):
     ms_model: str = ""
     prompt: str = ""
 
-class PromptLibraryRequest(BaseModel):
-    name: str = "提示词库"
+class GenerationPromptRequest(BaseModel):
+    name: str = "生成提示词"
+    category: str = "未分类"
+    description: str = ""
+    icon: str = ""
+    prompt_template: str = ""
+    recommended_ratio: str = ""
+    recommended_resolution: str = ""
 
-class PromptLibraryItemRequest(BaseModel):
-    library_id: str = ""
-    item_id: str = ""
-    name: str = "提示词"
-    category: str = "custom"
-    positive: str = ""
-    negative: str = ""
-    scene: str = ""
-    kind: str = ""
+class SystemInstructionRequest(BaseModel):
+    name: str = "系统指令"
+    description: str = ""
     system_template: str = ""
     user_template: str = ""
     preserve_references: bool = True
     default_target_language: str = ""
     recommended_reasoning_effort: str = ""
-    recommended_provider: str = ""
-    recommended_model: str = ""
 
-class PromptLibraryBatchDeleteRequest(BaseModel):
+class PromptCatalogBatchDeleteRequest(BaseModel):
     ids: List[str] = []
-
-class PromptLibraryCategoryRequest(BaseModel):
-    name: str = "新分组"
-    library_id: str = ""
 
 # --- 负载均衡 ---
 
@@ -7042,275 +6938,33 @@ def scan_shared_tree(folder_id, folder_abs, rel_prefix="", display="", counter=N
             })
     return node
 
-def builtin_prompt_templates():
-    try:
-        template_path = prompt_template_markdown_path()
-        if not template_path:
-            return []
-        with open(template_path, "r", encoding="utf-8") as f:
-            return parse_prompt_template_markdown(f.read())
-    except Exception as e:
-        print(f"读取提示词模板失败: {e}")
-        return []
-
-def normalize_prompt_category_id(category="custom"):
-    category_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(category or "custom"))[:40] or "custom"
-    return "custom" if category_id in {"mine", "my", "personal"} else category_id
-
-RETIRED_BUILTIN_PROMPT_ASSISTANT_RECIPE_IDS = frozenset({
-    "assistant_condense",
-    "assistant_translate_zh",
-    "assistant_translate_optimize_zh",
-})
-
-def builtin_prompt_assistant_recipes():
-    shared = (
-        "You are a professional prompt editor. Return only the revised prompt, without Markdown fences, headings, "
-        "explanations, or commentary. Tokens matching __SMART_REF_[A-Z]+_[0-9]+__ are immutable media references: "
-        "preserve every token exactly once and never translate, rename, remove, or invent one."
-    )
-    recipes = [
-        ("assistant_complete", "智能补全", "Complete underspecified parts while preserving the user's intent. Add useful subject, composition, lighting, style, camera, motion, and quality details only when appropriate."),
-        ("assistant_polish", "专业润色", "Rewrite the prompt for clarity, precision, consistency, and stronger generation results without changing its core intent."),
-        ("assistant_expand", "扩写细节", "Expand the prompt with concrete visual details, spatial relationships, materials, lighting, atmosphere, camera language, and coherent constraints."),
-        ("assistant_translate_en", "精确翻译为英文", "Translate accurately into natural English. Do not add, omit, reorganize, or optimize information."),
-        ("assistant_translate_optimize_en", "翻译并优化为英文", "Translate into natural English and optimize it as a professional media-generation prompt while preserving the original intent."),
-        ("assistant_image_prompt", "优化为生图提示词", "Rewrite as a production-ready image-generation prompt with coherent subject, composition, lighting, lens, materials, style, and constraints."),
-        ("assistant_video_prompt", "优化为视频提示词", "Rewrite as a production-ready video-generation prompt with shot design, subject motion, camera movement, timing, continuity, atmosphere, and constraints."),
-    ]
-    return [{
-        "id": recipe_id,
-        "name": name,
-        "kind": "assistant_recipe",
-        "category": "assistant",
-        "scene": "提示词助手",
-        "positive": "",
-        "negative": "",
-        "params": {},
-        "system_template": f"{shared}\n\nTask: {instruction}",
-        "user_template": "Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>",
-        "preserve_references": True,
-        "default_target_language": "",
-        "recommended_reasoning_effort": "",
-        "builtin": True,
-    } for recipe_id, name, instruction in recipes]
-
-def builtin_prompt_assistant_recipe(recipe_id=""):
-    recipe_id = str(recipe_id or "").strip()
-    return next((item for item in builtin_prompt_assistant_recipes() if item.get("id") == recipe_id), None)
-
-def prompt_library_payload_fields(payload):
+def prompt_catalog_payload_fields(payload):
     fields = getattr(payload, "model_fields_set", None)
     if fields is None:
         fields = getattr(payload, "__fields_set__", set())
     return set(fields or [])
 
-def prompt_library_patch_value(payload, field, existing, preserve_empty=False):
-    if field not in prompt_library_payload_fields(payload):
-        return existing.get(field)
-    value = getattr(payload, field)
-    if not preserve_empty and isinstance(value, str) and not value.strip():
-        return existing.get(field)
-    return value
+def builtin_prompt_catalog():
+    try:
+        with open(PROMPT_CATALOG_DEFAULTS_PATH, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError) as error:
+        SERVER_LOGGER.warning("读取内置提示词目录失败: %s", error)
+        return None
 
-def validate_prompt_library_item_payload(payload, existing=None):
-    existing = existing if isinstance(existing, dict) else {}
-    kind = str(payload.kind or existing.get("kind") or "generation_prompt").strip()
-    if kind != "assistant_recipe":
-        if not str(payload.positive or existing.get("positive") or "").strip():
-            raise HTTPException(status_code=400, detail="提示词内容不能为空")
-        return
-    system_template = str(prompt_library_patch_value(payload, "system_template", existing, preserve_empty=True) or "").strip()
-    user_template = str(prompt_library_patch_value(payload, "user_template", existing, preserve_empty=True) or "").strip()
-    if not system_template or not user_template:
-        raise HTTPException(status_code=400, detail="系统提示词和用户提示词模板不能为空")
-    if "{{prompt}}" not in user_template and "{{selection}}" not in user_template:
-        raise HTTPException(status_code=400, detail="用户提示词模板必须包含 {{prompt}} 或 {{selection}}")
-    effort = str(prompt_library_patch_value(payload, "recommended_reasoning_effort", existing, preserve_empty=True) or "").strip()
-    if effort not in {"", "low", "medium", "high"}:
-        raise HTTPException(status_code=400, detail="推荐推理强度无效")
+def load_prompt_catalog_data():
+    return load_prompt_catalog_file(PROMPT_CATALOG_PATH, builtin_prompt_catalog())
 
-def normalize_prompt_library_item(item):
-    if not isinstance(item, dict):
-        item = {}
-    name = sanitize_asset_name(item.get("name") or "提示词", "提示词")
-    positive = str(item.get("positive") or item.get("text") or "").strip()
-    kind = "assistant_recipe" if str(item.get("kind") or "").strip() == "assistant_recipe" else "generation_prompt"
-    category = normalize_prompt_category_id(item.get("category") or "custom")
-    if kind == "assistant_recipe":
-        category = "assistant"
-    elif category == "assistant":
-        category = "custom"
+def prompt_catalog_patch_item(payload, existing, field_names):
+    fields = prompt_catalog_payload_fields(payload)
     return {
-        "id": re.sub(r"[^A-Za-z0-9_-]+", "_", str(item.get("id") or item.get("item_id") or f"tpl_{uuid.uuid4().hex[:12]}"))[:60],
-        "name": name,
-        "category": category,
-        "scene": str(item.get("scene") or "").strip()[:500],
-        "positive": positive,
-        "negative": str(item.get("negative") or "").strip(),
-        "params": item.get("params") if isinstance(item.get("params"), dict) else {},
-        "kind": kind,
-        "system_template": str(item.get("system_template") or "").strip() if kind == "assistant_recipe" else "",
-        "user_template": str(item.get("user_template") or "").strip() if kind == "assistant_recipe" else "",
-        "preserve_references": bool(item.get("preserve_references", True)),
-        "default_target_language": str(item.get("default_target_language") or "").strip()[:80],
-        "recommended_reasoning_effort": str(item.get("recommended_reasoning_effort") or "").strip()[:20],
-        "recommended_provider": str(item.get("recommended_provider") or "").strip()[:80],
-        "recommended_model": str(item.get("recommended_model") or "").strip()[:160],
-        "builtin": bool(item.get("builtin", False)),
-        "created_at": int(item.get("created_at") or now_ms()),
-        "updated_at": int(item.get("updated_at") or item.get("created_at") or now_ms()),
-    }
-
-def seed_system_prompt_library():
-    return {
-        "id": "system",
-        "name": "系统提示词库",
-        "type": "prompt",
-        "items": builtin_prompt_templates() + builtin_prompt_assistant_recipes(),
-        "categories": defaultPromptTemplateCategories(),
-    }
-
-def default_prompt_libraries():
-    return {
-        "active_library_id": "system",
-        "libraries": [seed_system_prompt_library()],
+        **existing,
+        **{field: getattr(payload, field) for field in field_names if field in fields},
         "updated_at": now_ms(),
     }
 
-def defaultPromptTemplateCategories():
-    return [
-        {"id": "assistant", "name": "AI 助手"},
-        {"id": "view", "name": "视角"},
-        {"id": "storyboard", "name": "分镜"},
-        {"id": "character", "name": "角色"},
-        {"id": "product", "name": "产品"},
-        {"id": "lighting", "name": "光影"},
-        {"id": "custom", "name": "我的"},
-    ]
-
-def normalize_prompt_template_categories(*category_lists, include_defaults=True):
-    normalized = []
-    seen = set()
-
-    def add_category(category):
-        if not isinstance(category, dict):
-            return
-        cat_id = normalize_prompt_category_id(category.get("id") or category.get("name") or "custom")
-        if cat_id in seen:
-            return
-        seen.add(cat_id)
-        # 不再强制把 custom 显示为“我的”，分组名以存储为准，这样内置分组也能被重命名。
-        name = sanitize_asset_name(category.get("name") or cat_id, cat_id)
-        normalized.append({"id": cat_id, "name": name})
-
-    # 先采用已存储的分组（保留用户对内置分组的重命名/删除），
-    # 只有在系统库一个分组都没有时才补齐默认内置分组（首次初始化）。
-    for categories in category_lists:
-        if isinstance(categories, list):
-            for category in categories:
-                add_category(category)
-    if include_defaults and not normalized:
-        for category in defaultPromptTemplateCategories():
-            add_category(category)
-    return normalized
-
-def normalize_prompt_libraries(data):
-    if not isinstance(data, dict):
-        data = default_prompt_libraries()
-    raw_libraries = data.get("libraries") if isinstance(data.get("libraries"), list) else []
-    raw_libraries = [lib for lib in raw_libraries if isinstance(lib, dict)]
-    if not any(lib.get("id") == "system" for lib in raw_libraries):
-        raw_libraries = [seed_system_prompt_library()] + raw_libraries
-    libraries = []
-    seen_lib_ids = set()
-    for raw in raw_libraries:
-        is_system = raw.get("id") == "system"
-        if is_system:
-            lib_id = "system"
-        else:
-            lib_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw.get("id") or f"lib_{uuid.uuid4().hex[:12]}"))[:60] or f"lib_{uuid.uuid4().hex[:12]}"
-        if lib_id in seen_lib_ids:
-            continue
-        seen_lib_ids.add(lib_id)
-        items = []
-        seen_items = set()
-        for raw_item in (raw.get("items") if isinstance(raw.get("items"), list) else []):
-            if not isinstance(raw_item, dict):
-                continue
-            item = normalize_prompt_library_item(raw_item)
-            item_id = item.get("id") or f"tpl_{uuid.uuid4().hex[:12]}"
-            if item_id in seen_items:
-                continue
-            seen_items.add(item_id)
-            items.append(item)
-        default_name = "系统提示词库" if is_system else "提示词库"
-        if is_system:
-            items = [
-                item for item in items
-                if not (
-                    item.get("builtin") is True
-                    and str(item.get("id") or "") in RETIRED_BUILTIN_PROMPT_ASSISTANT_RECIPE_IDS
-                )
-            ]
-            existing_item_ids = {str(item.get("id") or "") for item in items}
-            for recipe in builtin_prompt_assistant_recipes():
-                if recipe["id"] not in existing_item_ids:
-                    items.append(normalize_prompt_library_item(recipe))
-        raw_categories = raw.get("categories") if isinstance(raw.get("categories"), list) else []
-        if is_system and any(item.get("kind") == "assistant_recipe" for item in items):
-            category_ids = {normalize_prompt_category_id(category.get("id") or category.get("name") or "") for category in raw_categories if isinstance(category, dict)}
-            if "assistant" not in category_ids:
-                raw_categories = [*raw_categories, {"id": "assistant", "name": "AI 助手"}]
-        if not is_system:
-            # 非系统库不保留任何内置分组（视角/分镜等），仅保留用户自建分组
-            builtin_ids = {"view", "storyboard", "character", "product", "lighting", "custom", "assistant"}
-            raw_categories = [c for c in raw_categories if isinstance(c, dict) and normalize_prompt_category_id(c.get("id") or c.get("name") or "") not in builtin_ids]
-        libraries.append({
-            "id": lib_id,
-            "name": sanitize_asset_name(raw.get("name") or default_name, default_name),
-            "type": "prompt",
-            "readonly": False,
-            "system": is_system,
-            "categories": normalize_prompt_template_categories(raw_categories, include_defaults=is_system),
-            "items": items,
-        })
-    active = str(data.get("active_library_id") or "system")
-    if not any(lib["id"] == active for lib in libraries):
-        active = "system" if any(lib["id"] == "system" for lib in libraries) else (libraries[0]["id"] if libraries else "system")
-    return {"active_library_id": active, "libraries": libraries, "updated_at": int(data.get("updated_at") or now_ms())}
-
-def load_prompt_libraries():
-    if not os.path.exists(PROMPT_LIBRARY_PATH):
-        data = default_prompt_libraries()
-        return save_prompt_libraries(data)
-    try:
-        with open(PROMPT_LIBRARY_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        data = default_prompt_libraries()
-    if not isinstance(data, dict):
-        data = default_prompt_libraries()
-    normalized = normalize_prompt_libraries(data)
-    if normalized.get("active_library_id") != data.get("active_library_id") or normalized.get("libraries") != data.get("libraries"):
-        return save_prompt_libraries(normalized)
-    return normalized
-
-def save_prompt_libraries(data):
-    data = normalize_prompt_libraries(data)
-    data["updated_at"] = now_ms()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(PROMPT_LIBRARY_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return data
-
-def public_prompt_libraries(data=None):
-    data = normalize_prompt_libraries(data or load_prompt_libraries())
-    return {
-        "active_library_id": data.get("active_library_id") or (data.get("libraries") or [{}])[0].get("id") or "system",
-        "libraries": data.get("libraries") or [],
-        "updated_at": data.get("updated_at") or now_ms(),
-    }
+def prompt_catalog_validation_error(error):
+    return HTTPException(status_code=400, detail=str(error))
 
 def find_prompt_library(data, library_id=""):
     if not isinstance(data, dict):
@@ -10711,7 +10365,7 @@ def rh_field_role(field):
         return kind
     field = field or {}
     text = f"{field.get('fieldName') or ''} {field.get('label') or ''} {field.get('group') or ''}".lower()
-    if re.search(r"prompt|positive|negative|text|caption|description|关键词|提示词|正向|负向", text):
+    if re.search(r"prompt|positive|text|caption|description|关键词|提示词|正向", text):
         return "prompt"
     return "text"
 
@@ -16208,16 +15862,6 @@ async def clear_storage_preview_cache(request: Request):
                         pass
     return {"removed": removed, "bytes": removed_bytes}
 
-@app.get("/api/smart-canvas/prompt-templates")
-async def smart_canvas_prompt_templates():
-    try:
-        template_path = prompt_template_markdown_path()
-        source = os.path.relpath(template_path, BASE_DIR).replace("\\", "/") if template_path else ""
-        return {"templates": builtin_prompt_templates(), "source": source}
-    except Exception as e:
-        print(f"读取提示词模板失败: {e}")
-        return {"templates": []}
-
 @app.post("/api/canvas-assets/check")
 async def check_canvas_assets(payload: CanvasAssetCheckRequest):
     result = {}
@@ -16556,237 +16200,138 @@ async def export_smart_canvas_group(payload: SmartCanvasGroupExportRequest):
 async def get_asset_library():
     return {"library": load_asset_library()}
 
-@app.get("/api/prompt-libraries")
-async def get_prompt_libraries():
-    return {"library": public_prompt_libraries()}
+@app.get("/api/prompt-catalog")
+async def get_prompt_catalog():
+    with PROMPT_CATALOG_LOCK:
+        return {"catalog": load_prompt_catalog_data()}
 
-@app.post("/api/prompt-libraries")
-async def create_prompt_library(payload: PromptLibraryRequest):
-    data = load_prompt_libraries()
-    library = {
-        "id": f"lib_{uuid.uuid4().hex[:12]}",
-        "name": sanitize_asset_name(payload.name, "提示词库"),
-        "type": "prompt",
-        "categories": [],
-        "items": [],
-    }
-    data.setdefault("libraries", []).append(library)
-    data["active_library_id"] = library["id"]
-    data = save_prompt_libraries(data)
-    new_lib = next((lib for lib in data.get("libraries", []) if lib.get("id") == library["id"]), library)
-    return {"library": public_prompt_libraries(data), "prompt_library": new_lib}
+@app.post("/api/prompt-catalog/generation-prompts")
+async def create_generation_prompt(payload: GenerationPromptRequest):
+    try:
+        item = normalize_generation_prompt({
+            "id": f"gen_{uuid.uuid4().hex[:12]}",
+            **(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()),
+            "created_at": now_ms(),
+            "updated_at": now_ms(),
+        })
+    except PromptCatalogValidationError as error:
+        raise prompt_catalog_validation_error(error)
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        catalog["generation_prompts"].insert(0, item)
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "item": item}
 
-@app.patch("/api/prompt-libraries/{library_id}")
-async def rename_prompt_library(library_id: str, payload: PromptLibraryRequest):
-    data = load_prompt_libraries()
-    library = find_prompt_library(data, library_id)
-    if not library or library.get("id") != library_id:
-        raise HTTPException(status_code=404, detail="提示词库不存在")
-    library["name"] = sanitize_asset_name(payload.name, library.get("name") or "提示词库")
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "prompt_library": library}
+@app.patch("/api/prompt-catalog/generation-prompts/{item_id}")
+async def update_generation_prompt(item_id: str, payload: GenerationPromptRequest):
+    fields = (
+        "name", "category", "description", "icon", "prompt_template",
+        "recommended_ratio", "recommended_resolution",
+    )
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        items = catalog.get("generation_prompts") or []
+        index = next((index for index, item in enumerate(items) if item.get("id") == item_id), -1)
+        if index < 0:
+            raise HTTPException(status_code=404, detail="生成提示词不存在")
+        try:
+            item = normalize_generation_prompt(prompt_catalog_patch_item(payload, items[index], fields))
+        except PromptCatalogValidationError as error:
+            raise prompt_catalog_validation_error(error)
+        items[index] = item
+        catalog["generation_prompts"] = items
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "item": item}
 
-@app.delete("/api/prompt-libraries/{library_id}")
-async def delete_prompt_library(library_id: str):
-    if library_id == "system":
-        raise HTTPException(status_code=400, detail="系统提示词库不能删除，可以删除其中的提示词")
-    data = load_prompt_libraries()
-    libraries = data.get("libraries", []) or []
-    kept = [lib for lib in libraries if lib.get("id") != library_id]
-    if len(kept) == len(libraries):
-        raise HTTPException(status_code=404, detail="提示词库不存在")
-    data["libraries"] = kept
-    if data.get("active_library_id") == library_id:
-        data["active_library_id"] = "system"
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data)}
+@app.delete("/api/prompt-catalog/generation-prompts/{item_id}")
+async def delete_generation_prompt(item_id: str):
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        items = catalog.get("generation_prompts") or []
+        kept = [item for item in items if item.get("id") != item_id]
+        if len(kept) == len(items):
+            raise HTTPException(status_code=404, detail="生成提示词不存在")
+        catalog["generation_prompts"] = kept
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "removed": 1}
 
-@app.post("/api/prompt-libraries/items")
-async def add_prompt_library_item(payload: PromptLibraryItemRequest):
-    data = load_prompt_libraries()
-    library = find_prompt_library(data, payload.library_id)
-    if not library:
-        raise HTTPException(status_code=404, detail="提示词库不存在")
-    validate_prompt_library_item_payload(payload)
-    item = normalize_prompt_library_item({
-        "id": f"tpl_{uuid.uuid4().hex[:12]}",
-        "name": payload.name,
-        "category": payload.category,
-        "positive": payload.positive,
-        "negative": payload.negative,
-        "scene": payload.scene,
-        "kind": payload.kind,
-        "system_template": payload.system_template,
-        "user_template": payload.user_template,
-        "preserve_references": payload.preserve_references,
-        "default_target_language": payload.default_target_language,
-        "recommended_reasoning_effort": payload.recommended_reasoning_effort,
-        "recommended_provider": payload.recommended_provider,
-        "recommended_model": payload.recommended_model,
-        "created_at": now_ms(),
-        "updated_at": now_ms(),
-    })
-    library.setdefault("items", []).insert(0, item)
-    data["active_library_id"] = library.get("id") or data.get("active_library_id")
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "item": item}
-
-@app.patch("/api/prompt-libraries/items/{item_id}")
-async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemRequest):
-    data = load_prompt_libraries()
-    for library in data.get("libraries", []) or []:
-        if payload.library_id and library.get("id") != payload.library_id:
-            continue
-        for index, item in enumerate(library.get("items", []) or []):
-            if item.get("id") == item_id:
-                validate_prompt_library_item_payload(payload, item)
-                next_item = normalize_prompt_library_item({
-                    **item,
-                    "name": prompt_library_patch_value(payload, "name", item),
-                    "category": prompt_library_patch_value(payload, "category", item),
-                    "positive": prompt_library_patch_value(payload, "positive", item, preserve_empty=True),
-                    "negative": prompt_library_patch_value(payload, "negative", item, preserve_empty=True),
-                    "scene": prompt_library_patch_value(payload, "scene", item, preserve_empty=True),
-                    "kind": prompt_library_patch_value(payload, "kind", item),
-                    "system_template": prompt_library_patch_value(payload, "system_template", item, preserve_empty=True),
-                    "user_template": prompt_library_patch_value(payload, "user_template", item, preserve_empty=True),
-                    "preserve_references": prompt_library_patch_value(payload, "preserve_references", item, preserve_empty=True),
-                    "default_target_language": prompt_library_patch_value(payload, "default_target_language", item, preserve_empty=True),
-                    "recommended_reasoning_effort": prompt_library_patch_value(payload, "recommended_reasoning_effort", item, preserve_empty=True),
-                    "recommended_provider": prompt_library_patch_value(payload, "recommended_provider", item, preserve_empty=True),
-                    "recommended_model": prompt_library_patch_value(payload, "recommended_model", item, preserve_empty=True),
-                    "updated_at": now_ms(),
-                })
-                library["items"][index] = next_item
-                data = save_prompt_libraries(data)
-                return {"library": public_prompt_libraries(data), "item": next_item}
-    raise HTTPException(status_code=404, detail="提示词不存在")
-
-@app.post("/api/prompt-libraries/items/{item_id}/reset")
-async def reset_prompt_library_item(item_id: str):
-    default_item = builtin_prompt_assistant_recipe(item_id)
-    if not default_item:
-        raise HTTPException(status_code=400, detail="只有内置助手指令支持恢复默认")
-    data = load_prompt_libraries()
-    library = find_prompt_library(data, "system")
-    if not library:
-        raise HTTPException(status_code=404, detail="系统提示词库不存在")
-    items = library.get("items", []) or []
-    index = next((index for index, item in enumerate(items) if item.get("id") == item_id), -1)
-    restored = normalize_prompt_library_item({
-        **default_item,
-        "created_at": items[index].get("created_at") if index >= 0 else now_ms(),
-        "updated_at": now_ms(),
-    })
-    if index >= 0:
-        items[index] = restored
-    else:
-        items.append(restored)
-    library["items"] = items
-    data = save_prompt_libraries(data)
-    restored = next((item for lib in data.get("libraries", []) if lib.get("id") == "system" for item in lib.get("items", []) if item.get("id") == item_id), restored)
-    return {"library": public_prompt_libraries(data), "item": restored}
-
-@app.delete("/api/prompt-libraries/items/{item_id}")
-async def delete_prompt_library_item(item_id: str):
-    data = load_prompt_libraries()
-    removed = None
-    for library in data.get("libraries", []) or []:
-        keep = []
-        for item in library.get("items", []) or []:
-            if item.get("id") == item_id:
-                if item.get("builtin"):
-                    raise HTTPException(status_code=400, detail="内置助手指令不能删除，可以编辑或恢复默认")
-                removed = item
-            else:
-                keep.append(item)
-        library["items"] = keep
-    if not removed:
-        raise HTTPException(status_code=404, detail="提示词不存在")
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "removed": 1}
-
-@app.post("/api/prompt-libraries/items/delete")
-async def batch_delete_prompt_library_items(payload: PromptLibraryBatchDeleteRequest):
+@app.post("/api/prompt-catalog/generation-prompts/delete")
+async def batch_delete_generation_prompts(payload: PromptCatalogBatchDeleteRequest):
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
-        raise HTTPException(status_code=400, detail="没有选择提示词")
-    data = load_prompt_libraries()
-    protected = [item for library in data.get("libraries", []) or [] for item in library.get("items", []) or [] if item.get("id") in ids and item.get("builtin")]
-    if protected:
-        raise HTTPException(status_code=400, detail="所选内容包含不能删除的内置助手指令")
-    removed = 0
-    for library in data.get("libraries", []) or []:
-        keep = []
-        for item in library.get("items", []) or []:
-            if item.get("id") in ids:
-                removed += 1
-            else:
-                keep.append(item)
-        library["items"] = keep
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "removed": removed}
+        raise HTTPException(status_code=400, detail="没有选择生成提示词")
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        items = catalog.get("generation_prompts") or []
+        kept = [item for item in items if item.get("id") not in ids]
+        removed = len(items) - len(kept)
+        catalog["generation_prompts"] = kept
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "removed": removed}
 
-PROMPT_BUILTIN_CATEGORY_IDS = {"view", "storyboard", "character", "product", "lighting", "custom", "assistant"}
+@app.post("/api/prompt-catalog/system-instructions")
+async def create_system_instruction(payload: SystemInstructionRequest):
+    try:
+        item = normalize_system_instruction({
+            "id": f"sys_{uuid.uuid4().hex[:12]}",
+            **(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()),
+            "created_at": now_ms(),
+            "updated_at": now_ms(),
+        })
+    except PromptCatalogValidationError as error:
+        raise prompt_catalog_validation_error(error)
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        catalog["system_instructions"].insert(0, item)
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "item": item}
 
-@app.post("/api/prompt-libraries/categories")
-async def add_prompt_library_category(payload: PromptLibraryCategoryRequest):
-    data = load_prompt_libraries()
-    library = find_prompt_library(data, payload.library_id) or find_prompt_library(data, "system")
-    if not library:
-        raise HTTPException(status_code=404, detail="提示词库不存在")
-    name = sanitize_asset_name(payload.name, "新分组")
-    existing = {str(c.get("id")) for c in (library.get("categories") or []) if isinstance(c, dict)} | PROMPT_BUILTIN_CATEGORY_IDS
-    cat_id = f"pcat_{uuid.uuid4().hex[:10]}"
-    while cat_id in existing:
-        cat_id = f"pcat_{uuid.uuid4().hex[:10]}"
-    category = {"id": cat_id, "name": name}
-    library.setdefault("categories", []).append(category)
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "category": category}
+@app.patch("/api/prompt-catalog/system-instructions/{item_id}")
+async def update_system_instruction(item_id: str, payload: SystemInstructionRequest):
+    fields = (
+        "name", "description", "system_template", "user_template", "preserve_references",
+        "default_target_language", "recommended_reasoning_effort",
+    )
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        items = catalog.get("system_instructions") or []
+        index = next((index for index, item in enumerate(items) if item.get("id") == item_id), -1)
+        if index < 0:
+            raise HTTPException(status_code=404, detail="系统指令不存在")
+        try:
+            item = normalize_system_instruction(prompt_catalog_patch_item(payload, items[index], fields))
+        except PromptCatalogValidationError as error:
+            raise prompt_catalog_validation_error(error)
+        items[index] = item
+        catalog["system_instructions"] = items
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "item": item}
 
-@app.patch("/api/prompt-libraries/categories/{category_id}")
-async def rename_prompt_library_category(category_id: str, payload: PromptLibraryCategoryRequest):
-    # 普通系统分组也允许重命名；assistant 是跨库动态使用的功能分组，必须保持稳定。
-    if category_id == "assistant":
-        raise HTTPException(status_code=400, detail="助手指令专用分组不能重命名")
-    name = sanitize_asset_name(payload.name, "")
-    if not name:
-        raise HTTPException(status_code=400, detail="分组名称不能为空")
-    data = load_prompt_libraries()
-    updated = False
-    for library in data.get("libraries", []) or []:
-        for cat in library.get("categories") or []:
-            if isinstance(cat, dict) and cat.get("id") == category_id:
-                cat["name"] = name
-                updated = True
-    if not updated:
-        raise HTTPException(status_code=404, detail="分组不存在")
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data)}
+@app.delete("/api/prompt-catalog/system-instructions/{item_id}")
+async def delete_system_instruction(item_id: str):
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        items = catalog.get("system_instructions") or []
+        kept = [item for item in items if item.get("id") != item_id]
+        if len(kept) == len(items):
+            raise HTTPException(status_code=404, detail="系统指令不存在")
+        catalog["system_instructions"] = kept
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "removed": 1}
 
-@app.delete("/api/prompt-libraries/categories/{category_id}")
-async def delete_prompt_library_category(category_id: str):
-    # 普通系统分组也允许删除；assistant 是跨库动态使用的功能分组，不能删除。
-    if category_id == "assistant":
-        raise HTTPException(status_code=400, detail="助手指令专用分组不能删除")
-    data = load_prompt_libraries()
-    found = False
-    for library in data.get("libraries", []) or []:
-        cats = library.get("categories") or []
-        kept = [c for c in cats if not (isinstance(c, dict) and c.get("id") == category_id)]
-        if len(kept) != len(cats):
-            found = True
-            library["categories"] = kept
-            # 被删分组下的条目改挂到剩余的第一个分组；若已无分组则归到“未分类”。
-            fallback = next((str(c.get("id")) for c in kept if isinstance(c, dict) and c.get("id")), "")
-            for item in library.get("items", []) or []:
-                if isinstance(item, dict) and item.get("category") == category_id:
-                    item["category"] = fallback
-    if not found:
-        raise HTTPException(status_code=404, detail="分组不存在")
-    data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data)}
+@app.post("/api/prompt-catalog/system-instructions/delete")
+async def batch_delete_system_instructions(payload: PromptCatalogBatchDeleteRequest):
+    ids = {str(item) for item in (payload.ids or []) if str(item)}
+    if not ids:
+        raise HTTPException(status_code=400, detail="没有选择系统指令")
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        items = catalog.get("system_instructions") or []
+        kept = [item for item in items if item.get("id") not in ids]
+        removed = len(items) - len(kept)
+        catalog["system_instructions"] = kept
+        catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
+    return {"catalog": catalog, "removed": removed}
 
 @app.post("/api/asset-library/libraries")
 async def create_asset_library(payload: AssetLibraryRequest):

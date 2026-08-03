@@ -285,13 +285,12 @@ const outputPromptPanel = document.getElementById('outputPromptPanel');
 const outputPromptText = document.getElementById('outputPromptText');
 const outputCopyPromptBtn = document.getElementById('outputCopyPromptBtn');
 const outputRerunBtn = document.getElementById('outputRerunBtn');
-const promptTemplateModal = document.getElementById('promptTemplateModal');
-const promptTemplatePanel = document.getElementById('promptTemplatePanel') || promptTemplateModal?.querySelector('.prompt-template-panel');
-const promptTemplateClose = document.getElementById('promptTemplateClose');
-const promptTemplateSearch = document.getElementById('promptTemplateSearch');
-const promptTemplateLibrarySelect = document.getElementById('promptTemplateLibrarySelect');
-const promptTemplateCats = document.getElementById('promptTemplateCats');
-const promptTemplateBody = document.getElementById('promptTemplateBody');
+const generationModeModal = document.getElementById('generationModeModal');
+const generationModePanel = document.getElementById('generationModePanel') || generationModeModal?.querySelector('.generation-mode-panel');
+const generationModeClose = document.getElementById('generationModeClose');
+const generationModeSearch = document.getElementById('generationModeSearch');
+const generationModeCats = document.getElementById('generationModeCats');
+const generationModeBody = document.getElementById('generationModeBody');
 const canvasAssetToggle = document.getElementById('canvasAssetToggle');
 const canvasAssetPanel = document.getElementById('canvasAssetPanel');
 const canvasAssetCloseBtn = document.getElementById('canvasAssetCloseBtn');
@@ -414,20 +413,12 @@ let outputTimer = null;
 let loopContext = null;
 let clipboard = null;
 let lastImagePasteAt = 0;
-let promptTemplateNodeId = '';
-let promptTemplateCategory = 'all';
-let promptTemplateSelectedId = '';
-let promptTemplateQuery = '';
-let promptTemplateEditing = false;
-let canvasPromptTemplates = [];
-let canvasPromptTemplatesLoaded = false;
-let canvasPromptLibraries = [];
-let activePromptLibraryId = 'system';
-const CANVAS_PROMPT_TEMPLATE_GROUPS_KEY = 'canvas_prompt_template_groups_v1';
-const CANVAS_PROMPT_TEMPLATE_OVERRIDES_KEY = 'canvas_prompt_template_overrides';
-let promptTemplateGroups = [];
-let promptTemplateGroupEditMode = false;
-let canvasPromptTemplateOverrides = {hiddenBuiltinIds:[], editedBuiltins:{}};
+let generationModeNodeId = '';
+let generationModeCategory = 'all';
+let generationModeSelectedId = '';
+let generationModeQuery = '';
+let canvasGenerationPrompts = [];
+let canvasGenerationPromptsLoaded = false;
 let canvasAssetLibrary = {categories:[]};
 let canvasAssetLibraryOpen = false;
 let activeCanvasAssetLibraryId = '';
@@ -437,7 +428,6 @@ let localCanvasAssetLibrary = {items:[], tree:null};
 let assetManagerTab = 'assets';
 let managerSelectedAssetIds = new Set();
 let managerSelectedWorkflowIds = new Set();
-let managerSelectedPromptIds = new Set();
 let activeCanvasWorkflowCategoryId = '';
 const activeCanvasTaskPolls = new Set();
 let hoveredConnectionId = '';
@@ -6187,14 +6177,15 @@ function renderNode(node){
         }
     }
     if(node.type === 'prompt') {
-        const templateActive = promptTemplateModal?.classList.contains('open') && promptTemplateNodeId === node.id;
-        body.innerHTML = `<div class="prompt-editor"><div class="prompt-toolbar"><button class="prompt-template-btn ${templateActive ? 'active' : ''}" type="button" data-prompt-template-open data-prompt-template-node-id="${escapeAttr(node.id)}" aria-pressed="${templateActive ? 'true' : 'false'}" title="${escapeAttr(tr('canvas.promptTemplateLibrary'))}"><i data-lucide="library"></i><span>${escapeHtml(tr('canvas.promptTemplateShort'))}</span></button>${promptCounterHtml(node.text || '')}</div><textarea placeholder="${tr('canvas.promptPlaceholder')}">${escapeHtml(node.text || '')}</textarea></div>`;
+        const modeActive = generationModeModal?.classList.contains('open') && generationModeNodeId === node.id;
+        const generationMode = canvasPromptGenerationMode(node);
+        body.innerHTML = `<div class="prompt-editor"><div class="prompt-toolbar"><button class="generation-mode-btn ${modeActive || generationMode ? 'active' : ''}" type="button" data-generation-mode-open data-generation-mode-node-id="${escapeAttr(node.id)}" aria-pressed="${modeActive ? 'true' : 'false'}" title="生成模式"><i data-lucide="${canvasGenerationModeIcon(generationMode?.icon)}"></i><span>${escapeHtml(generationMode?.name || '生成模式')}</span></button>${promptCounterHtml(node.text || '')}</div><textarea placeholder="${tr('canvas.promptPlaceholder')}">${escapeHtml(node.text || '')}</textarea></div>`;
         const textarea = body.querySelector('textarea');
-        const templateBtn = body.querySelector('[data-prompt-template-open]');
-        templateBtn.onclick = e => {
+        const modeBtn = body.querySelector('[data-generation-mode-open]');
+        modeBtn.onclick = e => {
             e.preventDefault();
             e.stopPropagation();
-            openPromptTemplateModal(node.id);
+            openGenerationModeModal(node.id);
         };
         bindScrollableText(textarea);
         textarea.oninput = e => {
@@ -7000,9 +6991,7 @@ async function uploadFilesToLibrary(files, libraryId, categoryId){
 function openAssetManager(){
     assetManagerModal?.classList.add('open');
     managerSelectedAssetIds.clear();
-    managerSelectedPromptIds.clear();
-    canvasPromptTemplatesLoaded = false;
-    Promise.all([loadCanvasAssetLibrary({renderPanel:false}), loadCanvasPromptTemplates()]).then(renderAssetManager);
+    loadCanvasAssetLibrary({renderPanel:false}).then(renderAssetManager);
 }
 function closeAssetManager(){
     assetManagerModal?.classList.remove('open');
@@ -7011,8 +7000,7 @@ window.closeAssetManager = closeAssetManager;
 function renderAssetManager(){
     if(!assetManagerBody) return;
     document.querySelectorAll('[data-manager-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.managerTab === assetManagerTab));
-    if(assetManagerTab === 'prompts') renderPromptAssetManager();
-    else if(assetManagerTab === 'workflows') renderWorkflowAssetManager();
+    if(assetManagerTab === 'workflows') renderWorkflowAssetManager();
     else renderImageAssetManager();
     refreshIcons();
 }
@@ -7128,611 +7116,219 @@ function renderWorkflowAssetManager(){
         renderCanvasAssetLibrary();
     });
 }
-function renderPromptAssetManager(){
-    const libs = canvasPromptLibraries.filter(lib => lib.id !== 'system');
-    if(!canvasPromptLibraries.some(lib => lib.id === activePromptLibraryId)) activePromptLibraryId = libs[0]?.id || canvasPromptLibraries[0]?.id || 'system';
-    const lib = canvasPromptLibraries.find(item => item.id === activePromptLibraryId) || libs[0] || null;
-    const items = (lib?.items || []).filter(item => item?.kind !== 'assistant_recipe');
-    managerSelectedPromptIds = new Set([...managerSelectedPromptIds].filter(id => items.some(item => item.id === id)));
-    const canEditLibrary = !!lib && !lib.readonly;
-    const canDeleteLibrary = canEditLibrary && lib.id !== 'system' && canvasPromptLibraries.length > 1;
-    assetManagerBody.innerHTML = `
-        <div class="asset-manager-side">
-            <div class="asset-manager-tools">
-                <button type="button" class="primary" data-manager-prompt-lib-new><i data-lucide="plus" class="w-4 h-4"></i><span>新提示词库</span></button>
-                <button type="button" ${!canEditLibrary ? 'disabled' : ''} data-manager-prompt-lib-rename><i data-lucide="pencil" class="w-4 h-4"></i><span>重命名</span></button>
-                <button type="button" class="danger" ${canDeleteLibrary ? '' : 'disabled'} data-manager-prompt-lib-delete><i data-lucide="trash-2" class="w-4 h-4"></i><span>删除库</span></button>
-            </div>
-            <div class="asset-manager-list">
-                ${canvasPromptLibraries.map(library => `<button type="button" class="${library.id === activePromptLibraryId ? 'active' : ''}" data-manager-prompt-lib="${escapeAttr(library.id)}"><span>${escapeHtml(library.name || '提示词库')}</span><small>${(library.items || []).filter(item => item?.kind !== 'assistant_recipe').length}</small></button>`).join('')}
-            </div>
-        </div>
-        <div class="asset-manager-main">
-            <div class="asset-manager-tools">
-                <button type="button" class="primary" ${!lib || lib.readonly ? 'disabled' : ''} data-manager-prompt-new><i data-lucide="file-plus-2" class="w-4 h-4"></i><span>新增提示词</span></button>
-                <button type="button" class="danger" ${!lib || lib.readonly || !managerSelectedPromptIds.size ? 'disabled' : ''} data-manager-prompt-delete><i data-lucide="trash-2" class="w-4 h-4"></i><span>删除所选 ${managerSelectedPromptIds.size ? managerSelectedPromptIds.size : ''}</span></button>
-            </div>
-            <div class="asset-manager-grid">
-                ${items.length ? items.map(item => `<div class="asset-manager-card">
-                    <input type="checkbox" data-manager-prompt-check="${escapeAttr(item.id)}" ${managerSelectedPromptIds.has(item.id) ? 'checked' : ''} ${lib?.readonly ? 'disabled' : ''}>
-                    <div class="asset-manager-card-text">${escapeHtml(item.positive || '')}</div>
-                    <span class="asset-manager-card-name" title="${escapeAttr(item.name || '')}">${escapeHtml(item.name || '提示词')}</span>
-                    <div class="asset-manager-card-actions">
-                        <button type="button" ${lib?.readonly ? 'disabled' : ''} data-manager-prompt-edit="${escapeAttr(item.id)}"><i data-lucide="pencil" class="w-3.5 h-3.5"></i><span>编辑</span></button>
-                        <button type="button" class="danger" ${lib?.readonly ? 'disabled' : ''} data-manager-prompt-remove="${escapeAttr(item.id)}"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span>删除</span></button>
-                    </div>
-                </div>`).join('') : `<div class="canvas-asset-empty">当前提示词库为空</div>`}
-            </div>
-        </div>
-    `;
+function canvasGenerationPromptSnapshot(item){
+    return window.GenerationPromptModel?.generationPromptSnapshot?.(item) || null;
 }
-async function loadCanvasPromptTemplates(){
-    if(canvasPromptTemplatesLoaded) return canvasPromptTemplates;
+async function loadCanvasGenerationPrompts(force=false){
+    if(canvasGenerationPromptsLoaded && !force) return canvasGenerationPrompts;
     try {
-        loadCanvasPromptTemplateGroups();
-        loadCanvasPromptTemplateOverrides();
-        const data = await fetch('/api/prompt-libraries').then(r => r.ok ? r.json() : {library:{libraries:[]}});
-        canvasPromptLibraries = Array.isArray(data.library?.libraries) ? data.library.libraries : [];
-        if(!canvasPromptLibraries.some(lib => lib.id === activePromptLibraryId)) {
-            activePromptLibraryId = canvasPromptLibraries.some(lib => lib.id === 'system') ? 'system' : (canvasPromptLibraries[0]?.id || 'system');
-        }
-        canvasPromptTemplates = activeCanvasPromptLibraryItems();
-    } catch(e) {
-        canvasPromptTemplates = [];
-        canvasPromptLibraries = [];
-    }
-    canvasPromptTemplatesLoaded = true;
-    return canvasPromptTemplates;
-}
-function activeCanvasPromptLibrary(){
-    return canvasPromptLibraries.find(lib => lib.id === activePromptLibraryId) || canvasPromptLibraries[0] || {id:'system', name:'系统提示词库', readonly:true, items:[]};
-}
-function defaultCanvasPromptTemplateGroups(){
-    return [
-        {id:'view', name:tr('smart.tplCatView')},
-        {id:'storyboard', name:tr('smart.tplCatStoryboard')},
-        {id:'character', name:tr('smart.tplCatCharacter')},
-        {id:'product', name:tr('smart.tplCatProduct')},
-        {id:'lighting', name:tr('smart.tplCatLighting')},
-        // “我的”分组在后端/智能画布里用的分类 id 是 custom，这里保持一致，否则后端 custom 条目在普通画布看不到。
-        {id:'custom', name:tr('smart.tplCatMine')}
-    ];
-}
-function loadCanvasPromptTemplateGroups(){
-    try {
-        const list = JSON.parse(localStorage.getItem(CANVAS_PROMPT_TEMPLATE_GROUPS_KEY) || '[]');
-        const valid = Array.isArray(list) ? list.filter(g => g?.id && g?.name) : [];
-        const defaults = defaultCanvasPromptTemplateGroups();
-        promptTemplateGroups = defaults.map(group => valid.find(g => g.id === group.id) || group);
-        valid.filter(g => !promptTemplateGroups.some(x => x.id === g.id)).forEach(g => promptTemplateGroups.push(g));
-    } catch(e) {
-        promptTemplateGroups = defaultCanvasPromptTemplateGroups();
-    }
-}
-function saveCanvasPromptTemplateGroups(){
-    localStorage.setItem(CANVAS_PROMPT_TEMPLATE_GROUPS_KEY, JSON.stringify(promptTemplateGroups));
-}
-function loadCanvasPromptTemplateOverrides(){
-    try {
-        const data = JSON.parse(localStorage.getItem(CANVAS_PROMPT_TEMPLATE_OVERRIDES_KEY) || '{}');
-        canvasPromptTemplateOverrides = {
-            hiddenBuiltinIds:Array.isArray(data.hiddenBuiltinIds) ? data.hiddenBuiltinIds : [],
-            editedBuiltins:data.editedBuiltins && typeof data.editedBuiltins === 'object' ? data.editedBuiltins : {}
-        };
-    } catch(e) {
-        canvasPromptTemplateOverrides = {hiddenBuiltinIds:[], editedBuiltins:{}};
-    }
-}
-function saveCanvasPromptTemplateOverrides(){
-    localStorage.setItem(CANVAS_PROMPT_TEMPLATE_OVERRIDES_KEY, JSON.stringify(canvasPromptTemplateOverrides));
-}
-function activeCanvasPromptLibraryItems(){
-    const lib = activeCanvasPromptLibrary();
-    const hidden = new Set(canvasPromptTemplateOverrides.hiddenBuiltinIds || []);
-    if(lib.id !== 'system'){
-        return (lib.items || []).filter(t => t?.id && t?.positive).map(t => ({
-            ...t,
-            sourceId:t.id,
-            remote:true,
-            libraryId:lib.id,
-            libraryName:lib.name || '提示词库',
-            builtin:false,
-        }));
-    }
-    const system = canvasPromptLibraries.find(item => item.id === 'system') || lib;
-    const builtins = (system.items || [])
-        .filter(t => t?.id && t?.positive && !hidden.has(t.id))
-        .map(t => ({
-            ...t,
-            ...(canvasPromptTemplateOverrides.editedBuiltins?.[t.id] || {}),
-            sourceId:t.id,
-            builtin:true,
-            // 系统提示词库本身是后端真实库（/api/prompt-libraries 返回的 system 库），标记为 remote，
-            // 这样编辑/删除走后端 PATCH/DELETE 并同步（与智能画布一致），而不是只存本地、不同步。
-            remote:true,
-            libraryId:'system',
-            libraryName:'系统提示词库',
-        }));
-    const remotes = canvasPromptLibraries
-        .filter(item => item.id !== 'system')
-        .flatMap(item => (item.items || [])
-            .filter(t => t?.id && t?.positive)
-            .map(t => ({
-                ...t,
-                sourceId:t.id,
-                remote:true,
-                builtin:false,
-                libraryId:item.id,
-                libraryName:item.name || '提示词库',
-            })));
-    return [...builtins, ...remotes];
-}
-function refreshCanvasPromptTemplatesFromLibraries(){
-    canvasPromptTemplatesLoaded = true;
-    canvasPromptTemplates = activeCanvasPromptLibraryItems();
-    renderCanvasPromptLibrarySelect();
-}
-function renderCanvasPromptLibrarySelect(){
-    if(!promptTemplateLibrarySelect) return;
-    promptTemplateLibrarySelect.innerHTML = canvasPromptLibraries.map(lib => `<option value="${escapeAttr(lib.id)}" ${lib.id === activePromptLibraryId ? 'selected' : ''}>${escapeHtml(lib.name || '提示词库')}</option>`).join('');
-}
-function activeCanvasPromptTemplateGroups(){
-    const lib = activeCanvasPromptLibrary();
-    if(!lib || lib.id === 'system') return promptTemplateGroups;
-    return Array.isArray(lib.categories) ? lib.categories.filter(c => c?.id && c?.name) : [];
-}
-function canvasPromptTemplateCategoryLabel(category){
-    if(category === 'all') return tr('smart.tplAll');
-    const lib = activeCanvasPromptLibrary();
-    if(lib && lib.id !== 'system'){
-        return activeCanvasPromptTemplateGroups().find(g => g.id === category)?.name || category || '';
-    }
-    const builtin = {
-        view:tr('smart.tplCatView'),
-        storyboard:tr('smart.tplCatStoryboard'),
-        character:tr('smart.tplCatCharacter'),
-        product:tr('smart.tplCatProduct'),
-        lighting:tr('smart.tplCatLighting'),
-        custom:tr('smart.tplCatMine'),
-        mine:tr('smart.tplCatMine')
-    };
-    return builtin[category] || promptTemplateGroups.find(g => g.id === category)?.name || category || '';
-}
-function canvasPromptTemplateName(template){
-    if(langIsEn() && template?.name_en) return template.name_en;
-    return template?.name || '';
-}
-function canvasPromptTemplateScene(template){
-    if(langIsEn() && template?.scene_en) return template.scene_en;
-    return template?.scene || '';
-}
-function canvasPromptTemplateText(template, mode='positive'){
-    const positive = String(template?.positive || '').trim();
-    if(mode === 'positive') return positive;
-    const negative = String(template?.negative || '').trim();
-    const params = Object.entries(template?.params || {})
-        .map(([key, value]) => `${key}: ${value}`)
-        .join('\n');
-    return [positive, negative ? `Negative prompt:\n${negative}` : '', params ? `Params:\n${params}` : ''].filter(Boolean).join('\n\n');
-}
-function canvasPromptTemplateSearchText(template){
-    return [
-        template?.name,
-        template?.name_en,
-        template?.scene,
-        template?.scene_en,
-        template?.positive,
-        template?.negative,
-        template?.libraryName
-    ].join(' ').toLowerCase();
-}
-function canvasPromptTemplateVisibleItems(){
-    const query = String(promptTemplateSearch?.value || promptTemplateQuery || '').trim().toLowerCase();
-    return canvasPromptTemplates.filter(item => {
-        if(promptTemplateCategory !== 'all' && item.category !== promptTemplateCategory) return false;
-        if(!query) return true;
-        return canvasPromptTemplateSearchText(item).includes(query);
-    });
-}
-function currentCanvasPromptTemplateLibraryEditable(){
-    // 系统库后端 readonly=false，也允许新增/编辑（走后端，与智能画布、素材库管理同步）。只按 readonly 判断。
-    const lib = activeCanvasPromptLibrary();
-    return Boolean(lib && !lib.readonly);
-}
-function currentCanvasPromptTemplateNodeText(){
-    const node = nodes.find(n => n.id === promptTemplateNodeId && n.type === 'prompt');
-    return String(node?.text || '').trim();
-}
-function syncCanvasPromptTemplateButtons(){
-    const activeId = promptTemplateModal?.classList.contains('open') ? promptTemplateNodeId : '';
-    document.querySelectorAll('[data-prompt-template-open]').forEach(btn => {
-        const active = Boolean(activeId && btn.dataset.promptTemplateNodeId === activeId);
-        btn.classList.toggle('active', active);
-        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
-}
-function canvasPromptTemplateDefaultName(text){
-    return (String(text || '').trim().split(/\r?\n/)[0] || '新提示词').slice(0, 28);
-}
-function selectedCanvasPromptTemplate(){
-    return canvasPromptTemplates.find(item => item.id === promptTemplateSelectedId) || canvasPromptTemplates[0] || null;
-}
-function syncCanvasPromptTemplateMutation(data, fallbackSelectedId=''){
-    canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-    refreshCanvasPromptTemplatesFromLibraries();
-    promptTemplateSelectedId = data.item?.id || fallbackSelectedId || promptTemplateSelectedId;
-    const selected = selectedCanvasPromptTemplate();
-    promptTemplateCategory = selected?.category || promptTemplateCategory || 'all';
-}
-async function saveCurrentCanvasPromptAsTemplate(){
-    const lib = activeCanvasPromptLibrary();
-    if(!currentCanvasPromptTemplateLibraryEditable()){ setStatus('请选择可编辑的提示词库'); return; }
-    const text = currentCanvasPromptTemplateNodeText();
-    if(!text){ setStatus('当前提示词为空'); return; }
-    try {
-        const data = await fetch('/api/prompt-libraries/items', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-                library_id:lib.id,
-                name:canvasPromptTemplateDefaultName(text),
-                category:promptTemplateCategory === 'all' ? 'custom' : promptTemplateCategory,
-                positive:text,
-                scene:'我的提示词预设'
-            })
-        }).then(async r => {
-            if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '保存失败');
-            return r.json();
+        const data = await fetch('/api/prompt-catalog').then(async response => {
+            if(!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || '加载生成模式失败');
+            return response.json();
         });
-        activePromptLibraryId = lib.id;
-        syncCanvasPromptTemplateMutation(data, data.item?.id || '');
-        promptTemplateEditing = true;
-        renderPromptTemplateModal();
-    } catch(err) {
-        setStatus(err.message || '保存失败');
+        canvasGenerationPrompts = Array.isArray(data?.catalog?.generation_prompts) ? data.catalog.generation_prompts : [];
+    } catch(error) {
+        canvasGenerationPrompts = [];
+        setStatus(error?.message || '加载生成模式失败');
     }
+    canvasGenerationPromptsLoaded = true;
+    return canvasGenerationPrompts;
 }
-async function createBlankCanvasPromptTemplate(){
-    const lib = activeCanvasPromptLibrary();
-    if(!currentCanvasPromptTemplateLibraryEditable()){ setStatus('请选择可编辑的提示词库'); return; }
-    const category = promptTemplateCategory && promptTemplateCategory !== 'all' ? promptTemplateCategory : 'custom';
+function canvasPromptGenerationMode(node){
+    const stored = canvasGenerationPromptSnapshot(node?.generationPromptSnapshot);
+    if(stored) return stored;
+    const id = String(node?.generationPromptId || '').trim();
+    return id ? canvasGenerationPromptSnapshot(canvasGenerationPrompts.find(item => String(item?.id || '') === id)) : null;
+}
+function canvasGenerationModeIcon(name){
+    const allowed = new Set(['grid-3x3','grid-2x2','scan-face','panels-top-left','layout-grid','sun-medium','user-round','smile','gallery-horizontal-end']);
+    return allowed.has(String(name || '')) ? String(name) : 'blocks';
+}
+function canvasGenerationModeSupported(generator){
+    if(generator?.type === 'rh') return true;
+    if(generator?.type !== 'generator') return false;
+    const providerId = resolveImageProviderId(generator.apiProvider || '');
+    const provider = apiProviders.find(item => item.id === providerId || item.id === generator.apiProvider);
+    return String(provider?.protocol || '').trim().toLowerCase() === 'venice'
+        || String(providerId || generator.apiProvider || '').toLowerCase().includes('venice');
+}
+function canvasPromptTextForGenerator(node, generator){
+    const raw = String(node?.text || '').trim();
+    const mode = canvasPromptGenerationMode(node);
+    if(!mode || !canvasGenerationModeSupported(generator)) return raw;
     try {
-        const data = await fetch('/api/prompt-libraries/items', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:lib.id, name:'新模板', category, positive:'新提示词', scene:'我的提示词预设'})
-        }).then(async r => {
-            if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '创建失败');
-            return r.json();
-        });
-        activePromptLibraryId = lib.id;
-        promptTemplateCategory = category;
-        syncCanvasPromptTemplateMutation(data, data.item?.id || '');
-        promptTemplateEditing = true;
-        renderPromptTemplateModal();
-    } catch(err) {
-        setStatus(err.message || '创建失败');
+        return window.GenerationPromptModel?.compileGenerationPromptSnapshot?.(mode, raw) || raw;
+    } catch(error) {
+        console.warn('Canvas generation mode skipped:', error);
+        return raw;
     }
 }
-async function saveCanvasPromptTemplateEdit(){
-    const lib = activeCanvasPromptLibrary();
-    const item = selectedCanvasPromptTemplate();
-    if(!item) return;
-    const name = promptTemplatePanel.querySelector('[data-template-edit-name]')?.value?.trim() || '';
-    const positive = promptTemplatePanel.querySelector('[data-template-edit-text]')?.value?.trim() || '';
-    const category = promptTemplatePanel.querySelector('[data-template-edit-category]')?.value || 'mine';
-    if(!name || !positive){ setStatus(tr('smart.tplRequired')); return; }
-    try {
-        // 仅当模板不是后端项（非 remote）时才退回本地覆盖；系统库现在是 remote，走下面的后端 PATCH 同步。
-        if(item.builtin && !item.remote){
-            canvasPromptTemplateOverrides.editedBuiltins = canvasPromptTemplateOverrides.editedBuiltins || {};
-            canvasPromptTemplateOverrides.editedBuiltins[item.sourceId || item.id] = {
-                ...(canvasPromptTemplateOverrides.editedBuiltins[item.sourceId || item.id] || {}),
-                name,
-                category,
-                positive
-            };
-            saveCanvasPromptTemplateOverrides();
-            promptTemplateEditing = false;
-            refreshCanvasPromptTemplatesFromLibraries();
-            renderPromptTemplateModal();
-            return;
-        }
-        const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {
-            method:'PATCH',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_id:item.libraryId || lib.id, name, category, scene:item.scene || '', positive, negative:item.negative || ''})
-        }).then(async r => {
-            if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '保存失败');
-            return r.json();
-        });
-        // 迁移：清掉这条系统模板的旧本地覆盖，避免它盖住刚同步到后端的最新内容。
-        const legacyKey = item.sourceId || item.id;
-        if(canvasPromptTemplateOverrides.editedBuiltins && canvasPromptTemplateOverrides.editedBuiltins[legacyKey]){
-            delete canvasPromptTemplateOverrides.editedBuiltins[legacyKey];
-            saveCanvasPromptTemplateOverrides();
-        }
-        syncCanvasPromptTemplateMutation(data, item.id);
-        promptTemplateEditing = false;
-        renderPromptTemplateModal();
-    } catch(err) {
-        setStatus(err.message || '保存失败');
-    }
-}
-async function deleteCanvasPromptTemplate(){
-    const item = selectedCanvasPromptTemplate();
-    if(!item) return;
-    if(!window.confirm(`删除提示词「${canvasPromptTemplateName(item) || '提示词'}」？`)) return;
-    try {
-        // 系统库现在是 remote，删除走后端 DELETE 并同步；仅非 remote 的内置项才退回本地隐藏。
-        if(item.builtin && !item.remote){
-            canvasPromptTemplateOverrides.hiddenBuiltinIds = [...new Set([...(canvasPromptTemplateOverrides.hiddenBuiltinIds || []), item.sourceId || item.id])];
-            saveCanvasPromptTemplateOverrides();
-            promptTemplateSelectedId = '';
-            promptTemplateEditing = false;
-            refreshCanvasPromptTemplatesFromLibraries();
-            renderPromptTemplateModal();
-            return;
-        }
-        const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {method:'DELETE'}).then(async r => {
-            if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '删除失败');
-            return r.json();
-        });
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        refreshCanvasPromptTemplatesFromLibraries();
-        promptTemplateSelectedId = '';
-        promptTemplateEditing = false;
-        renderPromptTemplateModal();
-    } catch(err) {
-        setStatus(err.message || '删除失败');
-    }
-}
-function promptTemplateScrollSnapshot(){
-    if(!promptTemplatePanel) return null;
+function canvasPromptRecord(node, generator){
+    const userPrompt = String(node?.text || '').trim();
+    const generationPromptSnapshot = canvasGenerationModeSupported(generator)
+        ? canvasPromptGenerationMode(node)
+        : null;
     return {
-        panelTop:promptTemplatePanel.scrollTop || 0,
-        tabLeft:promptTemplatePanel.querySelector('.prompt-template-tabs')?.scrollLeft || 0,
-        listTop:promptTemplatePanel.querySelector('.prompt-template-list')?.scrollTop || 0,
-        detailTop:promptTemplatePanel.querySelector('.prompt-template-preview-content')?.scrollTop || 0
+        userPrompt,
+        generationPromptSnapshot,
+        prompt:canvasPromptTextForGenerator(node, generator)
     };
 }
-function restorePromptTemplateScroll(snapshot){
-    if(!snapshot || !promptTemplatePanel) return;
-    requestAnimationFrame(() => {
-        promptTemplatePanel.scrollTop = snapshot.panelTop || 0;
-        const tabs = promptTemplatePanel.querySelector('.prompt-template-tabs');
-        const list = promptTemplatePanel.querySelector('.prompt-template-list');
-        const detail = promptTemplatePanel.querySelector('.prompt-template-preview-content');
-        if(tabs) tabs.scrollLeft = snapshot.tabLeft || 0;
-        if(list) list.scrollTop = snapshot.listTop || 0;
-        if(detail) detail.scrollTop = snapshot.detailTop || 0;
+function canvasPromptRecordsForNode(node, generator){
+    if(node?.type === 'prompt') return [canvasPromptRecord(node, generator)];
+    if(node?.type === 'group' || node?.type === 'promptGroup'){
+        return (node.items || [])
+            .map(id => nodes.find(item => item.id === id && item.type === 'prompt'))
+            .filter(Boolean)
+            .map(item => canvasPromptRecord(item, generator));
+    }
+    return [];
+}
+function canvasPromptRecordsFromSources(sources, generator=null){
+    return (sources || []).flatMap(source => {
+        if(Array.isArray(source?.promptRecords)) return source.promptRecords;
+        if(source?.type === 'prompt') return canvasPromptRecordsForNode(nodes.find(node => node.id === source.id), generator);
+        if(source?.type === 'groupPrompt') return canvasPromptRecordsForNode(nodes.find(node => node.id === source.groupId), generator);
+        if(source?.type === 'promptGroup') return canvasPromptRecordsForNode(nodes.find(node => node.id === source.id), generator);
+        return [];
     });
 }
-async function createCanvasPromptTemplateGroup(){
-    const name = window.prompt(tr('smart.tplNewGroupPrompt'), tr('smart.tplNewGroupDefault'));
-    if(!String(name || '').trim()) return;
-    const lib = activeCanvasPromptLibrary();
-    if(lib && lib.id !== 'system'){
-        try {
-            const data = await fetch('/api/prompt-libraries/categories', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({name:String(name).trim().slice(0, 24), library_id:lib.id})
-            }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '新增分组失败'); return r.json(); });
-            canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-            promptTemplateCategory = data.category?.id || promptTemplateCategory;
-            refreshCanvasPromptTemplatesFromLibraries();
-            renderPromptTemplateModal();
-        } catch(err){ setStatus(err.message || '新增分组失败'); }
-        return;
-    }
-    const group = {id:uid('tpl_group'), name:String(name).trim().slice(0, 24)};
-    promptTemplateGroups.push(group);
-    saveCanvasPromptTemplateGroups();
-    promptTemplateCategory = group.id;
-    renderPromptTemplateModal();
+function canvasDisplayPromptFromSources(sources, generator, fallback=''){
+    const records = canvasPromptRecordsFromSources(sources, generator);
+    if(records.length) return records.map(record => record.userPrompt).filter(Boolean).join('\n\n');
+    return String(fallback || '').trim();
 }
-async function renameCanvasPromptTemplateGroup(groupId){
-    const lib = activeCanvasPromptLibrary();
-    const group = activeCanvasPromptTemplateGroups().find(g => g.id === groupId);
-    if(!group) return;
-    const name = window.prompt(tr('smart.tplGroupNamePrompt'), group.name || '');
-    if(!String(name || '').trim()) return;
-    if(lib && lib.id !== 'system'){
-        try {
-            const data = await fetch(`/api/prompt-libraries/categories/${encodeURIComponent(groupId)}`, {
-                method:'PATCH', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({name:String(name).trim().slice(0, 24), library_id:lib.id})
-            }).then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '重命名失败'); return r.json(); });
-            canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-            refreshCanvasPromptTemplatesFromLibraries();
-            renderPromptTemplateModal();
-        } catch(err){ setStatus(err.message || '重命名失败'); }
-        return;
-    }
-    group.name = String(name).trim().slice(0, 24);
-    saveCanvasPromptTemplateGroups();
-    renderPromptTemplateModal();
+function canvasGenerationRecommendationFromSources(sources, generator){
+    return canvasPromptRecordsFromSources(sources, generator).find(record => record.generationPromptSnapshot)?.generationPromptSnapshot || null;
 }
-async function deleteCanvasPromptTemplateGroup(groupId){
-    const lib = activeCanvasPromptLibrary();
-    if(lib && lib.id !== 'system'){
-        if(!window.confirm(tr('smart.tplDeleteGroupConfirm'))) return;
-        try {
-            const data = await fetch(`/api/prompt-libraries/categories/${encodeURIComponent(groupId)}`, {method:'DELETE'})
-                .then(async r => { if(!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || '删除失败'); return r.json(); });
-            canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-            if(promptTemplateCategory === groupId) promptTemplateCategory = 'all';
-            refreshCanvasPromptTemplatesFromLibraries();
-            renderPromptTemplateModal();
-        } catch(err){ setStatus(err.message || '删除失败'); }
-        return;
+function canvasGeneratorWithRecommendations(generator, sources){
+    const snapshot = canvasGenerationRecommendationFromSources(sources, generator);
+    if(!snapshot || !canvasGenerationModeSupported(generator)) return generator;
+    if(generator?.type === 'generator'){
+        return window.GenerationPromptModel?.applyGenerationPromptRecommendations?.(generator, snapshot) || generator;
     }
-    if(['view','storyboard','character','product','lighting','mine'].includes(groupId)){
-        renameCanvasPromptTemplateGroup(groupId);
-        return;
-    }
-    if(!window.confirm(tr('smart.tplDeleteGroupConfirm'))) return;
-    promptTemplateGroups = promptTemplateGroups.filter(g => g.id !== groupId);
-    Object.entries(canvasPromptTemplateOverrides.editedBuiltins || {}).forEach(([id, item]) => {
-        if(item?.category === groupId) canvasPromptTemplateOverrides.editedBuiltins[id] = {...item, category:'mine'};
+    if(generator?.type !== 'rh') return generator;
+    const next = JSON.parse(JSON.stringify(generator));
+    next.rhParams = next.rhParams || {};
+    rhActiveFields(next).forEach(field => {
+        const descriptor = `${field?.fieldName || ''} ${field?.label || ''} ${field?.group || ''}`.toLowerCase();
+        const kind = /aspect|ratio|宽高比|画幅比例|比例/.test(descriptor)
+            ? 'ratio'
+            : (/resolution|image.?size|output.?size|分辨率|输出尺寸/.test(descriptor) ? 'resolution' : '');
+        const recommendation = kind === 'ratio' ? snapshot.recommended_ratio : kind === 'resolution' ? snapshot.recommended_resolution : '';
+        if(!recommendation) return;
+        const options = rhExtractFieldOptions(field) || [];
+        const normalize = value => String(value || '').trim().toLowerCase().replace(/[×x]/g, 'x').replace(/\s+/g, '');
+        const aliases = kind === 'ratio'
+            ? [recommendation, recommendation.replace(':', 'x'), recommendation.replace(':', '/')]
+            : [recommendation, recommendation.toLowerCase(), recommendation.replace('×', 'x')];
+        const value = options.length
+            ? options.find(option => aliases.some(alias => normalize(option) === normalize(alias))) || ''
+            : recommendation;
+        if(!value) return;
+        const key = rhParamKey(field.nodeId, field.fieldName);
+        next.rhParams[key] = {...(next.rhParams[key] || {}), value};
     });
-    canvasPromptLibraries = canvasPromptLibraries.map(lib => ({
-        ...lib,
-        items:(lib.items || []).map(item => item.category === groupId ? {...item, category:'mine'} : item)
-    }));
-    if(promptTemplateCategory === groupId) promptTemplateCategory = 'all';
-    saveCanvasPromptTemplateGroups();
-    saveCanvasPromptTemplateOverrides();
-    refreshCanvasPromptTemplatesFromLibraries();
-    renderPromptTemplateModal();
+    return next;
 }
-function renderPromptTemplateModal(){
-    if(!promptTemplateModal || !promptTemplatePanel || !promptTemplateCats || !promptTemplateBody) return;
-    canvasPromptTemplates = activeCanvasPromptLibraryItems();
-    renderCanvasPromptLibrarySelect();
-    const scrollSnapshot = promptTemplateScrollSnapshot();
-    const activeGroups = activeCanvasPromptTemplateGroups();
-    const categories = [{id:'all', name:tr('smart.tplAll')}, ...activeGroups.map(group => ({...group, name:canvasPromptTemplateCategoryLabel(group.id)}))];
-    const counts = canvasPromptTemplates.reduce((map, item) => {
-        const category = item.category || 'mine';
-        map[category] = (map[category] || 0) + 1;
-        map.all += 1;
-        return map;
-    }, {all:0});
-    promptTemplateCats.innerHTML = promptTemplateGroupEditMode ? `
-        <div class="prompt-template-group-panel">
-            <div class="prompt-template-group-title">
-                <div>
-                    <strong>${escapeHtml(tr('smart.tplGroupManage'))}</strong>
-                    <span>${escapeHtml(tr('smart.tplGroupHint'))}</span>
-                </div>
-                <div class="prompt-template-group-tools">
-                    <button type="button" data-template-cat-new><i data-lucide="plus"></i><span>${escapeHtml(tr('smart.tplAdd'))}</span></button>
-                    <button type="button" class="primary" data-template-group-edit><i data-lucide="check"></i><span>${escapeHtml(tr('smart.tplDone'))}</span></button>
-                </div>
+function canvasGenerationModeSearchText(item){
+    return [item?.name, item?.category, item?.description].join(' ').toLowerCase();
+}
+function visibleCanvasGenerationPrompts(){
+    const query = String(generationModeQuery || '').trim().toLowerCase();
+    return canvasGenerationPrompts.filter(item => {
+        if(generationModeCategory !== 'all' && String(item?.category || '其他') !== generationModeCategory) return false;
+        return !query || canvasGenerationModeSearchText(item).includes(query);
+    });
+}
+function syncCanvasGenerationModeButtons(){
+    const activeId = generationModeModal?.classList.contains('open') ? generationModeNodeId : '';
+    document.querySelectorAll('[data-generation-mode-open]').forEach(button => {
+        const active = Boolean(activeId && button.dataset.generationModeNodeId === activeId);
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+function renderGenerationModeModal(){
+    if(!generationModeModal || !generationModeCats || !generationModeBody) return;
+    const node = nodes.find(item => item.id === generationModeNodeId && item.type === 'prompt');
+    const selectedMode = canvasPromptGenerationMode(node);
+    const categories = [...new Set(canvasGenerationPrompts.map(item => String(item?.category || '其他')))];
+    if(generationModeCategory !== 'all' && !categories.includes(generationModeCategory)) generationModeCategory = 'all';
+    const counts = canvasGenerationPrompts.reduce((result, item) => {
+        const category = String(item?.category || '其他');
+        result.all = (result.all || 0) + 1;
+        result[category] = (result[category] || 0) + 1;
+        return result;
+    }, {});
+    generationModeCats.innerHTML = `
+        <div class="generation-mode-nav">
+            <div class="generation-mode-tabs">
+                ${[{id:'all', name:'全部'}, ...categories.map(name => ({id:name, name}))].map(category => `
+                    <button type="button" class="${category.id === generationModeCategory ? 'active' : ''}" data-generation-mode-category="${escapeAttr(category.id)}">
+                        <span>${escapeHtml(category.name)}</span><small>${counts[category.id] || 0}</small>
+                    </button>`).join('')}
             </div>
-            <div class="prompt-template-group-list">
-                ${activeGroups.map(group => `
-                    <div class="prompt-template-group-row ${['view','storyboard','character','product','lighting','mine'].includes(group.id) ? '' : 'has-delete'}">
-                        <button type="button" class="group-name ${group.id === promptTemplateCategory ? 'active' : ''}" data-template-cat="${escapeAttr(group.id)}">
-                            <span>${escapeHtml(canvasPromptTemplateCategoryLabel(group.id))}</span>
-                            <small>${counts[group.id] || 0}</small>
-                        </button>
-                        <button type="button" class="group-tool" data-template-cat-edit="${escapeAttr(group.id)}" title="${escapeAttr(tr('smart.tplRename'))}"><i data-lucide="pencil"></i></button>
-                        ${['view','storyboard','character','product','lighting','mine'].includes(group.id) ? '' : `<button type="button" class="group-tool danger" data-template-cat-delete="${escapeAttr(group.id)}" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>`}
-                    </div>
-                `).join('')}
-            </div>
+        </div>`;
+    const items = visibleCanvasGenerationPrompts();
+    if(items.length && !items.some(item => item.id === generationModeSelectedId)) generationModeSelectedId = selectedMode?.id || items[0].id;
+    const selected = items.find(item => item.id === generationModeSelectedId) || items[0] || null;
+    generationModeBody.innerHTML = `
+        <div class="generation-mode-list">
+            ${items.length ? items.map(item => `<button type="button" class="generation-mode-card ${item.id === selected?.id ? 'active' : ''}" data-generation-mode-card="${escapeAttr(item.id)}">
+                <span class="generation-mode-card-top"><span class="generation-mode-name"><i data-lucide="${canvasGenerationModeIcon(item.icon)}"></i>${escapeHtml(item.name || '')}</span></span>
+                <span class="generation-mode-scene">${escapeHtml(item.description || '')}</span>
+                <span class="generation-mode-tag">${escapeHtml(item.category || '其他')}</span>
+            </button>`).join('') : '<div class="generation-mode-list-empty">没有匹配的生成模式</div>'}
         </div>
-    ` : `
-        <div class="prompt-template-nav">
-            <div class="prompt-template-tabs">
-                ${categories.map(cat => `
-                    <button type="button" class="${cat.id === promptTemplateCategory ? 'active' : ''}" data-template-cat="${escapeAttr(cat.id)}">
-                        <span>${escapeHtml(cat.name)}</span>
-                        <small>${counts[cat.id] || 0}</small>
-                    </button>
-                `).join('')}
-            </div>
-            <button type="button" class="prompt-template-manage-groups" data-template-group-edit><i data-lucide="settings-2"></i><span>${escapeHtml(tr('smart.tplManageGroups'))}</span></button>
-        </div>
-    `;
-    const items = canvasPromptTemplateVisibleItems();
-    if(items.length && !items.some(item => item.id === promptTemplateSelectedId)) promptTemplateSelectedId = items[0].id;
-    const selected = items.find(item => item.id === promptTemplateSelectedId) || items[0] || null;
-    const canCreateCurrentLibrary = currentCanvasPromptTemplateLibraryEditable();
-    const editMode = Boolean(promptTemplateEditing && selected);
-    promptTemplateBody.innerHTML = `
-        <div class="prompt-template-list">
-            <div class="prompt-template-list-tools">
-                <button type="button" ${canCreateCurrentLibrary ? '' : 'disabled'} data-template-save-current><i data-lucide="bookmark-plus"></i><span>${escapeHtml(tr('smart.tplSaveCurrent'))}</span></button>
-                <button type="button" ${canCreateCurrentLibrary ? '' : 'disabled'} data-template-new><i data-lucide="file-plus-2"></i><span>${escapeHtml(tr('smart.tplNewTemplate'))}</span></button>
-            </div>
-            ${items.length ? items.map(item => `<button type="button" class="prompt-template-card ${item.id === selected?.id ? 'active' : ''}" data-template-id="${escapeAttr(item.id)}">
-                <span class="prompt-template-card-top">
-                    <span class="prompt-template-name">${escapeHtml(canvasPromptTemplateName(item))}</span>
-                    <span class="prompt-template-source">${escapeHtml(item.builtin ? tr('smart.tplBuiltin') : tr('smart.tplMine'))}</span>
-                </span>
-                <span class="prompt-template-scene">${escapeHtml(canvasPromptTemplateScene(item) || item.positive || '')}</span>
-                <span class="prompt-template-tag">${escapeHtml(canvasPromptTemplateCategoryLabel(item.category || 'mine'))}</span>
-            </button>`).join('') : `<div class="prompt-template-list-empty">${escapeHtml(tr('smart.tplNoMatches'))}</div>`}
-        </div>
-        <div class="prompt-template-detail">
-            ${selected ? `
-                <div class="prompt-template-detail-head">
-                    <div>
-                        <strong>${escapeHtml(canvasPromptTemplateName(selected) || '')}</strong>
-                        <span>${escapeHtml(canvasPromptTemplateCategoryLabel(selected.category || ''))} · ${escapeHtml(selected.builtin ? tr('smart.tplBuiltinTemplate') : tr('smart.tplMineTemplate'))}</span>
-                    </div>
-                    ${editMode ? '' : `
-                        <div class="prompt-template-icon-actions">
-                            <button type="button" data-template-edit title="${escapeAttr(tr('smart.tplEditTemplate'))}"><i data-lucide="pencil"></i><span>${escapeHtml(tr('common.edit'))}</span></button>
-                            <button type="button" class="danger" data-template-delete title="${escapeAttr(tr('smart.tplDeleteTemplate'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('common.delete'))}</span></button>
-                        </div>
-                    `}
+        <div class="generation-mode-detail">
+            ${selected ? `<div class="generation-mode-detail-head"><div><strong>${escapeHtml(selected.name || '')}</strong><span>${escapeHtml(selected.category || '其他')}</span></div></div>
+                <div class="generation-mode-preview-content">
+                    <div class="generation-mode-section"><label>用途说明</label><p>${escapeHtml(selected.description || '')}</p></div>
+                    <div class="generation-mode-section"><label>推荐设置</label><p>${escapeHtml([selected.recommended_ratio, selected.recommended_resolution].filter(Boolean).join(' · ') || '无')}</p></div>
                 </div>
-            ${editMode ? `
-                <div class="prompt-template-edit-fields">
-                    <label>${escapeHtml(tr('smart.tplName'))}</label>
-                    <input data-template-edit-name value="${escapeAttr(canvasPromptTemplateName(selected) || '')}" placeholder="${escapeAttr(tr('smart.tplName'))}">
-                    <label>${escapeHtml(tr('smart.tplGroup'))}</label>
-                    <select data-template-edit-category>
-                        ${promptTemplateGroups.map(group => `<option value="${escapeAttr(group.id)}" ${group.id === (selected.category || 'mine') ? 'selected' : ''}>${escapeHtml(canvasPromptTemplateCategoryLabel(group.id))}</option>`).join('')}
-                    </select>
-                    <label>${escapeHtml(tr('smart.tplContent'))}</label>
-                    <textarea data-template-edit-text placeholder="${escapeAttr(tr('smart.tplContent'))}">${escapeHtml(selected.positive || '')}</textarea>
-                </div>
-            ` : `
-                <div class="prompt-template-preview-content">
-                    <div class="prompt-template-section">
-                        <label>${escapeHtml(tr('smart.tplPositive'))}</label>
-                        <p>${escapeHtml(selected.positive || '')}</p>
-                    </div>
-                    ${selected.negative ? `<div class="prompt-template-section"><label>${escapeHtml(tr('smart.tplNegative'))}</label><p>${escapeHtml(selected.negative)}</p></div>` : ''}
-                    ${Object.keys(selected.params || {}).length ? `<div class="prompt-template-section"><label>${escapeHtml(tr('smart.tplParams'))}</label><p>${escapeHtml(Object.entries(selected.params).map(([k,v]) => `${k}: ${v}`).join('\n'))}</p></div>` : ''}
-                </div>
-            `}
-            <div class="prompt-template-actions">
-                ${editMode ? `
-                    <button type="button" data-template-edit-cancel><i data-lucide="x"></i><span>${escapeHtml(tr('common.cancel'))}</span></button>
-                    <button type="button" class="danger" data-template-delete><i data-lucide="trash-2"></i><span>${escapeHtml(tr('common.delete'))}</span></button>
-                    <button type="button" class="primary" data-template-edit-save><i data-lucide="save"></i><span>${escapeHtml(tr('common.save'))}</span></button>
-                ` : `
-                    <button type="button" data-template-apply="positive"><i data-lucide="corner-down-left"></i><span>${escapeHtml(tr('smart.tplApplyPositive'))}</span></button>
-                    <button type="button" class="primary" data-template-apply="full"><i data-lucide="wand-sparkles"></i><span>${escapeHtml(tr('smart.tplApplyFull'))}</span></button>
-                `}
-            </div>
-            ` : `<div class="prompt-template-empty">${escapeHtml(tr('smart.tplPickOrCreate'))}</div>`}
-        </div>
-    `;
+                <div class="generation-mode-actions">
+                    ${selectedMode ? '<button type="button" data-generation-mode-clear><i data-lucide="x"></i><span>清除模式</span></button>' : ''}
+                    <button type="button" class="primary" data-generation-mode-apply="${escapeAttr(selected.id)}"><i data-lucide="check"></i><span>选择模式</span></button>
+                </div>` : '<div class="generation-mode-empty">请选择生成模式</div>'}
+        </div>`;
     refreshIcons();
-    restorePromptTemplateScroll(scrollSnapshot);
 }
-async function openPromptTemplateModal(nodeId){
-    promptTemplateNodeId = nodeId || '';
-    promptTemplateQuery = '';
-    promptTemplateEditing = false;
-    if(promptTemplateSearch) promptTemplateSearch.value = '';
-    await loadCanvasPromptTemplates();
-    if(!promptTemplateCategory) promptTemplateCategory = 'all';
-    if(!promptTemplateSelectedId) promptTemplateSelectedId = canvasPromptTemplates[0]?.id || '';
-    renderPromptTemplateModal();
-    promptTemplateModal?.classList.add('open');
-    syncCanvasPromptTemplateButtons();
-    promptTemplateSearch?.focus();
+async function openGenerationModeModal(nodeId){
+    generationModeNodeId = nodeId || '';
+    generationModeQuery = '';
+    if(generationModeSearch) generationModeSearch.value = '';
+    await loadCanvasGenerationPrompts(true);
+    const node = nodes.find(item => item.id === generationModeNodeId && item.type === 'prompt');
+    generationModeSelectedId = canvasPromptGenerationMode(node)?.id || canvasGenerationPrompts[0]?.id || '';
+    renderGenerationModeModal();
+    generationModeModal?.classList.add('open');
+    syncCanvasGenerationModeButtons();
+    generationModeSearch?.focus();
 }
-function closePromptTemplateModal(){
-    promptTemplateModal?.classList.remove('open');
-    promptTemplateNodeId = '';
-    promptTemplateEditing = false;
-    syncCanvasPromptTemplateButtons();
+function closeGenerationModeModal(){
+    generationModeModal?.classList.remove('open');
+    generationModeNodeId = '';
+    syncCanvasGenerationModeButtons();
 }
-function applyPromptTemplateToPromptNode(mode='positive'){
-    const template = canvasPromptTemplates.find(item => item.id === promptTemplateSelectedId);
-    const node = nodes.find(n => n.id === promptTemplateNodeId && n.type === 'prompt');
-    if(!template || !node) return;
-    node.text = canvasPromptTemplateText(template, mode);
-    closePromptTemplateModal();
+function applyCanvasGenerationMode(id){
+    const node = nodes.find(item => item.id === generationModeNodeId && item.type === 'prompt');
+    const snapshot = canvasGenerationPromptSnapshot(canvasGenerationPrompts.find(item => String(item?.id || '') === String(id || '')));
+    if(!node || !snapshot) return;
+    node.generationPromptId = snapshot.id;
+    node.generationPromptSnapshot = snapshot;
+    closeGenerationModeModal();
+    scheduleSave();
+    syncGeneratorInputs();
+    refreshGeneratorInputViews();
+    render();
+}
+function clearCanvasGenerationMode(){
+    const node = nodes.find(item => item.id === generationModeNodeId && item.type === 'prompt');
+    if(!node) return;
+    delete node.generationPromptId;
+    delete node.generationPromptSnapshot;
+    closeGenerationModeModal();
     scheduleSave();
     syncGeneratorInputs();
     refreshGeneratorInputViews();
@@ -8837,7 +8433,7 @@ async function ensureRunningHubWorkflow(workflowId){
 function comfyFieldKind(f){
     if(['image','video','audio'].includes(f?.type)) return f.type;
     const key = `${f.input || ''} ${f.name || ''}`.toLowerCase();
-    if(f.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
+    if(f.type === 'textarea' || /prompt|text|提示词|正向/.test(key)) return 'prompt';
     return 'setting';
 }
 function comfyFields(node, kind='all'){
@@ -9016,7 +8612,7 @@ function rhFieldRole(field){
     const kind = rhFieldKind(field);
     if(['image','video','audio','number','slider','boolean'].includes(kind)) return kind;
     const text = `${field?.fieldName || ''} ${field?.label || ''} ${field?.group || ''}`.toLowerCase();
-    if(/prompt|positive|negative|text|caption|description|关键词|提示词|正向|负向/.test(text)) return 'prompt';
+    if(/prompt|positive|text|caption|description|关键词|提示词|正向/.test(text)) return 'prompt';
     return 'text';
 }
 function rhExtractFieldOptions(field){
@@ -9748,16 +9344,19 @@ async function runRhNode(nodeId, opts={}){
         return;
     }
     const media = rhMediaSources(node);
+    const effectiveNode = canvasGeneratorWithRecommendations(node, media.sources);
     let out = outputForNode(node, 500);
     const pendingId = uid('p');
-    const run = runSnapshot(node, media.prompt || 'RunningHub', media.refs);
+    const promptRecords = canvasPromptRecordsFromSources(media.sources, node);
+    const displayPrompt = canvasDisplayPromptFromSources(media.sources, node, media.prompt);
+    const run = runSnapshot(node, displayPrompt || 'RunningHub', media.refs, {promptRecords});
     run.taskLabel = 'RunningHub';
     if(out) out._pending = [...(out._pending || []), makePendingForRun(pendingId, run, node, {refs:media.refs, cascadeTargetId})];
     if(!opts.cascade) node.running = true;
     refreshRunNodes(node, out);
     try {
-        const nodeInfoList = await rhBuildNodeInfoList(node, media);
-        const workflowExtras = mode === 'workflow' ? await rhBuildWorkflowRequestExtras(node, media, nodeInfoList) : {};
+        const nodeInfoList = await rhBuildNodeInfoList(effectiveNode, media);
+        const workflowExtras = mode === 'workflow' ? await rhBuildWorkflowRequestExtras(effectiveNode, media, nodeInfoList) : {};
         const endpoint = mode === 'workflow' ? '/api/runninghub/workflow-submit' : '/api/runninghub/submit';
         const body = mode === 'workflow'
             ? {workflowId:node.workflowId.trim(), nodeInfoList, useWallet:rhUseWallet(node), ...workflowExtras}
@@ -10136,7 +9735,7 @@ function generatorSources(gen){
                 refs:[{url:img.url, name:img.name || mediaKindForNode(img), role:img.role || '', kind:mediaKindForNode(img)}],
                 prompt:''
             }));
-            const prompts = items.filter(x => x.type === 'prompt').map(p => p.text || '').filter(Boolean);
+            const prompts = items.filter(x => x.type === 'prompt').map(p => canvasPromptTextForGenerator(p, gen)).filter(Boolean);
             if(prompts.length){
                 const combined = prompts.join('\n\n');
                 sources.push({
@@ -10150,7 +9749,10 @@ function generatorSources(gen){
             }
             return sources;
         }
-        if(n.type === 'prompt') return {id:n.id, type:'prompt', label:(n.text || '提示词').slice(0, 32), refs:[], prompt:n.text || ''};
+        if(n.type === 'prompt') {
+            const prompt = canvasPromptTextForGenerator(n, gen);
+            return {id:n.id, type:'prompt', label:(n.text || '提示词').slice(0, 32), refs:[], prompt};
+        }
         if(n.type === 'loop') {
             const ctx = gen?._activeLoopCtx || loopContext || null;
             const prompt = renderLoopPrompt(n, ctx);
@@ -10173,7 +9775,7 @@ function generatorSources(gen){
             return {id:n.id, type:'loop', label:`${tr('canvas.loopNode')} ${loopCount(n)}x`, refs:[], prompt};
         }
         if(n.type === 'promptGroup') {
-            const prompts = (n.items || []).map(id => nodes.find(x => x.id === id)).filter(Boolean).map(p => p.text || '').filter(Boolean);
+            const prompts = (n.items || []).map(id => nodes.find(x => x.id === id)).filter(Boolean).map(p => canvasPromptTextForGenerator(p, gen)).filter(Boolean);
             return {id:n.id, type:'promptGroup', label:`提示词 ${prompts.length} 个`, refs:[], prompt:prompts.join('\n\n')};
         }
         if(n.type === 'llm' && (n.mode || 'node') === 'node' && n.outputText) return {id:n.id, type:'llm', label:(n.outputText || 'LLM').slice(0, 32), refs:[], prompt:n.outputText || ''};
@@ -10245,17 +9847,20 @@ async function runGenerator(genId, opts={}){
     if(!gen || (gen.running && !opts.cascade)) return;
     const cascadeTargetId = cascadeTargetIdFromOptions(opts);
     const sources = orderedSources(gen, generatorSources(gen));
+    const effectiveGen = canvasGeneratorWithRecommendations(gen, sources);
     const prompt = sources.map(s => s.prompt).filter(Boolean).join('\n\n');
     const refs = imageRefsOnly(sources.flatMap(s => s.refs || []));
     if(!prompt && !refs.length){ alert(tr('canvas.needPromptOrImage')); return; }
     const count = Math.max(1, Math.min(8, Number(gen.count || 1)));
     let out = outputForNode(gen, 460);
-    const run = runSnapshot(gen, prompt || 'Edit the reference images.', refs);
+    const promptRecords = canvasPromptRecordsFromSources(sources, gen);
+    const displayPrompt = canvasDisplayPromptFromSources(sources, gen, prompt);
+    const run = runSnapshot(gen, displayPrompt || 'Edit the reference images.', refs, {promptRecords});
     const payload = {
         prompt: prompt || 'Edit the reference images.',
         provider_id:resolveImageProviderId(gen.apiProvider || 'comfly'),
         model:resolveImageModel(gen.model),
-        size:await generatorSizeForRun(gen, refs),
+        size:await generatorSizeForRun(effectiveGen, refs),
         reference_images:refs.slice(0, CANVAS_REFERENCE_IMAGE_MAX)
     };
     const quality = normalizedImageQuality(gen.quality);
@@ -10331,14 +9936,17 @@ async function runGeneratorLegacy(genId, opts={}){
     const gen = nodes.find(n => n.id === genId);
     if(!gen || (gen.running && !opts.cascade)) return;
     const sources = orderedSources(gen, generatorSources(gen));
+    const effectiveGen = canvasGeneratorWithRecommendations(gen, sources);
     const prompt = sources.map(s => s.prompt).filter(Boolean).join('\n\n');
     const refs = imageRefsOnly(sources.flatMap(s => s.refs || []));
     if(!prompt && !refs.length){ alert(tr('canvas.needPromptOrImage')); return; }
     const count = Math.max(1, Math.min(8, Number(gen.count || 1)));
     let out = outputForNode(gen, 460);
     const pendingIds = Array.from({length:count}, () => uid('p'));
-    const run = runSnapshot(gen, prompt || 'Edit the reference images.', refs);
-    const requestSize = await generatorSizeForRun(gen, refs);
+    const promptRecords = canvasPromptRecordsFromSources(sources, gen);
+    const displayPrompt = canvasDisplayPromptFromSources(sources, gen, prompt);
+    const run = runSnapshot(gen, displayPrompt || 'Edit the reference images.', refs, {promptRecords});
+    const requestSize = await generatorSizeForRun(effectiveGen, refs);
     if(out) out._pending = [...(out._pending||[]), ...pendingIds.map(id => makePendingForRun(id, run, gen, {refs, requestSize}))];
     if(!opts.cascade){
         gen.running = true;
@@ -11838,7 +11446,7 @@ function outputMetaFor(url, out){
     const item = (out?.images || []).find(x => outputUrlValue(x) === url);
     return item && typeof item === 'object' ? item : {};
 }
-function runSnapshot(node, prompt, refs=[]){
+function runSnapshot(node, prompt, refs=[], options={}){
     const clone = JSON.parse(JSON.stringify(node || {}));
     delete clone.running;
     delete clone.runStatus;
@@ -11848,6 +11456,10 @@ function runSnapshot(node, prompt, refs=[]){
         nodeType: node?.type || '',
         node: clone,
         prompt: prompt || '',
+        promptRecords:(options.promptRecords || []).map(record => ({
+            userPrompt:String(record?.userPrompt || ''),
+            generationPromptSnapshot:canvasGenerationPromptSnapshot(record?.generationPromptSnapshot)
+        })).filter(record => record.userPrompt || record.generationPromptSnapshot),
         refs: (refs || []).map(ref => ({url:ref.url, name:ref.name || 'image'})).filter(ref => ref.url),
     };
 }
@@ -12518,169 +12130,6 @@ function setupOutputPromptPanel(meta){
         rerunFromOutputMeta(currentOutputMeta);
     };
 }
-promptTemplateSearch?.addEventListener('input', event => {
-    promptTemplateQuery = event.target.value || '';
-    renderPromptTemplateModal();
-});
-promptTemplateLibrarySelect?.addEventListener('change', () => {
-    activePromptLibraryId = promptTemplateLibrarySelect.value || 'system';
-    canvasPromptTemplates = activeCanvasPromptLibraryItems();
-    promptTemplateSelectedId = '';
-    promptTemplateEditing = false;
-    renderPromptTemplateModal();
-});
-if(promptTemplateClose) promptTemplateClose.onclick = closePromptTemplateModal;
-promptTemplatePanel?.addEventListener('pointerdown', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('mousedown', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
-promptTemplatePanel?.addEventListener('click', event => {
-    event.stopPropagation();
-    const apply = event.target.closest('[data-template-apply],[data-prompt-template-apply]');
-    if(apply){
-        applyPromptTemplateToPromptNode(apply.dataset.templateApply || apply.dataset.promptTemplateApply || 'positive');
-        return;
-    }
-    if(event.target.closest('[data-template-save-current],[data-prompt-template-save-current]')){ saveCurrentCanvasPromptAsTemplate(); return; }
-    if(event.target.closest('[data-template-new],[data-prompt-template-new]')){ createBlankCanvasPromptTemplate(); return; }
-    if(event.target.closest('[data-template-edit],[data-prompt-template-edit]')){
-        promptTemplateEditing = true;
-        renderPromptTemplateModal();
-        return;
-    }
-    if(event.target.closest('[data-template-edit-cancel],[data-prompt-template-edit-cancel]')){ promptTemplateEditing = false; renderPromptTemplateModal(); return; }
-    if(event.target.closest('[data-template-edit-save],[data-prompt-template-edit-save]')){ saveCanvasPromptTemplateEdit(); return; }
-    if(event.target.closest('[data-template-delete],[data-prompt-template-delete]')){
-        deleteCanvasPromptTemplate();
-        return;
-    }
-    const cat = event.target.closest('[data-template-cat],[data-prompt-template-cat]');
-    if(cat){
-        promptTemplateCategory = cat.dataset.templateCat || cat.dataset.promptTemplateCat || 'all';
-        promptTemplateSelectedId = '';
-        promptTemplateEditing = false;
-        renderPromptTemplateModal();
-        return;
-    }
-    const catEdit = event.target.closest('[data-template-cat-edit]');
-    if(catEdit){
-        renameCanvasPromptTemplateGroup(catEdit.dataset.templateCatEdit || '');
-        return;
-    }
-    const catDelete = event.target.closest('[data-template-cat-delete]');
-    if(catDelete){
-        deleteCanvasPromptTemplateGroup(catDelete.dataset.templateCatDelete || '');
-        return;
-    }
-    if(event.target.closest('[data-template-group-edit]')){
-        promptTemplateGroupEditMode = !promptTemplateGroupEditMode;
-        renderPromptTemplateModal();
-        return;
-    }
-    if(event.target.closest('[data-template-cat-new]')){ createCanvasPromptTemplateGroup(); return; }
-    const item = event.target.closest('[data-template-id],[data-prompt-template-id]');
-    if(item){
-        promptTemplateSelectedId = item.dataset.templateId || item.dataset.promptTemplateId || '';
-        promptTemplateEditing = false;
-        renderPromptTemplateModal();
-        return;
-    }
-});
-canvasAssetToggle?.addEventListener('click', () => toggleCanvasAssetLibrary());
-workflowTransferToggle?.addEventListener('click', () => {
-    if(workflowTransferModal?.classList.contains('open')) closeWorkflowTransferModal();
-    else openWorkflowTransferModal();
-});
-canvasLogToggle?.addEventListener('click', event => {
-    event.preventDefault();
-    openCanvasLog();
-});
-workflowImportInput?.addEventListener('change', event => {
-    const file = event.target.files?.[0];
-    if(file) importWorkflowFile(file);
-    event.target.value = '';
-});
-workflowImportDropZone?.addEventListener('click', () => workflowImportInput?.click());
-workflowImportDropZone?.addEventListener('dragenter', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    workflowImportDropZone.classList.add('drag-over');
-});
-workflowImportDropZone?.addEventListener('dragover', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = 'copy';
-    workflowImportDropZone.classList.add('drag-over');
-});
-workflowImportDropZone?.addEventListener('dragleave', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    if(!workflowImportDropZone.contains(event.relatedTarget)) workflowImportDropZone.classList.remove('drag-over');
-});
-workflowImportDropZone?.addEventListener('drop', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    workflowImportDropZone.classList.remove('drag-over');
-    const file = [...(event.dataTransfer?.files || [])].find(item => /\.(json|zip)$/i.test(item.name || ''));
-    if(file) importWorkflowFile(file);
-    else setStatus('请拖入 JSON 或 ZIP 工作流文件');
-});
-canvasAssetCloseBtn?.addEventListener('click', () => toggleCanvasAssetLibrary(false));
-canvasAssetLibrarySelect?.addEventListener('change', () => {
-    activeCanvasAssetLibraryId = canvasAssetLibrarySelect.value || '';
-    activeCanvasAssetCategoryId = '';
-    renderCanvasAssetLibrary();
-});
-canvasAssetCategorySelect?.addEventListener('change', () => {
-    activeCanvasAssetCategoryId = canvasAssetCategorySelect.value || '';
-    renderCanvasAssetLibrary();
-});
-canvasAssetAddCategoryBtn?.addEventListener('click', async () => {
-    if(canvasAssetLibraryIsLocal()){ setStatus('本地素材请在素材库管理中管理文件夹'); return; }
-    const name = window.prompt('新分组名称', '新分组');
-    if(!String(name || '').trim()) return;
-    const data = await fetch('/api/asset-library/categories', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({library_id:activeCanvasAssetLibraryId, name:String(name).trim(), type:'image'})
-    }).then(r => r.json());
-    canvasAssetLibrary = data.library || canvasAssetLibrary;
-    activeCanvasAssetCategoryId = data.category?.id || activeCanvasAssetCategoryId;
-    renderCanvasAssetLibrary();
-});
-canvasAssetPanel?.addEventListener('wheel', event => {
-    event.stopPropagation();
-    const scroller = event.target.closest?.('.canvas-asset-grid') || canvasAssetGrid;
-    if(!scroller || getComputedStyle(scroller).display === 'none') return;
-    const canScroll = scroller.scrollHeight > scroller.clientHeight || scroller.scrollWidth > scroller.clientWidth;
-    if(!canScroll) return;
-    event.preventDefault();
-    scroller.scrollTop += event.deltaY;
-    scroller.scrollLeft += event.deltaX;
-}, {passive:false, capture:true});
-workflowTransferModal?.addEventListener('wheel', event => {
-    event.stopPropagation();
-}, {passive:true, capture:true});
-workflowTransferModal?.addEventListener('dragover', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    if(workflowImportDropZone){
-        event.dataTransfer.dropEffect = 'copy';
-        workflowImportDropZone.classList.add('drag-over');
-    }
-});
-workflowTransferModal?.addEventListener('dragleave', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    if(!workflowTransferModal.contains(event.relatedTarget)) workflowImportDropZone?.classList.remove('drag-over');
-});
-workflowTransferModal?.addEventListener('drop', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    workflowImportDropZone?.classList.remove('drag-over');
-    const file = [...(event.dataTransfer?.files || [])].find(item => /\.(json|zip)$/i.test(item.name || ''));
-    if(file) importWorkflowFile(file);
-    else setStatus('请拖入 JSON 或 ZIP 工作流文件');
-});
 function hasCanvasAssetSaveDrop(dataTransfer){
     return hasOutputImageDrag(dataTransfer) || hasImageDropData(dataTransfer);
 }
@@ -12732,12 +12181,6 @@ assetManagerModal?.addEventListener('change', event => {
         else managerSelectedAssetIds.delete(assetCheck.dataset.managerAssetCheck);
         shouldRender = true;
     }
-    const promptCheck = event.target.closest?.('[data-manager-prompt-check]');
-    if(promptCheck){
-        if(promptCheck.checked) managerSelectedPromptIds.add(promptCheck.dataset.managerPromptCheck);
-        else managerSelectedPromptIds.delete(promptCheck.dataset.managerPromptCheck);
-        shouldRender = true;
-    }
     const workflowCheck = event.target.closest?.('[data-manager-workflow-check]');
     if(workflowCheck){
         if(workflowCheck.checked) managerSelectedWorkflowIds.add(workflowCheck.dataset.managerWorkflowCheck);
@@ -12755,8 +12198,6 @@ assetManagerModal?.addEventListener('click', async event => {
     if(workflowLib){ activeCanvasAssetLibraryId = workflowLib.dataset.managerWorkflowLib || ''; activeCanvasWorkflowCategoryId = ''; managerSelectedWorkflowIds.clear(); renderAssetManager(); return; }
     const workflowCat = event.target.closest?.('[data-manager-workflow-cat]');
     if(workflowCat){ activeCanvasWorkflowCategoryId = workflowCat.dataset.managerWorkflowCat || ''; managerSelectedWorkflowIds.clear(); renderAssetManager(); return; }
-    const promptLib = event.target.closest?.('[data-manager-prompt-lib]');
-    if(promptLib){ activePromptLibraryId = promptLib.dataset.managerPromptLib || 'system'; managerSelectedPromptIds.clear(); renderAssetManager(); return; }
     const workflowRename = event.target.closest?.('[data-manager-workflow-rename]');
     if(workflowRename){
         const itemId = workflowRename.dataset.managerWorkflowRename || '';
@@ -12796,35 +12237,6 @@ assetManagerModal?.addEventListener('click', async event => {
         canvasAssetLibrary = data.library || canvasAssetLibrary;
         managerSelectedAssetIds.delete(item.id);
         renderAssetManager(); renderCanvasAssetLibrary(); return;
-    }
-    const promptEdit = event.target.closest?.('[data-manager-prompt-edit]');
-    if(promptEdit){
-        const lib = activeCanvasPromptLibrary();
-        if(!lib || lib.readonly) return;
-        const itemId = promptEdit.dataset.managerPromptEdit || '';
-        const item = (lib.items || []).find(entry => entry.id === itemId);
-        if(!item) return;
-        const name = window.prompt('提示词名称', item.name || '提示词');
-        if(!String(name || '').trim()) return;
-        const positive = window.prompt('提示词内容', item.positive || '');
-        if(!String(positive || '').trim()) return;
-        const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative:item.negative || '', category:item.category || 'mine', scene:item.scene || ''})}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
-    }
-    const promptRemove = event.target.closest?.('[data-manager-prompt-remove]');
-    if(promptRemove){
-        const lib = activeCanvasPromptLibrary();
-        if(!lib || lib.readonly) return;
-        const itemId = promptRemove.dataset.managerPromptRemove || '';
-        const item = (lib.items || []).find(entry => entry.id === itemId);
-        if(!item || !window.confirm(`删除提示词「${item.name || '提示词'}」？`)) return;
-        const data = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(item.id)}`, {method:'DELETE'}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        managerSelectedPromptIds.delete(item.id);
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
     }
     if(event.target.closest?.('[data-manager-asset-lib-new]')){
         const name = window.prompt('资产库名称', '新资产库');
@@ -12912,67 +12324,60 @@ assetManagerModal?.addEventListener('click', async event => {
         activeCanvasWorkflowCategoryId = data.category?.id || activeCanvasWorkflowCategoryId;
         renderAssetManager(); renderCanvasAssetLibrary(); return;
     }
-    if(event.target.closest?.('[data-manager-prompt-lib-new]')){
-        const name = window.prompt('提示词库名称', '新提示词库');
-        if(!String(name || '').trim()) return;
-        const data = await fetch('/api/prompt-libraries', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        activePromptLibraryId = data.prompt_library?.id || activePromptLibraryId;
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
-    }
-    if(event.target.closest?.('[data-manager-prompt-lib-rename]')){
-        const lib = activeCanvasPromptLibrary();
-        if(!lib || lib.readonly) return;
-        const name = window.prompt('提示词库名称', lib.name || '');
-        if(!String(name || '').trim()) return;
-        const data = await fetch(`/api/prompt-libraries/${encodeURIComponent(lib.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
-    }
-    if(event.target.closest?.('[data-manager-prompt-lib-delete]')){
-        const lib = activeCanvasPromptLibrary();
-        if(!lib || lib.readonly || lib.id === 'system' || !window.confirm(`删除提示词库「${lib.name || '提示词库'}」？`)) return;
-        const data = await fetch(`/api/prompt-libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        activePromptLibraryId = data.library?.active_library_id || canvasPromptLibraries.find(item => item.id !== 'system')?.id || 'system';
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
-    }
-    if(event.target.closest?.('[data-manager-prompt-new]')){
-        const lib = activeCanvasPromptLibrary();
-        if(!lib || lib.readonly) return;
-        const name = window.prompt('提示词名称', '新提示词');
-        if(!String(name || '').trim()) return;
-        const positive = window.prompt('提示词内容', '');
-        if(!String(positive || '').trim()) return;
-        const data = await fetch('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, category:'mine'})}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
-    }
-    if(event.target.closest?.('[data-manager-prompt-delete]')){
-        if(!managerSelectedPromptIds.size) return;
-        const data = await fetch('/api/prompt-libraries/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:[...managerSelectedPromptIds]})}).then(r => r.json());
-        canvasPromptLibraries = data.library?.libraries || canvasPromptLibraries;
-        managerSelectedPromptIds.clear();
-        refreshCanvasPromptTemplatesFromLibraries();
-        renderAssetManager(); return;
-    }
 }, true);
+function bindCanvasGenerationModePicker(){
+    generationModeSearch?.addEventListener('input', event => {
+        generationModeQuery = event.target.value || '';
+        renderGenerationModeModal();
+    });
+    if(generationModeClose) generationModeClose.onclick = closeGenerationModeModal;
+    generationModePanel?.addEventListener('pointerdown', event => event.stopPropagation());
+    generationModePanel?.addEventListener('mousedown', event => event.stopPropagation());
+    generationModePanel?.addEventListener('wheel', event => event.stopPropagation(), {passive:false});
+    generationModePanel?.addEventListener('click', event => {
+        event.stopPropagation();
+        const category = event.target.closest('[data-generation-mode-category]');
+        if(category){
+            generationModeCategory = category.dataset.generationModeCategory || 'all';
+            generationModeSelectedId = '';
+            renderGenerationModeModal();
+            return;
+        }
+        const card = event.target.closest('[data-generation-mode-card]');
+        if(card){
+            generationModeSelectedId = card.dataset.generationModeCard || '';
+            renderGenerationModeModal();
+            return;
+        }
+        const apply = event.target.closest('[data-generation-mode-apply]');
+        if(apply){ applyCanvasGenerationMode(apply.dataset.generationModeApply || ''); return; }
+        if(event.target.closest('[data-generation-mode-clear]')) clearCanvasGenerationMode();
+    });
+}
+bindCanvasGenerationModePicker();
 function rerunFromOutputMeta(meta){
     if(!ensureCanvas() || !meta?.run?.nodeType) return;
     const base = JSON.parse(JSON.stringify(meta.run.node || {}));
     const p = defaultPoint(180, 40);
     const node = {...base, id:uid(base.type || meta.run.nodeType), type:meta.run.nodeType, x:p.x, y:p.y, inputs:[], running:false};
     nodes.push(node);
-    const prompt = meta.run.prompt || '';
-    if(prompt){
-        const promptNode = {id:uid('pr'), type:'prompt', x:p.x - 340, y:p.y, text:prompt};
+    const promptRecords = Array.isArray(meta.run.promptRecords) && meta.run.promptRecords.length
+        ? meta.run.promptRecords
+        : (meta.run.prompt ? [{userPrompt:meta.run.prompt}] : []);
+    promptRecords.forEach((record, index) => {
+        const generationPromptSnapshot = canvasGenerationPromptSnapshot(record?.generationPromptSnapshot);
+        const promptNode = {
+            id:uid('pr'),
+            type:'prompt',
+            x:p.x - 340,
+            y:p.y + index * 86,
+            text:String(record?.userPrompt || ''),
+            generationPromptId:String(generationPromptSnapshot?.id || ''),
+            generationPromptSnapshot
+        };
         nodes.push(promptNode);
         connections.push({id:uid('c'), from:promptNode.id, to:node.id});
-    }
+    });
     (meta.run.refs || []).slice(0, 8).forEach((ref, i) => {
         const imgNode = {id:uid('img'), type:'image', x:p.x - 340, y:p.y + 110 + i * 86, url:ref.url, name:ref.name || 'image'};
         nodes.push(imgNode);
@@ -14322,7 +13727,7 @@ canvasArrangeBtn?.addEventListener('click', e => {
     arrangeSelectedCanvasNodes();
 });
 function isZoomPreviewIgnoredTarget(target){
-    return !!target?.closest?.('#createMenu, #linkCreateMenu, #nodeInputMenu, #nodeOutputMenu, #imageNodeMenu, .minimap, #canvasAssetPanel, #assetManagerModal, #workflowTransferModal, #logModal, #promptTemplateModal, #imageEditModal, #outputLightbox');
+    return !!target?.closest?.('#createMenu, #linkCreateMenu, #nodeInputMenu, #nodeOutputMenu, #imageNodeMenu, .minimap, #canvasAssetPanel, #assetManagerModal, #workflowTransferModal, #logModal, #generationModeModal, #imageEditModal, #outputLightbox');
 }
 board.addEventListener('mousedown', e => {
     if(!zoomPreviewState || e.button !== 0) return;
@@ -14498,7 +13903,7 @@ window.addEventListener('keydown', e => {
     if(key === 'r' && !isEditableTarget(e.target)) isRKeyDown = true;
     if(e.key === 'Shift' && !e.altKey && !isEditableTarget(document.activeElement)) setKnifeMode(true);
     if(e.key === 'Escape' && document.getElementById('imageEditModal').classList.contains('open')) { closeImageEditor(); return; }
-    if(e.key === 'Escape' && promptTemplateModal?.classList.contains('open')) { closePromptTemplateModal(); return; }
+    if(e.key === 'Escape' && generationModeModal?.classList.contains('open')) { closeGenerationModeModal(); return; }
     if(outputLightbox.classList.contains('open') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')){
         if(navigateOutputLightbox(e.key === 'ArrowRight' ? 1 : -1)){
             e.preventDefault();
@@ -14509,7 +13914,7 @@ window.addEventListener('keydown', e => {
     if(e.key === 'Escape' && outputLightbox.classList.contains('open')) { closeOutputLightbox(); return; }
     if(!e.ctrlKey && !e.metaKey && !e.altKey && key === 'z' && !isEditableTarget(e.target)
         && !document.getElementById('imageEditModal')?.classList.contains('open')
-        && !promptTemplateModal?.classList.contains('open')
+        && !generationModeModal?.classList.contains('open')
         && !outputLightbox.classList.contains('open')
         && !assetManagerModal?.classList.contains('open')
         && !workflowTransferModal?.classList.contains('open')

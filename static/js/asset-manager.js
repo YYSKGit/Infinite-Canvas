@@ -83,7 +83,7 @@ const savedPreviewSettings = readPreviewSettings();
 
 let activeTab = readActiveTab();
 let assetLibrary = {libraries:[], categories:[]};
-let promptLibrary = {libraries:[]};
+let promptCatalog = {generation_prompts:[], system_instructions:[]};
 let apiProviders = [];
 let avatarRegisterProvider = '';
 let avatarBusyId = '';
@@ -93,10 +93,9 @@ let activeAssetClassFilter = '';
 let openAssetClassGroup = 'environment';
 let activeWorkflowLibraryId = '';
 let activeWorkflowCategoryId = '';
-let activePromptLibraryId = '';
+let activePromptResourceId = 'generation';
 let activePromptCategory = 'all';
 let assetTreeFocus = 'category';
-let promptTreeFocus = 'category';
 let selectedAssetId = '';
 let selectedWorkflowId = '';
 let selectedPromptId = '';
@@ -121,7 +120,6 @@ let pendingDeletePromptId = '';
 let pendingBatchDelete = '';
 let assetTreeEdit = null;
 let workflowTreeEdit = null;
-let promptTreeEdit = null;
 let pendingTreeDelete = '';
 let marqueeState = null;
 let assetReorderDragId = '';
@@ -328,41 +326,27 @@ function assetCountForLibrary(lib){
         .filter(cat => (cat.type || 'image') === 'image')
         .reduce((sum, cat) => sum + ((cat.items || []).length), 0);
 }
-function promptLibraries(){
-    const libs = Array.isArray(promptLibrary.libraries) ? promptLibrary.libraries.filter(Boolean) : [];
-    if(!libs.length) return [{id:'system', name:'系统提示词库', system:true, items:[], categories:[]}];
-    const system = libs.filter(lib => lib.id === 'system');
-    const others = libs.filter(lib => lib.id !== 'system');
-    return [...system, ...others];
-}
-function isSystemPromptLibrary(lib){
-    return !lib || lib.id === 'system';
-}
-function activePromptLibrary(){
-    const libs = promptLibraries();
-    return libs.find(lib => lib.id === activePromptLibraryId) || libs[0] || null;
-}
-// 按“某个库自身”解析分类：库有自己的分类就用它；只有系统库在完全为空时才补默认内置分类。
-// 新建的普通库分类为空 → 返回 []，不能借用当前激活库/系统库的分类（否则树里会错显系统分类）。
-function promptCategoriesFor(lib){
-    const fromLib = Array.isArray(lib?.categories) ? lib.categories.filter(c => c?.id) : [];
-    const hasAssistantRecipes = (lib?.items || []).some(item => item?.kind === 'assistant_recipe');
-    if(fromLib.length) return hasAssistantRecipes && !fromLib.some(category => category.id === 'assistant') ? [{id:'assistant', name:'AI 助手'}, ...fromLib] : fromLib;
-    if(!isSystemPromptLibrary(lib)) return hasAssistantRecipes ? [{id:'assistant', name:'AI 助手'}] : [];
+function promptResources(){
+    const generationItems = Array.isArray(promptCatalog.generation_prompts) ? promptCatalog.generation_prompts : [];
+    const systemItems = (Array.isArray(promptCatalog.system_instructions) ? promptCatalog.system_instructions : [])
+        .map(item => ({...item, kind:'system_instruction'}));
+    const categories = [...new Set(generationItems.map(item => String(item.category || '未分类').trim()).filter(Boolean))]
+        .map(name => ({id:name, name}));
     return [
-        ...(hasAssistantRecipes ? [{id:'assistant', name:'AI 助手'}] : []),
-        {id:'view', name:'视角'},
-        {id:'storyboard', name:'分镜'},
-        {id:'character', name:'角色'},
-        {id:'product', name:'产品'},
-        {id:'lighting', name:'光影'},
-        {id:'custom', name:'我的'}
+        {id:'generation', name:'生成提示词', items:generationItems, categories},
+        {id:'system', name:'系统指令', items:systemItems, categories:[]}
     ];
 }
-function activePromptCategories(){
-    return promptCategoriesFor(activePromptLibrary());
+function activePromptResource(){
+    const libs = promptResources();
+    return libs.find(lib => lib.id === activePromptResourceId) || libs[0] || null;
 }
-const PROMPT_BUILTIN_CATEGORY_IDS = new Set(['assistant','view','storyboard','character','product','lighting','custom']);
+function promptCategoriesFor(lib){
+    return Array.isArray(lib?.categories) ? lib.categories.filter(category => category?.id) : [];
+}
+function activePromptCategories(){
+    return promptCategoriesFor(activePromptResource());
+}
 const ASSET_CLASS_GROUPS = [
     {id:'environment', name:'环境', dims:['environment','scene','space','mood']},
     {id:'composition', name:'构图', dims:['composition']},
@@ -394,10 +378,9 @@ const ASSET_CLASSIFICATION_LABELS = {
 function promptCategoryLabel(category='custom'){
     const found = activePromptCategories().find(cat => cat.id === category);
     if(found?.name) return found.name;
-    const map = {view:'视角', storyboard:'分镜', character:'角色', product:'产品', lighting:'光影', mine:'我的', custom:'我的'};
-    return map[category] || category || '自定义';
+    return category || '未分类';
 }
-function promptCountForCategory(category, lib=activePromptLibrary()){
+function promptCountForCategory(category, lib=activePromptResource()){
     const items = lib?.items || [];
     if(category === 'all') return items.length;
     return items.filter(item => (item.category || 'custom') === category).length;
@@ -997,12 +980,12 @@ function normalizeAssetMoveTarget(){
     return targets;
 }
 function currentPromptItems(){
-    const lib = activePromptLibrary();
+    const lib = activePromptResource();
     const query = promptQuery.trim().toLowerCase();
     return (lib?.items || []).filter(item => {
         if(activePromptCategory !== 'all' && (item.category || 'custom') !== activePromptCategory) return false;
         if(!query) return true;
-        return [item.name, item.scene, item.positive, item.negative, item.system_template, item.user_template, item.recommended_provider, item.recommended_model, item.category].join(' ').toLowerCase().includes(query);
+        return [item.name, item.description, item.prompt_template, item.system_template, item.user_template, item.category].join(' ').toLowerCase().includes(query);
     });
 }
 // 认证支持的平台键（与后端 AVATAR_SUPPORTED_PLATFORMS 保持一致；新增平台时同步）
@@ -1059,7 +1042,7 @@ function findWorkflowItem(id){
     return null;
 }
 function findPromptItem(id){
-    for(const lib of promptLibraries()) for(const item of lib.items || []) if(item.id === id) return item;
+    for(const lib of promptResources()) for(const item of lib.items || []) if(item.id === id) return item;
     return null;
 }
 function findCanvasAssetItem(id){
@@ -1335,17 +1318,14 @@ function normalizeWorkflowState(){
     selectedWorkflowIds = new Set([...selectedWorkflowIds].filter(id => findWorkflowItem(id)));
 }
 function normalizePromptState(){
-    const libs = promptLibraries();
-    if(!activePromptLibraryId || !libs.some(lib => lib.id === activePromptLibraryId)) activePromptLibraryId = promptLibrary.active_library_id || libs[0]?.id || '';
+    const libs = promptResources();
+    if(!activePromptResourceId || !libs.some(lib => lib.id === activePromptResourceId)) activePromptResourceId = libs[0]?.id || 'generation';
     const cats = activePromptCategories();
     if(activePromptCategory !== 'all' && !cats.some(cat => cat.id === activePromptCategory)) activePromptCategory = 'all';
     const items = currentPromptItems();
     if(selectedPromptId && !items.some(item => item.id === selectedPromptId)) selectedPromptId = '';
     if(!selectedPromptId && items.length) selectedPromptId = items[0].id;
-    selectedPromptIds = new Set([...selectedPromptIds].filter(id => {
-        const item = findPromptItem(id);
-        return item && !item.builtin;
-    }));
+    selectedPromptIds = new Set([...selectedPromptIds].filter(id => Boolean(findPromptItem(id))));
 }
 function normalizeCanvasAssetState(){
     const cats = canvasAssetCategories();
@@ -1367,14 +1347,14 @@ async function loadAll(){
     setStatus('加载中...');
     const [assetData, promptData, providerData, canvasAssetData] = await Promise.all([
         apiJson('/api/asset-library'),
-        apiJson('/api/prompt-libraries'),
+        apiJson('/api/prompt-catalog'),
         apiJson('/api/providers').catch(() => ({providers:[]})),
         apiJson('/api/canvas-assets').catch(() => ({categories:[], canvases:[], items:[]})),
         loadSharedFolders(),
         loadLocalAssets()
     ]);
     assetLibrary = assetData.library || {libraries:[], categories:[]};
-    promptLibrary = promptData.library || {libraries:[]};
+    promptCatalog = promptData.catalog || {generation_prompts:[], system_instructions:[]};
     apiProviders = Array.isArray(providerData.providers) ? providerData.providers : [];
     canvasAssetsData = {
         categories:Array.isArray(canvasAssetData.categories) ? canvasAssetData.categories : [],
@@ -2462,23 +2442,18 @@ function renderAssetDetail(item){
 }
 function promptManagerMarkup(){
     normalizePromptState();
-    const libs = promptLibraries();
-    const lib = activePromptLibrary();
-    const readonly = Boolean(lib?.readonly);
-    const cats = activePromptCategories();
+    const libs = promptResources();
+    const lib = activePromptResource();
+    const readonly = false;
     const items = currentPromptItems();
     const detail = promptCreateMode ? null : selectedPrompt();
     const promptEmptyText = (lib?.items || []).length
         ? '当前条件下没有提示词。可以切换分类或清空搜索条件。'
-        : `${lib?.name || '当前提示词库'} 暂无提示词，点击「新增」添加。`;
+        : `${lib?.name || '当前类型'}暂无内容，点击「新增」添加。`;
     return `
         <aside class="asset-panel asset-nav">
             <div class="panel-head">
-                <div class="panel-title"><strong>提示词库</strong><span>可创建多个词库</span></div>
-                <div class="panel-actions compact-actions">
-                    ${promptTreeEdit?.placement === 'head' ? '' : '<button class="asset-icon-btn" type="button" data-prompt-lib-new title="新建提示词库"><i data-lucide="plus"></i></button>'}
-                    ${renderHeadTreeInlineEdit(promptTreeEdit, 'promptTreeEditInput', 'data-prompt-tree-edit-save', 'data-prompt-tree-edit-cancel')}
-                </div>
+                <div class="panel-title"><strong>提示词管理</strong><span>生成模式与助手指令分开管理</span></div>
             </div>
             <div class="nav-scroll">
                 <div class="nav-tree">
@@ -2489,8 +2464,8 @@ function promptManagerMarkup(){
         <section class="asset-panel asset-content ${promptManageMode ? 'manage-on' : ''}">
             <div class="content-toolbar">
                 <div class="content-heading">
-                    <strong>${escapeHtml(lib?.name || '提示词库')}</strong>
-                    <span>共 ${items.length} 条提示词</span>
+                    <strong>${escapeHtml(lib?.name || '提示词资源')}</strong>
+                    <span>共 ${items.length} 条${activePromptResourceId === 'system' ? '系统指令' : '生成提示词'}</span>
                 </div>
                 <div class="asset-tools">
                     <label class="asset-search-wrap"><i data-lucide="search"></i><input id="promptSearch" class="asset-search" type="search" value="${escapeAttr(promptQuery)}" placeholder="搜索名称、说明或正文"></label>
@@ -2499,7 +2474,7 @@ function promptManagerMarkup(){
                 </div>
             </div>
             <div class="manage-tools">
-                <span data-prompt-selection-summary>已选择 ${selectedPromptIds.size} 条提示词，支持拖拽框选或逐个勾选。</span>
+                <span data-prompt-selection-summary>已选择 ${selectedPromptIds.size} 条内容，支持拖拽框选或逐个勾选。</span>
                 <div class="asset-tools">
                     <button class="asset-btn" type="button" data-prompt-select-all ${items.length && !readonly ? '' : 'disabled'}><i data-lucide="check-square"></i><span>全选</span></button>
                     <button class="asset-btn" type="button" data-prompt-clear-selection ${selectedPromptIds.size ? '' : 'disabled'}><i data-lucide="square"></i><span>清空</span></button>
@@ -2556,7 +2531,7 @@ function renderPromptDetailOnly(options={}){
     const scrollTop = scroll?.scrollTop || 0;
     const scrollLeft = scroll?.scrollLeft || 0;
     const detail = promptCreateMode ? null : selectedPrompt();
-    panel.innerHTML = renderPromptDetail(detail, Boolean(activePromptLibrary()?.readonly));
+    panel.innerHTML = renderPromptDetail(detail, false);
     if(options.preserveScroll !== false){
         const nextScroll = panel.querySelector('.detail-scroll');
         if(nextScroll){
@@ -2568,7 +2543,7 @@ function renderPromptDetailOnly(options={}){
 }
 function renderPromptRowAndDetail(id){
     const item = findPromptItem(id);
-    const readonly = Boolean(activePromptLibrary()?.readonly);
+    const readonly = false;
     const row = [...root.querySelectorAll('[data-prompt-row]')].find(element => element.dataset.promptRow === id);
     if(item && row) row.outerHTML = renderPromptRow(item, readonly);
     renderPromptDetailOnly();
@@ -2582,14 +2557,14 @@ function updatePromptManageState(options={}){
     const manageLabel = manageButton?.querySelector('span');
     if(manageLabel) manageLabel.textContent = promptManageMode ? '完成管理' : '批量管理';
     const summary = content.querySelector('[data-prompt-selection-summary]');
-    if(summary) summary.textContent = `已选择 ${selectedPromptIds.size} 条提示词，支持拖拽框选或逐个勾选。`;
+    if(summary) summary.textContent = `已选择 ${selectedPromptIds.size} 条内容，支持拖拽框选或逐个勾选。`;
     content.querySelectorAll('[data-prompt-row]').forEach(row => row.classList.toggle('active', row.dataset.promptRow === selectedPromptId));
     content.querySelectorAll('[data-prompt-check]').forEach(input => { input.checked = selectedPromptIds.has(input.dataset.promptCheck); });
     const clearButton = content.querySelector('[data-prompt-clear-selection]');
     if(clearButton) clearButton.disabled = !selectedPromptIds.size;
     const deleteButton = content.querySelector('[data-prompt-delete-selected]');
     if(deleteButton){
-        deleteButton.disabled = Boolean(activePromptLibrary()?.readonly) || !selectedPromptIds.size;
+        deleteButton.disabled = !selectedPromptIds.size;
         deleteButton.classList.toggle('detail-confirm', pendingBatchDelete === 'prompt');
         const label = deleteButton.querySelector('span');
         if(label) label.textContent = pendingBatchDelete === 'prompt' ? '确认删除' : '删除所选';
@@ -2601,140 +2576,74 @@ function renderPromptSelectionOnly(options={}){
     renderPromptDetailOnly(options);
 }
 function renderPromptTreeBranch(lib){
-    const isActiveLib = lib.id === activePromptLibraryId;
+    const isActiveLib = lib.id === activePromptResourceId;
     // 每个库渲染自己的分类，不再回退到激活库/系统库的分类（修复新库错显系统分类）。
     const cats = promptCategoriesFor(lib);
     const libId = escapeAttr(lib.id);
-    const readonly = Boolean(lib.readonly);
-    const showLibActions = isActiveLib && promptTreeFocus === 'library';
     return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
-        <button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-prompt-lib="${libId}">
-            <span class="tree-row-icon"><i data-lucide="${lib.id === 'system' ? 'sparkles' : 'book-open'}"></i></span>
-            <span class="tree-row-name">${escapeHtml(lib.name || '提示词库')}</span>
+        <button class="tree-row tree-parent ${isActiveLib ? 'active contains-active' : ''}" type="button" data-prompt-resource="${libId}">
+            <span class="tree-row-icon"><i data-lucide="${lib.id === 'system' ? 'bot' : 'sparkles'}"></i></span>
+            <span class="tree-row-name">${escapeHtml(lib.name || '提示词')}</span>
             <span class="tree-row-count">${(lib.items || []).length}</span>
         </button>
-        ${showLibActions ? renderPromptTreeActionBar('library') : ''}
-        <div class="tree-children">
-            <button class="tree-row tree-child ${isActiveLib && activePromptCategory === 'all' && promptTreeFocus === 'category' ? 'active' : ''}" type="button" data-prompt-cat="all" data-prompt-cat-lib="${libId}">
-                <span class="tree-elbow"></span>
-                <span class="tree-row-icon"><i data-lucide="layout-list"></i></span>
-                <span class="tree-row-name">全部提示词</span>
-                <span class="tree-row-count">${promptCountForCategory('all', lib)}</span>
-            </button>
+        ${isActiveLib && lib.id === 'generation' ? `<div class="tree-children">
             ${cats.map(cat => {
-                const active = isActiveLib && cat.id === activePromptCategory && promptTreeFocus === 'category';
-                return `<button class="tree-row tree-child ${active ? 'active' : ''}" type="button" data-prompt-cat="${escapeAttr(cat.id)}" data-prompt-cat-lib="${libId}">
+                const active = isActiveLib && cat.id === activePromptCategory;
+                return `<button class="tree-row tree-child ${active ? 'active' : ''}" type="button" data-prompt-cat="${escapeAttr(cat.id)}" data-prompt-cat-resource="${libId}">
                 <span class="tree-elbow"></span>
                 <span class="tree-row-icon"><i data-lucide="tag"></i></span>
                 <span class="tree-row-name">${escapeHtml(cat.name || promptCategoryLabel(cat.id))}</span>
                 <span class="tree-row-count">${promptCountForCategory(cat.id, lib)}</span>
-            </button>${active ? renderPromptTreeActionBar('category') : ''}`;
+            </button>`;
             }).join('')}
-        </div>
-    </div>`;
-}
-function renderPromptTreeActionBar(kind){
-    if(kind === 'category' && activePromptCategory === 'assistant'){
-        return `<div class="tree-action-bar child-actions muted-actions"><span><i data-lucide="lock"></i>助手指令专用分组不可重命名或删除</span></div>`;
-    }
-    const editHtml = renderPromptTreeInlineEdit(kind);
-    if(editHtml) return editHtml;
-    if(kind === 'library'){
-        const lib = activePromptLibrary();
-        const isSystem = isSystemPromptLibrary(lib);
-        const deleteKey = `prompt-lib:${lib?.id || ''}`;
-        return `<div class="tree-action-bar library-actions">
-            <button type="button" data-prompt-cat-new><i data-lucide="folder-plus"></i><span>新分组</span></button>
-            <button type="button" data-prompt-lib-rename><i data-lucide="pencil"></i><span>重命名</span></button>
-            ${isSystem ? '' : `<button type="button" class="danger ${pendingTreeDelete === deleteKey ? 'detail-confirm' : ''}" data-prompt-lib-delete><i data-lucide="trash-2"></i><span>${pendingTreeDelete === deleteKey ? '确认删除' : '删除库'}</span></button>`}
-        </div>`;
-    }
-    if(activePromptCategory === 'all'){
-        return `<div class="tree-action-bar child-actions muted-actions"><span><i data-lucide="lock"></i>请选择具体分组后编辑</span></div>`;
-    }
-    const deleteKey = `prompt-cat:${activePromptCategory}`;
-    return `<div class="tree-action-bar child-actions">
-        <button type="button" data-prompt-cat-rename><i data-lucide="pencil"></i><span>重命名</span></button>
-        <button type="button" class="danger ${pendingTreeDelete === deleteKey ? 'detail-confirm' : ''}" data-prompt-cat-delete><i data-lucide="trash-2"></i><span>${pendingTreeDelete === deleteKey ? '确认删除' : '删除'}</span></button>
-    </div>`;
-}
-function renderPromptTreeInlineEdit(kind){
-    if(!promptTreeEdit) return '';
-    if(promptTreeEdit.placement === 'head') return '';
-    const expectedKinds = kind === 'library' ? ['library-new', 'library-rename', 'category-new'] : ['category-new', 'category-rename'];
-    if(!expectedKinds.includes(promptTreeEdit.kind)) return '';
-    const label = promptTreeEdit.label || '名称';
-    return `<div class="tree-inline-edit ${kind === 'category' ? 'child-actions' : 'library-actions'}">
-        <input id="promptTreeEditInput" type="text" value="${escapeAttr(promptTreeEdit.value || '')}" placeholder="${escapeAttr(label)}">
-        <button type="button" class="primary" data-prompt-tree-edit-save><i data-lucide="check"></i><span>保存</span></button>
-        <button type="button" data-prompt-tree-edit-cancel><i data-lucide="x"></i><span>取消</span></button>
+        </div>` : ''}
     </div>`;
 }
 function renderPromptRow(item, readonly){
-    const assistant = item?.kind === 'assistant_recipe';
+    const assistant = item?.kind === 'system_instruction';
     return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}">
-        <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly || item.builtin ? 'disabled' : ''}>
+        <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly ? 'disabled' : ''}>
         <div class="prompt-card-cover">
-            <i data-lucide="${assistant ? 'bot' : 'text-cursor-input'}"></i>
-            <span class="prompt-tag">${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span>
+            <i data-lucide="${assistant ? 'bot' : (item.icon || 'sparkles')}"></i>
+            <span class="prompt-tag">${escapeHtml(assistant ? '系统指令' : promptCategoryLabel(item.category))}</span>
         </div>
         <div class="prompt-row-main">
-            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong>${item.builtin ? '<span class="prompt-tag prompt-tag-builtin">内置</span>' : ''}</div>
-            <div class="prompt-row-scene">${escapeHtml(item.scene || '未填写用途说明')}</div>
+            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong></div>
+            <div class="prompt-row-scene">${escapeHtml(item.description || '未填写用途说明')}</div>
         </div>
     </article>`;
 }
-function promptRecipeProviders(current=''){
-    const providers = (apiProviders || []).filter(provider => provider && provider.enabled !== false && Array.isArray(provider.chat_models) && provider.chat_models.length);
-    if(current && !providers.some(provider => provider.id === current)) providers.unshift({id:current, name:`${current}（当前配置不可用）`, chat_models:[]});
-    return providers;
-}
-function promptRecipeModels(providerId='', current=''){
-    const provider = promptRecipeProviders(providerId).find(item => item.id === providerId);
-    const models = [...new Set((provider?.chat_models || []).map(model => String(model || '').trim()).filter(Boolean))];
-    if(current && !models.includes(current)) models.unshift(current);
-    return models;
-}
-function promptRecipeModelLabel(providerId='', model=''){
-    const provider = (apiProviders || []).find(item => item?.id === providerId);
-    const aliases = provider?.model_aliases && typeof provider.model_aliases === 'object' ? provider.model_aliases : {};
-    return String(aliases[model] || model || '');
-}
-function renderPromptRecipeProviderOptions(current=''){
-    return `<option value="" ${!current ? 'selected' : ''}>跟随画布选择</option>${promptRecipeProviders(current).map(provider => `<option value="${escapeAttr(provider.id)}" ${provider.id === current ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('')}`;
-}
-function renderPromptRecipeModelOptions(providerId='', current=''){
-    const models = promptRecipeModels(providerId, current);
-    return `<option value="" ${!current ? 'selected' : ''}>跟随画布选择</option>${models.map(model => `<option value="${escapeAttr(model)}" ${model === current ? 'selected' : ''}>${escapeHtml(promptRecipeModelLabel(providerId, model))}</option>`).join('')}`;
-}
 function renderPromptEditFields(item={}, assistant=false){
     const effort = String(item.recommended_reasoning_effort || '');
-    const provider = String(item.recommended_provider || '');
-    const model = String(item.recommended_model || '');
     if(assistant) return `
-        <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="助手指令名称"></label>
-        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="说明这个指令适合处理什么任务">${escapeHtml(item.scene || '')}</textarea></label>
+        <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="系统指令名称"></label>
+        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditDescription" placeholder="说明这个指令适合处理什么任务">${escapeHtml(item.description || '')}</textarea></label>
         <label class="inline-edit-field"><span>系统提示词</span><textarea id="promptEditSystemTemplate" class="prompt-recipe-template" placeholder="定义模型角色、任务和输出约束">${escapeHtml(item.system_template || '')}</textarea></label>
-        <label class="inline-edit-field"><span>用户提示词模板</span><textarea id="promptEditUserTemplate" class="prompt-recipe-template" placeholder="必须包含 {{prompt}}，也可使用 {{selection}} 和 {{target_language}}">${escapeHtml(item.user_template || 'Process this prompt:\n<user_prompt>\n{{prompt}}\n</user_prompt>')}</textarea></label>
+        <label class="inline-edit-field"><span>用户提示词模板</span><textarea id="promptEditUserTemplate" class="prompt-recipe-template" placeholder="必须包含 {{prompt}}，也可使用 {{selection}} 和 {{target_language}}">${escapeHtml(item.user_template || '请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>')}</textarea></label>
         <label class="inline-edit-check"><input id="promptEditPreserveReferences" type="checkbox" ${item.preserve_references !== false ? 'checked' : ''}><span>保护画布中的媒体引用，不允许模型删除或改写</span></label>
         <div class="inline-edit-grid">
-            <label class="inline-edit-field"><span>推荐平台（可选）</span><select id="promptEditRecommendedProvider">${renderPromptRecipeProviderOptions(provider)}</select></label>
-            <label class="inline-edit-field"><span>推荐模型（可选）</span><select id="promptEditRecommendedModel" ${(provider && promptRecipeModels(provider, model).length) || model ? '' : 'disabled'}>${renderPromptRecipeModelOptions(provider, model)}</select></label>
             <label class="inline-edit-field"><span>推荐推理强度</span><select id="promptEditReasoningEffort"><option value="" ${!effort ? 'selected' : ''}>自动</option><option value="low" ${effort === 'low' ? 'selected' : ''}>低</option><option value="medium" ${effort === 'medium' ? 'selected' : ''}>中</option><option value="high" ${effort === 'high' ? 'selected' : ''}>高</option></select></label>
             <label class="inline-edit-field"><span>默认目标语言（可选）</span><input id="promptEditTargetLanguage" type="text" value="${escapeAttr(item.default_target_language || '')}" placeholder="例如 English"></label>
         </div>`;
     return `
         <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="提示词名称"></label>
-        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditScene" placeholder="用途说明">${escapeHtml(item.scene || '')}</textarea></label>
-        <label class="inline-edit-field"><span>正向提示词</span><textarea id="promptEditPositive" placeholder="正向提示词">${escapeHtml(item.positive || '')}</textarea></label>
-        <label class="inline-edit-field"><span>负向提示词</span><textarea id="promptEditNegative" placeholder="负向提示词">${escapeHtml(item.negative || '')}</textarea></label>`;
+        <label class="inline-edit-field"><span>分类</span><input id="promptEditCategory" type="text" value="${escapeAttr(item.category || (activePromptCategory === 'all' ? '未分类' : activePromptCategory))}" placeholder="例如 设定图"></label>
+        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditDescription" class="prompt-description-input" placeholder="在画布模式选择器中显示的简短说明">${escapeHtml(item.description || '')}</textarea></label>
+        <label class="inline-edit-field"><span>生成提示词模板</span><textarea id="promptEditPromptTemplate" class="prompt-recipe-template prompt-generation-template" placeholder="必须且只能包含一个 {{user_prompt}}">${escapeHtml(item.prompt_template || '{{user_prompt}}')}</textarea></label>
+        <div class="inline-edit-grid">
+            <label class="inline-edit-field"><span>推荐比例</span><select id="promptEditRatio">${renderPromptOptionList(['','1:1','3:2','4:3','16:9','9:16','2:1'], item.recommended_ratio || '', '不覆盖')}</select></label>
+            <label class="inline-edit-field"><span>推荐分辨率</span><select id="promptEditResolution">${renderPromptOptionList(['','1K','2K','4K'], item.recommended_resolution || '', '不覆盖')}</select></label>
+        </div>`;
+}
+function renderPromptOptionList(values, current, emptyLabel){
+    return values.map(value => `<option value="${escapeAttr(value)}" ${value === current ? 'selected' : ''}>${escapeHtml(value || emptyLabel)}</option>`).join('');
 }
 function renderPromptDetail(item, readonly){
     if(promptCreateMode && !readonly){
-        const assistant = promptCreateKind === 'assistant_recipe';
+        const assistant = promptCreateKind === 'system_instruction';
         return `
             <div class="panel-head">
-                <div class="panel-title"><strong>${assistant ? '新增助手指令' : '新增提示词'}</strong><span>保存到当前提示词库</span></div>
+                <div class="panel-title"><strong>${assistant ? '新增系统指令' : '新增生成提示词'}</strong><span>保存到${assistant ? '系统指令' : '生成提示词'}</span></div>
                 <div class="panel-actions">
                     <button class="asset-btn primary" type="button" data-prompt-create-save><i data-lucide="check"></i><span>保存</span></button>
                     <button class="asset-icon-btn" type="button" data-prompt-edit-cancel title="取消"><i data-lucide="x"></i></button>
@@ -2742,57 +2651,50 @@ function renderPromptDetail(item, readonly){
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
-                    <label class="inline-edit-field prompt-create-kind"><span>新增类型</span><select id="promptCreateKind"><option value="generation_prompt" ${assistant ? '' : 'selected'}>生成提示词</option><option value="assistant_recipe" ${assistant ? 'selected' : ''}>助手指令</option></select></label>
                     ${renderPromptEditFields({}, assistant)}
                 </div>
             </div>
         `;
     }
-    if(!item) return `<div class="panel-head"><div class="panel-title"><strong>提示词预览</strong><span>选择一条提示词查看全文</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="text-cursor-input"></i><span>暂无可预览提示词</span></div></div>`;
+    if(!item) return `<div class="panel-head"><div class="panel-title"><strong>内容预览</strong><span>选择一条内容查看全文</span></div></div><div class="detail-scroll"><div class="detail-empty"><i data-lucide="text-cursor-input"></i><span>暂无可预览内容</span></div></div>`;
     if(promptEditMode && item.id === selectedPromptId && !readonly){
-        const assistant = item.kind === 'assistant_recipe';
+        const assistant = item.kind === 'system_instruction';
         return `
             <div class="panel-head">
-                <div class="panel-title"><strong>${assistant ? '编辑助手指令' : '编辑提示词'}</strong><span>${item.builtin ? '内置指令 · 保存后覆盖本地配置' : '在当前库内保存'}</span></div>
+                <div class="panel-title"><strong>${assistant ? '编辑系统指令' : '编辑生成提示词'}</strong><span>保存到当前目录</span></div>
                 <div class="panel-actions">
-                    ${item.builtin ? `<button class="asset-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复项目内置的默认内容"><i data-lucide="rotate-ccw"></i><span>恢复默认</span></button>` : ''}
                     <button class="asset-btn primary" type="button" data-prompt-edit-save="${escapeAttr(item.id)}"><i data-lucide="check"></i><span>保存</span></button>
                     <button class="asset-icon-btn" type="button" data-prompt-edit-cancel title="取消"><i data-lucide="x"></i></button>
                 </div>
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
-                    ${item.builtin ? '<div class="prompt-builtin-notice"><i data-lucide="info"></i><span>这是内置助手指令。允许直接编辑；保存后智能画布将使用你的本地版本，也可以随时恢复默认。</span></div>' : ''}
                     ${renderPromptEditFields(item, assistant)}
                 </div>
             </div>
         `;
     }
-    const params = item.params && typeof item.params === 'object' ? Object.entries(item.params) : [];
-    if(item.kind === 'assistant_recipe') return `
+    if(item.kind === 'system_instruction') return `
         <div class="panel-head">
-            <div class="panel-title"><strong>助手指令预览</strong><span>${item.builtin ? '内置指令 · 可自定义并恢复' : '发送给 LLM 的完整模板'}</span></div>
+            <div class="panel-title"><strong>系统指令预览</strong><span>发送给提示词助手的完整模板</span></div>
             <div class="panel-actions">
-                ${item.builtin ? `<button class="asset-icon-btn" type="button" data-prompt-reset="${escapeAttr(item.id)}" title="恢复默认"><i data-lucide="rotate-ccw"></i></button>` : ''}
                 <button class="asset-icon-btn" type="button" data-prompt-edit-start="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="编辑"><i data-lucide="pencil"></i></button>
-                ${item.builtin ? '' : `<button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>`}
+                <button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
             </div>
         </div>
         <div class="detail-scroll">
-            <div class="prompt-detail-head"><div class="prompt-detail-title">${escapeHtml(item.name || '助手指令')}</div><div class="prompt-detail-scene">${escapeHtml(item.scene || '提示词助手')}</div></div>
+            <div class="prompt-detail-head"><div class="prompt-detail-title">${escapeHtml(item.name || '系统指令')}</div><div class="prompt-detail-scene">${escapeHtml(item.description || '提示词助手系统指令')}</div></div>
             <section class="prompt-block"><div class="prompt-block-head"><span>系统提示词</span><span>${String(item.system_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.system_template || '未填写')}</textarea></section>
             <section class="prompt-block"><div class="prompt-block-head"><span>用户提示词模板</span><span>${String(item.user_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.user_template || '未填写')}</textarea></section>
             <div class="params-list assistant-params-list">
                 <div class="param-row"><strong>媒体引用保护</strong><span>${item.preserve_references !== false ? '开启' : '关闭'}</span></div>
-                <div class="param-row"><strong>推荐平台</strong><span>${escapeHtml(item.recommended_provider || '跟随当前选择')}</span></div>
-                <div class="param-row"><strong>推荐模型</strong><span>${escapeHtml(item.recommended_model || '跟随当前选择')}</span></div>
                 <div class="param-row"><strong>推理强度</strong><span>${escapeHtml(item.recommended_reasoning_effort || '自动')}</span></div>
                 <div class="param-row"><strong>目标语言</strong><span>${escapeHtml(item.default_target_language || '未指定')}</span></div>
             </div>
         </div>`;
     return `
         <div class="panel-head">
-            <div class="panel-title"><strong>提示词预览</strong><span>${escapeHtml(promptCategoryLabel(item.category || 'custom'))}</span></div>
+            <div class="panel-title"><strong>生成提示词预览</strong><span>${escapeHtml(promptCategoryLabel(item.category))}</span></div>
             <div class="panel-actions">
                 <button class="asset-icon-btn" type="button" data-prompt-edit-start="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="编辑"><i data-lucide="pencil"></i></button>
                 <button class="asset-icon-btn danger ${pendingDeletePromptId === item.id ? 'detail-confirm' : ''}" type="button" data-prompt-delete="${escapeAttr(item.id)}" ${readonly ? 'disabled' : ''} title="${pendingDeletePromptId === item.id ? '再次点击确认删除' : '删除'}"><i data-lucide="trash-2"></i></button>
@@ -2800,18 +2702,17 @@ function renderPromptDetail(item, readonly){
         </div>
         <div class="detail-scroll">
             <div class="prompt-detail-head">
-                <div class="prompt-detail-title">${escapeHtml(item.name || '提示词')}</div>
-                <div class="prompt-detail-scene">${escapeHtml(item.scene || '未填写用途说明')}</div>
+                <div class="prompt-detail-title">${escapeHtml(item.name || '生成提示词')}</div>
+                <div class="prompt-detail-scene">${escapeHtml(item.description || '未填写用途说明')}</div>
             </div>
             <section class="prompt-block">
-                <div class="prompt-block-head"><span>正向提示词</span><span>${String(item.positive || '').length} 字符</span></div>
-                <textarea class="prompt-block-body" readonly spellcheck="false">${escapeHtml(item.positive || '未填写')}</textarea>
+                <div class="prompt-block-head"><span>生成提示词模板</span><span>${String(item.prompt_template || '').length} 字符</span></div>
+                <textarea class="prompt-block-body prompt-generation-template-body" readonly spellcheck="false">${escapeHtml(item.prompt_template || '未填写')}</textarea>
             </section>
-            <section class="prompt-block">
-                <div class="prompt-block-head"><span>负向提示词</span><span>${String(item.negative || '').length} 字符</span></div>
-                <textarea class="prompt-block-body negative" readonly spellcheck="false">${escapeHtml(item.negative || '未填写')}</textarea>
-            </section>
-            ${params.length ? `<div class="params-list">${params.map(([key, value]) => `<div class="param-row"><strong>${escapeHtml(key)}</strong><span>${escapeHtml(value)}</span></div>`).join('')}</div>` : ''}
+            <div class="params-list generation-params-list">
+                <div class="param-row"><strong>推荐比例</strong><span>${escapeHtml(item.recommended_ratio || '不覆盖')}</span></div>
+                <div class="param-row"><strong>推荐分辨率</strong><span>${escapeHtml(item.recommended_resolution || '不覆盖')}</span></div>
+            </div>
         </div>
     `;
 }
@@ -3815,8 +3716,6 @@ async function handleClick(event){
     if(target.closest?.('[data-asset-tree-edit-cancel]')){ assetTreeEdit = null; render(); return; }
     if(target.closest?.('[data-workflow-tree-edit-save]')){ await saveWorkflowTreeEdit(); return; }
     if(target.closest?.('[data-workflow-tree-edit-cancel]')){ workflowTreeEdit = null; render(); return; }
-    if(target.closest?.('[data-prompt-tree-edit-save]')){ await savePromptTreeEdit(); return; }
-    if(target.closest?.('[data-prompt-tree-edit-cancel]')){ promptTreeEdit = null; renderPromptNavigationOnly(); return; }
     const assetEditSave = target.closest?.('[data-asset-edit-save]');
     if(assetEditSave){ await saveAssetEdit(assetEditSave.dataset.assetEditSave || ''); return; }
     if(target.closest?.('[data-asset-edit-cancel]')){ assetEditMode = false; render(); return; }
@@ -3975,59 +3874,24 @@ async function handleClick(event){
         updatePromptManageState();
         return;
     }
-    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().filter(item => !item.builtin).forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; updatePromptManageState(); return; }
+    if(target.closest?.('[data-prompt-select-all]')){ currentPromptItems().forEach(item => selectedPromptIds.add(item.id)); pendingBatchDelete = ''; updatePromptManageState(); return; }
     if(target.closest?.('[data-prompt-clear-selection]')){ selectedPromptIds.clear(); pendingBatchDelete = ''; updatePromptManageState(); return; }
-    const promptEdit = target.closest?.('[data-prompt-edit]');
-    if(promptEdit){ await editPromptItem(promptEdit.dataset.promptEdit || ''); return; }
     const promptDelete = target.closest?.('[data-prompt-delete]');
     if(promptDelete){ await deletePromptItem(promptDelete.dataset.promptDelete || ''); return; }
-    const promptReset = target.closest?.('[data-prompt-reset]');
-    if(promptReset){ await resetPromptItem(promptReset.dataset.promptReset || ''); return; }
     if(target.closest?.('[data-prompt-delete-selected]')){ await deleteSelectedPrompts(); return; }
     const promptNewBtn = target.closest?.('[data-prompt-new]');
     if(promptNewBtn){
-        const libId = promptNewBtn.dataset.libId || target.closest('[data-prompt-lib]')?.dataset.promptLib;
+        const libId = promptNewBtn.dataset.libId || target.closest('[data-prompt-resource]')?.dataset.promptResource;
         const catRow = target.closest('[data-prompt-cat]');
-        if(libId){ activePromptLibraryId = libId; activePromptCategory = 'all'; }
-        if(catRow){ activePromptLibraryId = catRow.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = catRow.dataset.promptCat || activePromptCategory; }
-        promptCreateKind = activePromptCategory === 'assistant' ? 'assistant_recipe' : 'generation_prompt';
+        if(libId){ activePromptResourceId = libId; activePromptCategory = 'all'; }
+        if(catRow){ activePromptResourceId = catRow.dataset.promptCatResource || activePromptResourceId; activePromptCategory = catRow.dataset.promptCat || activePromptCategory; }
+        promptCreateKind = activePromptResourceId === 'system' ? 'system_instruction' : 'generation_prompt';
         promptCreateMode = true; promptEditMode = false; pendingDeletePromptId = ''; renderPromptSelectionOnly({preserveScroll:false}); return;
     }
-    if(target.closest?.('[data-prompt-lib-new]')){ promptTreeFocus = 'library'; promptTreeEdit = {kind:'library-new', placement:'head', value:'新提示词库', label:'提示词库名称'}; renderPromptNavigationOnly(); focusTreeEditInput('promptTreeEditInput'); return; }
-    if(target.closest?.('[data-prompt-cat-new]')){
-        const libRow = target.closest('[data-prompt-lib]');
-        if(libRow) activePromptLibraryId = libRow.dataset.promptLib || activePromptLibraryId;
-        promptTreeFocus = 'library';
-        promptTreeEdit = {kind:'category-new', value:'新分组', label:'分组名称'};
-        pendingTreeDelete = '';
-        renderPromptNavigationOnly(); return;
-    }
-    if(target.closest?.('[data-prompt-cat-rename]')){
-        promptTreeFocus = 'category';
-        const cat = activePromptCategories().find(c => c.id === activePromptCategory);
-        promptTreeEdit = {kind:'category-rename', value:cat?.name || '', label:'分组名称'};
-        pendingTreeDelete = '';
-        renderPromptNavigationOnly(); return;
-    }
-    if(target.closest?.('[data-prompt-cat-delete]')){ await deletePromptCategory(); return; }
-    const promptLibRenameBtn = target.closest?.('[data-prompt-lib-rename]');
-    if(promptLibRenameBtn){
-        const libRow = target.closest('[data-prompt-lib]');
-        if(promptLibRenameBtn.dataset.libId) activePromptLibraryId = promptLibRenameBtn.dataset.libId;
-        if(libRow) activePromptLibraryId = libRow.dataset.promptLib || activePromptLibraryId;
-        promptTreeFocus = 'library';
-        promptTreeEdit = {kind:'library-rename', value:activePromptLibrary()?.name || '', label:'提示词库名称'};
-        renderPromptNavigationOnly(); return;
-    }
-    const promptLibDeleteBtn = target.closest?.('[data-prompt-lib-delete]');
-    if(promptLibDeleteBtn){
-        if(promptLibDeleteBtn.dataset.libId) activePromptLibraryId = promptLibDeleteBtn.dataset.libId;
-        await deletePromptLibrary(); return;
-    }
-    const promptLib = target.closest?.('[data-prompt-lib]');
-    if(promptLib){ activePromptLibraryId = promptLib.dataset.promptLib || ''; activePromptCategory = 'all'; promptTreeFocus = 'library'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); renderPromptDataSections(); return; }
+    const promptResource = target.closest?.('[data-prompt-resource]');
+    if(promptResource){ activePromptResourceId = promptResource.dataset.promptResource || 'generation'; activePromptCategory = 'all'; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); renderPromptDataSections(); return; }
     const promptCat = target.closest?.('[data-prompt-cat]');
-    if(promptCat){ activePromptLibraryId = promptCat.dataset.promptCatLib || activePromptLibraryId; activePromptCategory = promptCat.dataset.promptCat || 'all'; promptTreeFocus = 'category'; promptTreeEdit = null; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); renderPromptDataSections(); return; }
+    if(promptCat){ activePromptResourceId = promptCat.dataset.promptCatResource || activePromptResourceId; activePromptCategory = promptCat.dataset.promptCat || 'all'; pendingTreeDelete = ''; selectedPromptId = ''; promptCreateMode = false; promptEditMode = false; selectedPromptIds.clear(); renderPromptDataSections(); return; }
     const promptRow = target.closest?.('[data-prompt-row]');
     if(promptRow){
         const id = promptRow.dataset.promptRow || '';
@@ -4656,196 +4520,58 @@ function openLocalItem(id){
     const url = localObjectUrl(item);
     if(url) window.open(url, '_blank', 'noopener');
 }
-async function createPromptLibrary(){
-    const name = window.prompt('提示词库名称', '新提示词库');
-    if(!String(name || '').trim()) return;
-    const data = await apiJson('/api/prompt-libraries', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
-    promptLibrary = data.library || promptLibrary;
-    activePromptLibraryId = data.prompt_library?.id || activePromptLibraryId;
-    activePromptCategory = 'all';
-    selectedPromptId = '';
-    render();
+function applyPromptCatalogResponse(data){
+    promptCatalog = data?.catalog || promptCatalog;
 }
-async function savePromptTreeEdit(){
-    if(!promptTreeEdit) return;
-    const editKind = promptTreeEdit.kind;
-    const name = document.getElementById('promptTreeEditInput')?.value || '';
-    if(!String(name || '').trim()){
-        setStatus('名称不能为空');
-        return;
-    }
-    let data = null;
-    if(promptTreeEdit.kind === 'library-new'){
-        data = await apiJson('/api/prompt-libraries', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
-        promptLibrary = data.library || promptLibrary;
-        activePromptLibraryId = data.prompt_library?.id || activePromptLibraryId;
-        activePromptCategory = 'all';
-        promptTreeFocus = 'library';
-    } else if(promptTreeEdit.kind === 'library-rename'){
-        const lib = activePromptLibrary();
-        if(!lib) return;
-        data = await apiJson(`/api/prompt-libraries/${encodeURIComponent(lib.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
-        promptLibrary = data.library || promptLibrary;
-        promptTreeFocus = 'library';
-    } else if(promptTreeEdit.kind === 'category-new'){
-        const lib = activePromptLibrary();
-        data = await apiJson('/api/prompt-libraries/categories', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib?.id || 'system', name})});
-        promptLibrary = data.library || promptLibrary;
-        activePromptCategory = data.category?.id || activePromptCategory;
-        promptTreeFocus = 'category';
-    } else if(promptTreeEdit.kind === 'category-rename'){
-        data = await apiJson(`/api/prompt-libraries/categories/${encodeURIComponent(activePromptCategory)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
-        promptLibrary = data.library || promptLibrary;
-        promptTreeFocus = 'category';
-    }
-    promptTreeEdit = null;
-    pendingTreeDelete = '';
-    if(['library-rename','category-rename'].includes(editKind)){
-        renderPromptNavigationOnly();
-        const heading = root.querySelector('.asset-content .content-heading strong');
-        if(heading) heading.textContent = activePromptLibrary()?.name || '提示词库';
-    } else {
-        render();
-    }
-    setStatus('已保存');
-}
-async function deletePromptCategory(){
-    if(activePromptCategory === 'all'){
-        setStatus('请选择具体分组后删除');
-        return;
-    }
-    const key = `prompt-cat:${activePromptCategory}`;
-    if(pendingTreeDelete !== key){
-        pendingTreeDelete = key;
-        promptTreeEdit = null;
-        renderPromptNavigationOnly();
-        setStatus('再次点击确认删除分组');
-        return;
-    }
-    const data = await apiJson(`/api/prompt-libraries/categories/${encodeURIComponent(activePromptCategory)}`, {method:'DELETE'});
-    promptLibrary = data.library || promptLibrary;
-    activePromptCategory = 'all';
-    pendingTreeDelete = '';
-    render();
-    setStatus('分组已删除');
-}
-async function renamePromptLibrary(){
-    const lib = activePromptLibrary();
-    const name = window.prompt('提示词库名称', lib?.name || '');
-    if(!lib || !String(name || '').trim()) return;
-    const data = await apiJson(`/api/prompt-libraries/${encodeURIComponent(lib.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
-    promptLibrary = data.library || promptLibrary;
-    render();
-}
-async function deletePromptLibrary(){
-    const lib = activePromptLibrary();
-    if(!lib) return;
-    if(isSystemPromptLibrary(lib)){ setStatus('系统提示词库不能删除'); return; }
-    const key = `prompt-lib:${lib.id}`;
-    if(pendingTreeDelete !== key){
-        pendingTreeDelete = key;
-        promptTreeEdit = null;
-        renderPromptNavigationOnly();
-        setStatus('再次点击确认删除提示词库');
-        return;
-    }
-    const data = await apiJson(`/api/prompt-libraries/${encodeURIComponent(lib.id)}`, {method:'DELETE'});
-    promptLibrary = data.library || promptLibrary;
-    activePromptLibraryId = promptLibrary.active_library_id || promptLibraries()[0]?.id || 'system';
-    activePromptCategory = 'all';
-    selectedPromptId = '';
-    selectedPromptIds.clear();
-    pendingTreeDelete = '';
-    render();
-    setStatus('提示词库已删除');
-}
-async function createPromptItem(){
-    const lib = activePromptLibrary();
-    if(!lib) return;
-    const name = window.prompt('提示词名称', '新提示词');
-    if(!String(name || '').trim()) return;
-    const scene = window.prompt('用途说明', '') || '';
-    const positive = window.prompt('正向提示词内容', '');
-    if(!String(positive || '').trim()) return;
-    const negative = window.prompt('负向提示词内容', '') || '';
-    const category = activePromptCategory === 'all' ? 'custom' : activePromptCategory;
-    const data = await apiJson('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative, category, scene})});
-    promptLibrary = data.library || promptLibrary;
-    selectedPromptId = data.item?.id || selectedPromptId;
-    renderPromptDataSections();
+function promptCatalogResource(){
+    return activePromptResourceId === 'system' ? 'system-instructions' : 'generation-prompts';
 }
 async function savePromptCreate(){
-    const lib = activePromptLibrary();
     const name = document.getElementById('promptEditName')?.value || '';
-    const scene = document.getElementById('promptEditScene')?.value || '';
-    const positive = document.getElementById('promptEditPositive')?.value || '';
-    const negative = document.getElementById('promptEditNegative')?.value || '';
-    const assistant = promptCreateKind === 'assistant_recipe';
+    const description = document.getElementById('promptEditDescription')?.value || '';
+    const assistant = promptCreateKind === 'system_instruction';
+    const promptTemplate = document.getElementById('promptEditPromptTemplate')?.value || '';
     const systemTemplate = document.getElementById('promptEditSystemTemplate')?.value || '';
     const userTemplate = document.getElementById('promptEditUserTemplate')?.value || '';
-    if(!lib) return;
-    if(!String(name || '').trim() || (assistant ? !String(systemTemplate || '').trim() || !String(userTemplate || '').trim() : !String(positive || '').trim())){
-        setStatus(assistant ? '名称、系统提示词和用户提示词模板不能为空' : '名称和正向提示词不能为空');
+    if(!String(name || '').trim() || (assistant ? !String(systemTemplate || '').trim() || !String(userTemplate || '').trim() : !String(promptTemplate || '').trim())){
+        setStatus(assistant ? '名称、系统提示词和用户提示词模板不能为空' : '名称和生成提示词模板不能为空');
         return;
     }
     if(assistant && !userTemplate.includes('{{prompt}}') && !userTemplate.includes('{{selection}}')){
         setStatus('用户提示词模板必须包含 {{prompt}} 或 {{selection}}');
         return;
     }
-    const category = ['all','assistant'].includes(activePromptCategory) ? 'custom' : activePromptCategory;
     const payload = assistant ? {
-        library_id:lib.id, name, category:'assistant', scene, kind:'assistant_recipe', positive:'', negative:'',
-        system_template:systemTemplate, user_template:userTemplate,
+        name, description, system_template:systemTemplate, user_template:userTemplate,
         preserve_references:Boolean(document.getElementById('promptEditPreserveReferences')?.checked),
-        recommended_provider:document.getElementById('promptEditRecommendedProvider')?.value || '',
-        recommended_model:document.getElementById('promptEditRecommendedModel')?.value || '',
         recommended_reasoning_effort:document.getElementById('promptEditReasoningEffort')?.value || '',
         default_target_language:document.getElementById('promptEditTargetLanguage')?.value || ''
-    } : {library_id:lib.id, name, positive, negative, category, scene, kind:'generation_prompt'};
-    const data = await apiJson('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    promptLibrary = data.library || promptLibrary;
+    } : {
+        name,
+        category:document.getElementById('promptEditCategory')?.value || '未分类',
+        description,
+        prompt_template:promptTemplate,
+        recommended_ratio:document.getElementById('promptEditRatio')?.value || '',
+        recommended_resolution:document.getElementById('promptEditResolution')?.value || ''
+    };
+    const data = await apiJson(`/api/prompt-catalog/${promptCatalogResource()}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    applyPromptCatalogResponse(data);
     selectedPromptId = data.item?.id || selectedPromptId;
-    if(assistant) activePromptCategory = 'assistant';
-    else if(activePromptCategory === 'assistant') activePromptCategory = 'all';
     promptCreateMode = false;
     renderPromptDataSections();
-    setStatus('提示词已新增');
-}
-async function editPromptItem(id){
-    const item = findPromptItem(id);
-    const lib = activePromptLibrary();
-    if(!item || !lib) return;
-    if(item.kind === 'assistant_recipe'){
-        selectedPromptId = id;
-        promptEditMode = true;
-        promptCreateMode = false;
-        renderPromptSelectionOnly();
-        return;
-    }
-    const name = window.prompt('提示词名称', item.name || '');
-    if(!String(name || '').trim()) return;
-    const scene = window.prompt('用途说明', item.scene || '') || '';
-    const positive = window.prompt('正向提示词内容', item.positive || '');
-    if(!String(positive || '').trim()) return;
-    const negative = window.prompt('负向提示词内容', item.negative || '') || '';
-    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({library_id:lib.id, name, positive, negative, category:item.category || 'custom', scene})});
-    promptLibrary = data.library || promptLibrary;
-    selectedPromptId = id;
-    renderPromptRowAndDetail(id);
+    setStatus(assistant ? '系统指令已新增' : '生成提示词已新增');
 }
 async function savePromptEdit(id){
     const item = findPromptItem(id);
-    const lib = activePromptLibrary();
     const name = document.getElementById('promptEditName')?.value || '';
-    const scene = document.getElementById('promptEditScene')?.value || '';
-    const positive = document.getElementById('promptEditPositive')?.value || '';
-    const negative = document.getElementById('promptEditNegative')?.value || '';
-    const assistant = item?.kind === 'assistant_recipe';
+    const description = document.getElementById('promptEditDescription')?.value || '';
+    const assistant = item?.kind === 'system_instruction';
+    const promptTemplate = document.getElementById('promptEditPromptTemplate')?.value || '';
     const systemTemplate = document.getElementById('promptEditSystemTemplate')?.value || '';
     const userTemplate = document.getElementById('promptEditUserTemplate')?.value || '';
-    if(!item || !lib) return;
-    if(!String(name || '').trim() || (assistant ? !String(systemTemplate || '').trim() || !String(userTemplate || '').trim() : !String(positive || '').trim())){
-        setStatus(assistant ? '名称、系统提示词和用户提示词模板不能为空' : '名称和正向提示词不能为空');
+    if(!item) return;
+    if(!String(name || '').trim() || (assistant ? !String(systemTemplate || '').trim() || !String(userTemplate || '').trim() : !String(promptTemplate || '').trim())){
+        setStatus(assistant ? '名称、系统提示词和用户提示词模板不能为空' : '名称和生成提示词模板不能为空');
         return;
     }
     if(assistant && !userTemplate.includes('{{prompt}}') && !userTemplate.includes('{{selection}}')){
@@ -4853,50 +4579,41 @@ async function savePromptEdit(id){
         return;
     }
     const payload = assistant ? {
-        library_id:lib.id, name, category:'assistant', scene, kind:'assistant_recipe', positive:'', negative:'',
-        system_template:systemTemplate, user_template:userTemplate,
+        name, description, system_template:systemTemplate, user_template:userTemplate,
         preserve_references:Boolean(document.getElementById('promptEditPreserveReferences')?.checked),
-        recommended_provider:document.getElementById('promptEditRecommendedProvider')?.value || '',
-        recommended_model:document.getElementById('promptEditRecommendedModel')?.value || '',
         recommended_reasoning_effort:document.getElementById('promptEditReasoningEffort')?.value || '',
         default_target_language:document.getElementById('promptEditTargetLanguage')?.value || ''
-    } : {library_id:lib.id, name, positive, negative, category:item.category || 'custom', scene, kind:'generation_prompt'};
-    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    promptLibrary = data.library || promptLibrary;
+    } : {
+        name,
+        category:document.getElementById('promptEditCategory')?.value || '未分类',
+        description,
+        prompt_template:promptTemplate,
+        recommended_ratio:document.getElementById('promptEditRatio')?.value || '',
+        recommended_resolution:document.getElementById('promptEditResolution')?.value || ''
+    };
+    const data = await apiJson(`/api/prompt-catalog/${promptCatalogResource()}/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    applyPromptCatalogResponse(data);
     selectedPromptId = id;
     promptEditMode = false;
     renderPromptRowAndDetail(id);
-    setStatus(item.builtin ? '内置助手指令已保存，智能画布将使用此版本' : '提示词已保存');
-}
-async function resetPromptItem(id){
-    const item = findPromptItem(id);
-    if(!item?.builtin) return;
-    if(!window.confirm(`将内置指令「${item.name || '助手指令'}」恢复为项目默认内容？`)) return;
-    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}/reset`, {method:'POST'});
-    promptLibrary = data.library || promptLibrary;
-    selectedPromptId = id;
-    promptEditMode = false;
-    promptCreateMode = false;
-    renderPromptRowAndDetail(id);
-    setStatus('内置助手指令已恢复默认');
+    setStatus(assistant ? '系统指令已保存' : '生成提示词已保存');
 }
 async function deletePromptItem(id){
     const item = findPromptItem(id);
     if(!item) return;
-    if(item.builtin){ setStatus('内置助手指令不能删除，可以编辑或恢复默认'); return; }
     if(pendingDeletePromptId !== id){
         pendingDeletePromptId = id;
         renderPromptSelectionOnly();
         setStatus('再次点击确认删除提示词');
         return;
     }
-    const data = await apiJson(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'DELETE'});
-    promptLibrary = data.library || promptLibrary;
+    const data = await apiJson(`/api/prompt-catalog/${promptCatalogResource()}/${encodeURIComponent(id)}`, {method:'DELETE'});
+    applyPromptCatalogResponse(data);
     selectedPromptIds.delete(id);
     if(selectedPromptId === id) selectedPromptId = '';
     pendingDeletePromptId = '';
     renderPromptDataSections();
-    setStatus('提示词已删除');
+    setStatus(activePromptResourceId === 'system' ? '系统指令已删除' : '生成提示词已删除');
 }
 async function deleteSelectedPrompts(){
     if(!selectedPromptIds.size) return;
@@ -4907,12 +4624,13 @@ async function deleteSelectedPrompts(){
         return;
     }
     const ids = [...selectedPromptIds];
-    const data = await apiJson('/api/prompt-libraries/items/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
-    promptLibrary = data.library || promptLibrary;
+    const data = await apiJson(`/api/prompt-catalog/${promptCatalogResource()}/delete`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
+    applyPromptCatalogResponse(data);
     if(ids.includes(selectedPromptId)) selectedPromptId = '';
     selectedPromptIds.clear();
     pendingBatchDelete = '';
     renderPromptDataSections();
+    setStatus(`已删除 ${data.removed || 0} 条内容`);
 }
 root.addEventListener('pointerdown', event => {
     if(event.button !== 0) return;
@@ -4963,10 +4681,6 @@ document.addEventListener('keydown', event => {
         if(event.key === 'Enter'){ event.preventDefault(); saveWorkflowTreeEdit().catch(err => setStatus(err.message || '保存失败')); }
         if(event.key === 'Escape'){ event.preventDefault(); workflowTreeEdit = null; render(); }
     }
-    if(event.target?.id === 'promptTreeEditInput'){
-        if(event.key === 'Enter'){ event.preventDefault(); savePromptTreeEdit().catch(err => setStatus(err.message || '保存失败')); }
-        if(event.key === 'Escape'){ event.preventDefault(); promptTreeEdit = null; renderPromptNavigationOnly(); }
-    }
 });
 document.addEventListener('wheel', zoomDetailPreview, {passive:false});
 document.addEventListener('pointerdown', beginLightboxPan);
@@ -5009,21 +4723,6 @@ root.addEventListener('input', event => {
     }
 });
 root.addEventListener('change', event => {
-    if(event.target?.id === 'promptCreateKind'){
-        promptCreateKind = event.target.value === 'assistant_recipe' ? 'assistant_recipe' : 'generation_prompt';
-        renderPromptSelectionOnly();
-        return;
-    }
-    if(event.target?.id === 'promptEditRecommendedProvider'){
-        const providerId = event.target.value || '';
-        const modelSelect = document.getElementById('promptEditRecommendedModel');
-        if(modelSelect){
-            modelSelect.innerHTML = renderPromptRecipeModelOptions(providerId, '');
-            modelSelect.value = '';
-            modelSelect.disabled = !providerId || !promptRecipeModels(providerId).length;
-        }
-        return;
-    }
     const inlineLocalUploadName = event.target.closest?.('[data-localup-inline-name]');
     if(inlineLocalUploadName){
         saveLocalUploadInlineName(inlineLocalUploadName.dataset.localupInlineName || '', inlineLocalUploadName.value || '').catch(err => setStatus(err.message || '保存失败'));
