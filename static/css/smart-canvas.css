@@ -1665,7 +1665,7 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .generation-mode-btn:hover,.generation-mode-btn:focus-visible,.generation-mode-btn.active { color:var(--text); background:var(--card); border-color:var(--line); }
 .generation-mode-btn.active { color:color-mix(in srgb, var(--connection-flow) 76%, var(--text)); border-color:color-mix(in srgb, var(--connection-flow) 36%, var(--line)); }
 .generation-mode-btn i,.generation-mode-btn svg { width:13px !important; height:13px !important; flex:0 0 auto; stroke-width:2.2; }
-.generation-mode-panel { position:absolute; z-index:100; right:-4px; top:calc(100% + 8px); width:min(500px, calc(100vw - 72px)); max-height:min(620px, calc(100vh - 80px)); padding:14px; border-radius:18px; display:none; flex-direction:column; gap:12px; overflow:hidden; background:var(--card); border:1px solid var(--line); box-shadow:0 24px 68px var(--shadow),0 8px 24px rgba(15,23,42,.16); backdrop-filter:blur(22px); }
+.generation-mode-panel { position:absolute; z-index:100; right:-8px; top:calc(100% + 8px); width:min(500px, calc(100vw - 72px)); max-height:min(620px, calc(100vh - 80px)); padding:14px; border-radius:18px; display:none; flex-direction:column; gap:12px; overflow:hidden; background:var(--card); border:1px solid var(--line); box-shadow:0 24px 68px var(--shadow),0 8px 24px rgba(15,23,42,.16); backdrop-filter:blur(22px); }
 .generation-mode-panel.open { display:flex; }
 .generation-mode-panel.open-upward { top:auto; bottom:calc(100% + 8px); }
 .generation-mode-panel-head { flex:0 0 auto; display:flex; align-items:center; gap:9px; min-height:24px; }
@@ -1690,7 +1690,7 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
     .generation-mode-option,.generation-mode-option-copy strong,.generation-mode-option-copy small { transition:none; }
 }
 @media (max-width:700px){
-    .generation-mode-panel { right:-4px; width:min(420px, calc(100vw - 40px)); }
+    .generation-mode-panel { right:-8px; width:min(420px, calc(100vw - 40px)); }
     .generation-mode-groups { grid-template-columns:1fr; }
 }
 .dynamic-params:has(.video-settings-control) { align-items:center; flex-wrap:nowrap; }

@@ -204,6 +204,7 @@ const PROMPT_NODE_LLM_SETTINGS_KEY = 'smart_canvas_prompt_node_llm_settings_v1';
 const PROMPT_ASSISTANT_SETTINGS_KEY = 'smart_canvas_prompt_assistant_settings_v1';
 let generationPromptCatalog = [];
 let systemInstructionCatalog = [];
+let generationModePromptSelection = null;
 let createMenuPoint = {x:0, y:0};
 let createMenuGroupId = '';
 let nodeClipboard = null;
@@ -8693,6 +8694,8 @@ function closeGenerationModePanel(){
     generationModePanel?.classList.remove('open-upward');
     ['left', 'right', 'top', 'bottom'].forEach(property => generationModePanel?.style.removeProperty(property));
     generationModeBtn?.setAttribute('aria-expanded', 'false');
+    generationModePromptSelection = null;
+    promptEditor?.scheduleSelectionCaretSync?.();
     disarmDynamicParamHover();
 }
 function positionGenerationModePanel(anchorEl = generationModeControl){
@@ -8711,13 +8714,14 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
     const safeScaleX = measuredScaleX > 0 ? measuredScaleX : 1;
     const safeScaleY = measuredScaleY > 0 ? measuredScaleY : safeScaleX;
     const edgeMargin = 12;
-    const gap = 8 * safeScaleY;
+    const inlineAnchor = anchor !== generationModeControl;
+    const gap = (inlineAnchor ? 4 : 8) * safeScaleY;
     const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
     const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
     const openUpward = panelRect.height > spaceBelow && panelRect.height <= spaceAbove;
     generationModePanel.classList.toggle('open-upward', openUpward);
-    if(anchor !== generationModeControl){
-        const viewportLeft = Math.max(edgeMargin, Math.min(anchorRect.left - (4 * safeScaleX), window.innerWidth - edgeMargin - panelRect.width));
+    if(inlineAnchor){
+        const viewportLeft = Math.max(edgeMargin, Math.min(anchorRect.left - (8 * safeScaleX), window.innerWidth - edgeMargin - panelRect.width));
         const viewportTop = openUpward
             ? anchorRect.top - gap - panelRect.height
             : anchorRect.bottom + gap;
@@ -8730,6 +8734,9 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
 }
 async function openGenerationModePanel(anchorEl = generationModeControl){
     if(!generationModeSupported(settings) || !generationModePanel) return;
+    const inlineAnchor = Boolean(anchorEl?.closest?.('.smart-prompt-inline-prefix-chip'));
+    generationModePromptSelection = inlineAnchor ? capturePromptSelection() : null;
+    promptEditor?.clearSelectionCaret?.({keepNativeHidden:true});
     try { await loadGenerationPromptCatalog(); } catch(e){}
     renderGenerationModePanel();
     positionGenerationModePanel(anchorEl);
@@ -8738,18 +8745,21 @@ async function openGenerationModePanel(anchorEl = generationModeControl){
 function clearGenerationMode(){
     const subject = activeComposerNode() || selectedNode();
     if(!subject) return;
+    const promptSelection = generationModePromptSelection;
     capturePendingUndo();
     delete subject.generationPromptId;
     delete subject.generationPromptSnapshot;
     commitPendingUndo();
     closeGenerationModePanel();
     renderGenerationModeControl();
+    if(promptSelection) restorePromptSelection(promptSelection);
     scheduleSave();
 }
 function selectGenerationMode(id){
     const subject = activeComposerNode() || selectedNode();
     const snapshot = generationPromptSnapshot(generationPromptCatalog.find(item => String(item?.id || '') === String(id || '')));
     if(!subject || !snapshot || !generationModeSupported(settings)) return;
+    const promptSelection = generationModePromptSelection;
     capturePendingUndo();
     subject.generationPromptId = snapshot.id;
     subject.generationPromptSnapshot = snapshot;
@@ -8761,6 +8771,7 @@ function selectGenerationMode(id){
     closeGenerationModePanel();
     renderDynamicParams();
     renderGenerationModeControl();
+    if(promptSelection) restorePromptSelection(promptSelection);
     scheduleSave();
 }
 function assetCategories(type='image'){

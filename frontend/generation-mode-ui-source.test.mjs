@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 const js = readFileSync(new URL('../static/js/smart-canvas.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../static/smart-canvas.html', import.meta.url), 'utf8');
@@ -18,7 +18,7 @@ test('Smart Canvas exposes the compact generation-mode picker instead of the old
   assert.match(css, /\.generation-mode-btn\s*\{[^}]*width:30px[^}]*height:30px/);
   assert.match(css, /\.generation-mode-control\s*\{[^}]*z-index:90/);
   assert.match(css, /\.generation-mode-panel\s*\{[^}]*width:min\(500px[^}]*max-height:min\(620px/);
-  assert.match(css, /\.generation-mode-panel\s*\{[^}]*right:-4px/);
+  assert.match(css, /\.generation-mode-panel\s*\{[^}]*right:-8px/);
   assert.match(css, /\.generation-mode-panel\s*\{[^}]*background:var\(--card\)/);
   assert.match(css, /\.mention-picker\s*\{[^}]*background:var\(--card\)/);
   const sharedPopoverShadow = /box-shadow:0 24px 68px var\(--shadow\),0 8px 24px rgba\(15,23,42,\.16\)/g;
@@ -110,11 +110,24 @@ test('inline mode capsule anchors the picker beside itself with the same complet
   const generationPosition = js.match(/function positionGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
   assert.match(generationPosition, /anchorEl = generationModeControl/);
   assert.match(generationPosition, /const anchorRect = anchor\.getBoundingClientRect\(\)/);
+  assert.match(generationPosition, /const inlineAnchor = anchor !== generationModeControl/);
+  assert.match(generationPosition, /const gap = \(inlineAnchor \? 4 : 8\) \* safeScaleY/);
   assert.match(generationPosition, /panelRect\.height > spaceBelow && panelRect\.height <= spaceAbove/);
   assert.match(generationPosition, /anchorRect\.top - gap - panelRect\.height[\s\S]*?anchorRect\.bottom \+ gap/);
-  assert.match(generationPosition, /anchorRect\.left - \(4 \* safeScaleX\)/);
+  assert.match(generationPosition, /anchorRect\.left - \(8 \* safeScaleX\)/);
   assert.match(generationPosition, /offsetParent[\s\S]*?safeScaleX[\s\S]*?safeScaleY/);
   assert.match(js, /smart-prompt-prefix-activate[\s\S]*?openGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)/);
+});
+
+test('inline mode picker hides the boundary caret and restores the exact prompt selection after switching', () => {
+  const open = js.match(/async function openGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
+  const close = js.match(/function closeGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
+  const select = js.match(/function selectGenerationMode\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(open, /inlineAnchor[\s\S]*?capturePromptSelection\(\)/);
+  assert.match(open, /clearSelectionCaret\?\.\(\{keepNativeHidden:true\}\)/);
+  assert.match(close, /scheduleSelectionCaretSync\?\.\(\)/);
+  assert.match(select, /const promptSelection = generationModePromptSelection/);
+  assert.match(select, /renderGenerationModeControl\(\);[\s\S]*?restorePromptSelection\(promptSelection\)/);
 });
 
 test('mode prefix reuses the media-token caret overlay at document position one and keeps a stable pointer cursor', () => {

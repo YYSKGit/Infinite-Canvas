@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 
 const managerSource = await readFile(new URL('../static/js/asset-manager.js', import.meta.url), 'utf8');
 const managerHtml = await readFile(new URL('../static/asset-manager.html', import.meta.url), 'utf8');
+const builtInCatalog = JSON.parse(await readFile(new URL('../static/system-prompts/prompt-catalog.json', import.meta.url), 'utf8'));
 
 test('standalone prompt manager uses the new two-resource catalog', () => {
   assert.match(managerSource, /api\/prompt-catalog/);
@@ -58,6 +59,26 @@ test('content-card selection uses a quiet static border without an outer glow ri
     assert.doesNotMatch(style, /0 0 0 1px/);
     assert.doesNotMatch(style, /animation:/);
   });
+});
+
+test('content-card hover only changes the border without lifting or adding a shadow', async () => {
+  const managerCss = await readFile(new URL('../static/css/asset-manager.css', import.meta.url), 'utf8');
+  for(const selector of ['asset-card', 'prompt-row']){
+    const baseStyle = (managerCss.match(new RegExp(`\\.${selector} \\{[^}]*\\}`, 'g')) || [])
+      .find(style => style.includes('transition:border-color')) || '';
+    const hoverStyle = managerCss.match(new RegExp(`\\.${selector}:hover \\{[^}]*\\}`))?.[0] || '';
+    assert.match(baseStyle, /transition:border-color \.14s ease/);
+    assert.doesNotMatch(baseStyle, /transition:[^;}]*(?:box-shadow|transform)/);
+    assert.match(hoverStyle, /border-color:color-mix\(in srgb, var\(--strong\) 32%, var\(--line\)\)/);
+    assert.doesNotMatch(hoverStyle, /box-shadow|transform/);
+  }
+});
+
+test('built-in system-instruction descriptions stay concise and period-free', () => {
+  for(const instruction of builtInCatalog.system_instructions){
+    assert.ok([...instruction.description].length <= 18, `${instruction.id} description is too long`);
+    assert.doesNotMatch(instruction.description, /[\u3002\uFF01.!]/);
+  }
 });
 
 test('asset reorder drag previews disable badge backdrop compositing artifacts', async () => {
