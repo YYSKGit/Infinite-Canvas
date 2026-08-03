@@ -216,9 +216,20 @@ export class SmartPromptEditor {
       ? window.lucide.createElement(iconData, {'aria-hidden':'true'})
       : document.createElement('span');
     icon.classList.add('smart-prompt-inline-prefix-icon');
+    const removeIconData = window.lucide?.icons?.X;
+    const removeIcon = removeIconData && window.lucide?.createElement
+      ? window.lucide.createElement(removeIconData, {'aria-hidden':'true'})
+      : document.createElement('span');
+    removeIcon.classList.add('smart-prompt-inline-prefix-remove-icon');
+    const iconSlot = document.createElement('span');
+    iconSlot.className = 'smart-prompt-inline-prefix-icon-slot';
+    iconSlot.dataset.prefixRemove = 'true';
+    iconSlot.setAttribute('title', '移除生成模式');
+    iconSlot.append(icon, removeIcon);
     const label = document.createElement('span');
+    label.className = 'smart-prompt-inline-prefix-label';
     label.textContent = String(prefix.label || '生成模式');
-    chip.append(icon, label);
+    chip.append(iconSlot, label);
     root.append(chip);
 
     root.addEventListener('pointerdown', event => {
@@ -229,6 +240,13 @@ export class SmartPromptEditor {
     root.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
+      if(event.target.closest?.('[data-prefix-remove]')){
+        this.host.dispatchEvent(new CustomEvent('smart-prompt-prefix-remove', {
+          bubbles:true,
+          detail:{id:String(prefix.id || '')}
+        }));
+        return;
+      }
       this.host.dispatchEvent(new CustomEvent('smart-prompt-prefix-activate', {
         bubbles:true,
         detail:{id:String(prefix.id || '')}

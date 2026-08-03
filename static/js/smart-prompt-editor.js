@@ -12859,9 +12859,18 @@
       const iconData = window.lucide?.icons?.[iconKey] || window.lucide?.icons?.Blocks;
       const icon = iconData && window.lucide?.createElement ? window.lucide.createElement(iconData, { "aria-hidden": "true" }) : document.createElement("span");
       icon.classList.add("smart-prompt-inline-prefix-icon");
+      const removeIconData = window.lucide?.icons?.X;
+      const removeIcon = removeIconData && window.lucide?.createElement ? window.lucide.createElement(removeIconData, { "aria-hidden": "true" }) : document.createElement("span");
+      removeIcon.classList.add("smart-prompt-inline-prefix-remove-icon");
+      const iconSlot = document.createElement("span");
+      iconSlot.className = "smart-prompt-inline-prefix-icon-slot";
+      iconSlot.dataset.prefixRemove = "true";
+      iconSlot.setAttribute("title", "\u79FB\u9664\u751F\u6210\u6A21\u5F0F");
+      iconSlot.append(icon, removeIcon);
       const label = document.createElement("span");
+      label.className = "smart-prompt-inline-prefix-label";
       label.textContent = String(prefix.label || "\u751F\u6210\u6A21\u5F0F");
-      chip.append(icon, label);
+      chip.append(iconSlot, label);
       root.append(chip);
       root.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
@@ -12871,6 +12880,13 @@
       root.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (event.target.closest?.("[data-prefix-remove]")) {
+          this.host.dispatchEvent(new CustomEvent("smart-prompt-prefix-remove", {
+            bubbles: true,
+            detail: { id: String(prefix.id || "") }
+          }));
+          return;
+        }
         this.host.dispatchEvent(new CustomEvent("smart-prompt-prefix-activate", {
           bubbles: true,
           detail: { id: String(prefix.id || "") }

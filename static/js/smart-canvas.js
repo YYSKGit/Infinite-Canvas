@@ -8032,10 +8032,17 @@ function closeAllSmartPopovers(){
     });
     disarmDynamicParamHover();
 }
+let dynamicParamHoverDisarmFrame = 0;
 function disarmDynamicParamHover(){
-    dynamicParams?.querySelectorAll('.smart-control.hover-armed').forEach(ctrl => {
+    dynamicParams?.querySelectorAll('.smart-control').forEach(ctrl => {
         ctrl.classList.remove('hover-armed');
         if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+    });
+    dynamicParams?.classList.toggle('hover-reentry-required', dynamicParams.matches(':hover'));
+    if(dynamicParamHoverDisarmFrame) cancelAnimationFrame(dynamicParamHoverDisarmFrame);
+    dynamicParamHoverDisarmFrame = requestAnimationFrame(() => {
+        dynamicParamHoverDisarmFrame = 0;
+        dynamicParams?.classList.toggle('hover-reentry-required', dynamicParams.matches(':hover'));
     });
 }
 // 悬浮打开弹层后点了里面的参数：标记 interacting，让它熬过重渲染不收起；鼠标真正离开该控件时才关闭。
@@ -8150,7 +8157,7 @@ function bindDynamicParams(){
         dynamicParams.addEventListener('mouseleave', () => {
             if(switchingFrame) cancelAnimationFrame(switchingFrame);
             switchingFrame = 0;
-            dynamicParams.classList.remove('switching-smart-popovers');
+            dynamicParams.classList.remove('switching-smart-popovers', 'hover-reentry-required');
         });
     }
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
@@ -8167,6 +8174,7 @@ function bindDynamicParams(){
         };
         ctrl.onpointermove = event => {
             if((event.pointerType && event.pointerType !== 'mouse') || event.buttons) return;
+            if(dynamicParamHoverDisarmFrame || dynamicParams.classList.contains('hover-reentry-required')) return;
             if(!ctrl.classList.contains('hover-armed')) ctrl.classList.add('hover-armed');
             if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
             revealCurrentPickerOption(ctrl);
@@ -8673,7 +8681,6 @@ function renderGenerationModePanel(){
                     return `<button type="button" class="generation-mode-option ${active ? 'active' : ''}" data-generation-mode-id="${escapeAttr(snapshot.id)}">
                         <span class="generation-mode-option-icon"><i data-lucide="${generationModeIcon(snapshot.icon)}"></i></span>
                         <span class="generation-mode-option-copy"><strong>${escapeHtml(snapshot.name)}</strong><small>${escapeHtml(snapshot.description)}</small></span>
-                        ${active ? '<i class="generation-mode-check" data-lucide="check"></i>' : ''}
                     </button>`;
                 }).join('')}
             </section>`).join('') || '<div class="generation-mode-empty">暂无可用生成模式</div>'}
@@ -8683,14 +8690,49 @@ function renderGenerationModePanel(){
 }
 function closeGenerationModePanel(){
     generationModePanel?.classList.remove('open');
+    generationModePanel?.classList.remove('open-upward');
+    ['left', 'right', 'top', 'bottom'].forEach(property => generationModePanel?.style.removeProperty(property));
     generationModeBtn?.setAttribute('aria-expanded', 'false');
     disarmDynamicParamHover();
 }
-async function openGenerationModePanel(){
+function positionGenerationModePanel(anchorEl = generationModeControl){
+    if(!generationModeControl || !generationModePanel) return;
+    ['left', 'right', 'top', 'bottom'].forEach(property => generationModePanel.style.removeProperty(property));
+    generationModePanel.classList.remove('open-upward');
+    generationModePanel.style.visibility = 'hidden';
+    generationModePanel.classList.add('open');
+    const anchor = anchorEl?.isConnected ? anchorEl : generationModeControl;
+    const anchorRect = anchor.getBoundingClientRect();
+    const panelRect = generationModePanel.getBoundingClientRect();
+    const offsetParent = generationModePanel.offsetParent || generationModeControl;
+    const parentRect = offsetParent.getBoundingClientRect();
+    const measuredScaleX = offsetParent.offsetWidth ? parentRect.width / offsetParent.offsetWidth : 1;
+    const measuredScaleY = offsetParent.offsetHeight ? parentRect.height / offsetParent.offsetHeight : measuredScaleX;
+    const safeScaleX = measuredScaleX > 0 ? measuredScaleX : 1;
+    const safeScaleY = measuredScaleY > 0 ? measuredScaleY : safeScaleX;
+    const edgeMargin = 12;
+    const gap = 8 * safeScaleY;
+    const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
+    const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
+    const openUpward = panelRect.height > spaceBelow && panelRect.height <= spaceAbove;
+    generationModePanel.classList.toggle('open-upward', openUpward);
+    if(anchor !== generationModeControl){
+        const viewportLeft = Math.max(edgeMargin, Math.min(anchorRect.left - (4 * safeScaleX), window.innerWidth - edgeMargin - panelRect.width));
+        const viewportTop = openUpward
+            ? anchorRect.top - gap - panelRect.height
+            : anchorRect.bottom + gap;
+        generationModePanel.style.left = `${(viewportLeft - parentRect.left) / safeScaleX}px`;
+        generationModePanel.style.right = 'auto';
+        generationModePanel.style.top = `${(viewportTop - parentRect.top) / safeScaleY}px`;
+        generationModePanel.style.bottom = 'auto';
+    }
+    generationModePanel.style.removeProperty('visibility');
+}
+async function openGenerationModePanel(anchorEl = generationModeControl){
     if(!generationModeSupported(settings) || !generationModePanel) return;
     try { await loadGenerationPromptCatalog(); } catch(e){}
     renderGenerationModePanel();
-    generationModePanel.classList.add('open');
+    positionGenerationModePanel(anchorEl);
     generationModeBtn?.setAttribute('aria-expanded', 'true');
 }
 function clearGenerationMode(){
@@ -19952,8 +19994,10 @@ function renderMentionPicker(source){
     } else {
         placeMentionPickerInPromptRow();
     }
-    positionMentionPickerAtCaret();
+    mentionPicker.style.visibility = 'hidden';
     mentionPicker.classList.add('open');
+    positionMentionPickerAtCaret();
+    mentionPicker.style.removeProperty('visibility');
     mentionPicker.querySelectorAll('[data-mention-source]').forEach(btn => {
         btn.addEventListener('mousedown', e => {
             e.preventDefault(); e.stopPropagation();
@@ -20100,11 +20144,21 @@ function positionMentionPickerAtCaret(){
         const measuredScale = base.offsetWidth ? baseRect.width / base.offsetWidth : 1;
         const safeScale = measuredScale > 0 ? measuredScale : 1;
         const baseLogicalWidth = baseRect.width / safeScale;
+        const pickerRect = mentionPicker.getBoundingClientRect();
+        const edgeMargin = 12;
+        const gap = 8 * safeScale;
+        const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
+        const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
+        const openUpward = pickerRect.height > spaceBelow && pickerRect.height <= spaceAbove;
+        const pickerHeight = mentionPicker.offsetHeight || 266;
         const rawLeft = (anchorRect.right - baseRect.left) / safeScale - pickerWidth;
-        const rawTop = (anchorRect.bottom - baseRect.top) / safeScale + 2;
+        const rawTop = openUpward
+            ? (anchorRect.top - baseRect.top) / safeScale - pickerHeight - 8
+            : (anchorRect.bottom - baseRect.top) / safeScale + 8;
         const left = Math.max(4, Math.min(rawLeft, Math.max(4, baseLogicalWidth - pickerWidth - 4)));
+        const top = openUpward ? rawTop : Math.max(2, rawTop);
         mentionPicker.style.left = `${left}px`;
-        mentionPicker.style.top = `${Math.max(2, rawTop)}px`;
+        mentionPicker.style.top = `${top}px`;
         return;
     }
     const caretRect = promptEditor?.caretRect?.() || null;
@@ -20114,13 +20168,27 @@ function positionMentionPickerAtCaret(){
     // another UI scale is applied by the host page.
     const measuredScale = row.offsetWidth ? rowRect.width / row.offsetWidth : 1;
     const safeScale = measuredScale > 0 ? measuredScale : 1;
+    const anchorRect = caretRect || {
+        left:inputRect.left,
+        top:inputRect.top + (12 * safeScale),
+        bottom:inputRect.top + (24 * safeScale)
+    };
     const rowLogicalWidth = rowRect.width / safeScale;
     const pickerWidth = mentionPicker.offsetWidth || 340;
+    const pickerRect = mentionPicker.getBoundingClientRect();
+    const edgeMargin = 12;
+    const gap = 4 * safeScale;
+    const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
+    const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
+    const openUpward = pickerRect.height > spaceBelow && pickerRect.height <= spaceAbove;
+    const pickerHeight = mentionPicker.offsetHeight || 266;
     const maxLeft = Math.max(4, rowLogicalWidth - pickerWidth - 4);
-    const rawLeft = ((caretRect?.left || inputRect.left) - rowRect.left) / safeScale - 6;
-    const rawTop = ((caretRect?.bottom || inputRect.top + 24) - rowRect.top) / safeScale + 2;
+    const rawLeft = (anchorRect.left - rowRect.left) / safeScale - 6;
+    const rawTop = openUpward
+        ? (anchorRect.top - rowRect.top) / safeScale - pickerHeight - 4
+        : (anchorRect.bottom - rowRect.top) / safeScale + 4;
     const left = Math.max(4, Math.min(rawLeft, maxLeft));
-    const top = Math.max(2, rawTop);
+    const top = openUpward ? rawTop : Math.max(2, rawTop);
     mentionPicker.style.left = `${left}px`;
     mentionPicker.style.top = `${top}px`;
 }
@@ -25992,7 +26060,7 @@ generationModeBtn?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
     if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
-    else openGenerationModePanel();
+    else openGenerationModePanel(generationModeControl);
 });
 generationModePanel?.addEventListener('pointerdown', event => event.stopPropagation());
 generationModePanel?.addEventListener('click', event => {
@@ -26004,7 +26072,11 @@ generationModePanel?.addEventListener('click', event => {
 promptInput?.addEventListener('smart-prompt-prefix-activate', event => {
     event.stopPropagation();
     if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
-    else openGenerationModePanel();
+    else openGenerationModePanel(promptInput.querySelector('.smart-prompt-inline-prefix-chip'));
+});
+promptInput?.addEventListener('smart-prompt-prefix-remove', event => {
+    event.stopPropagation();
+    clearGenerationMode();
 });
 document.addEventListener('click', event => {
     if(!generationModePanel?.classList.contains('open')) return;

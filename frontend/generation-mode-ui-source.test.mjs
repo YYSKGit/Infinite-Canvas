@@ -6,6 +6,7 @@ const js = readFileSync(new URL('../static/js/smart-canvas.js', import.meta.url)
 const html = readFileSync(new URL('../static/smart-canvas.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../static/css/smart-canvas.css', import.meta.url), 'utf8');
 const editorSource = readFileSync(new URL('./smart-prompt-editor.js', import.meta.url), 'utf8');
+const builtInCatalog = JSON.parse(readFileSync(new URL('../static/system-prompts/prompt-catalog.json', import.meta.url), 'utf8'));
 
 test('Smart Canvas exposes the compact generation-mode picker instead of the old composer template entry', () => {
   assert.match(html, /id="generationModeBtn"/);
@@ -16,9 +17,29 @@ test('Smart Canvas exposes the compact generation-mode picker instead of the old
   assert.doesNotMatch(html, /generation-mode-btn-label/);
   assert.match(css, /\.generation-mode-btn\s*\{[^}]*width:30px[^}]*height:30px/);
   assert.match(css, /\.generation-mode-control\s*\{[^}]*z-index:90/);
-  assert.match(css, /\.generation-mode-panel\s*\{[^}]*max-height:min\(620px/);
+  assert.match(css, /\.generation-mode-panel\s*\{[^}]*width:min\(500px[^}]*max-height:min\(620px/);
+  assert.match(css, /\.generation-mode-panel\s*\{[^}]*right:-4px/);
+  assert.match(css, /\.generation-mode-panel\s*\{[^}]*background:var\(--card\)/);
+  assert.match(css, /\.mention-picker\s*\{[^}]*background:var\(--card\)/);
+  const sharedPopoverShadow = /box-shadow:0 24px 68px var\(--shadow\),0 8px 24px rgba\(15,23,42,\.16\)/g;
+  assert.equal([...css.matchAll(sharedPopoverShadow)].length, 2);
   assert.match(css, /\.generation-mode-groups\s*\{[^}]*grid-template-columns:repeat\(2/);
-  assert.match(css, /\.generation-mode-option-copy small\s*\{[^}]*-webkit-line-clamp:2/);
+  assert.match(css, /\.generation-mode-option\s*\{[^}]*height:48px/);
+  assert.match(css, /\.generation-mode-option-copy small\s*\{[^}]*white-space:nowrap[^}]*opacity:0[^}]*translateY\(7px\)/);
+  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy strong[^}]*translateY\(-6\.4px\)/);
+  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy small[^}]*opacity:1[^}]*translateY\(3\.6px\)/);
+  assert.match(css, /\.generation-mode-option\.active \.generation-mode-option-copy small[^}]*opacity:1/);
+  assert.match(css, /\.generation-mode-option\s*\{[^}]*padding:6px 7px/);
+  assert.doesNotMatch(css, /generation-mode-check/);
+  assert.doesNotMatch(js, /generation-mode-check/);
+});
+
+test('built-in generation-mode descriptions stay short enough for the single-line reveal', () => {
+  for(const mode of builtInCatalog.generation_prompts){
+    assert.doesNotMatch(mode.description, /[\r\n]/);
+    assert.doesNotMatch(mode.description, /。$/);
+    assert.ok([...mode.description].length <= 24, `${mode.id} description is too long`);
+  }
 });
 
 test('selected mode is a non-document ProseMirror inline decoration compatible with media atoms', () => {
@@ -28,9 +49,19 @@ test('selected mode is a non-document ProseMirror inline decoration compatible w
   assert.match(editorSource, /Decoration\.widget\(1,[\s\S]*?side:-1/);
   assert.match(editorSource, /setMeta\(this\.inlinePrefixPluginKey, next\)/);
   assert.match(editorSource, /smart-prompt-prefix-activate/);
+  assert.match(editorSource, /smart-prompt-inline-prefix-icon-slot/);
+  assert.match(editorSource, /smart-prompt-inline-prefix-remove-icon/);
+  assert.match(editorSource, /label\.className = 'smart-prompt-inline-prefix-label'/);
+  assert.match(editorSource, /data-prefix-remove[\s\S]*?smart-prompt-prefix-remove/);
+  assert.match(js, /smart-prompt-prefix-remove[\s\S]*?clearGenerationMode\(\)/);
   assert.match(editorSource, /window\.lucide\?\.createElement/);
   assert.doesNotMatch(editorSource, /smart-prompt-inline-prefix-description/);
   assert.match(css, /smart-prompt-inline-prefix-chip[^}]*height:18px/);
+  assert.match(css, /smart-prompt-inline-prefix-icon,\.smart-prompt-inline-prefix-remove-icon[^}]*transition:opacity \.1s ease,transform \.12s/);
+  assert.match(css, /smart-prompt-inline-prefix-chip:hover \.smart-prompt-inline-prefix-icon[^}]*opacity:0/);
+  assert.match(css, /smart-prompt-inline-prefix-chip:hover \.smart-prompt-inline-prefix-remove-icon[^}]*opacity:1/);
+  assert.match(css, /smart-prompt-inline-prefix-label[^}]*translateY\(1px\)/);
+  assert.match(css, /smart-prompt-inline-prefix-remove-icon[^}]*stroke-width:3 !important/);
   assert.doesNotMatch(css, /smart-prompt-inline-prefix-description/);
 });
 
@@ -46,6 +77,44 @@ test('mode picker opens after a complete click without keyboard-selection state'
   assert.match(editorSource, /root\.addEventListener\('click',[\s\S]*?smart-prompt-prefix-activate/);
   assert.doesNotMatch(js, /generationModeFocusIndex|handleGenerationModeKeydown|setGenerationModeFocusIndex/);
   assert.doesNotMatch(css, /generation-mode-option\.focused/);
+});
+
+test('header popovers measure viewport space and flip only when they fully fit above', () => {
+  const generationPosition = js.match(/function positionGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(generationPosition, /style\.visibility = 'hidden'/);
+  assert.match(generationPosition, /getBoundingClientRect\(\)/);
+  assert.match(generationPosition, /window\.innerHeight/);
+  assert.match(generationPosition, /panelRect\.height > spaceBelow && panelRect\.height <= spaceAbove/);
+  assert.match(generationPosition, /classList\.toggle\('open-upward', openUpward\)/);
+  assert.doesNotMatch(generationPosition, /maxHeight|max-height/);
+  assert.match(js, /function openGenerationModePanel\(anchorEl = generationModeControl\)[\s\S]*?positionGenerationModePanel\(anchorEl\)/);
+  assert.match(css, /generation-mode-panel\.open-upward[^}]*top:auto[^}]*bottom:calc\(100% \+ 8px\)/);
+
+  const mentionPosition = js.match(/function positionMentionPickerAtCaret\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(mentionPosition, /mentionAnchorEl[\s\S]*?pickerRect\.height > spaceBelow && pickerRect\.height <= spaceAbove/);
+  assert.match(mentionPosition, /const gap = 8 \* safeScale/);
+  assert.match(mentionPosition, /openUpward[\s\S]*?anchorRect\.top[\s\S]*?pickerHeight/);
+  assert.match(mentionPosition, /pickerHeight - 8[\s\S]*?anchorRect\.bottom[\s\S]*?\+ 8/);
+  assert.match(mentionPosition, /const top = openUpward \? rawTop : Math\.max\(2, rawTop\)/);
+  assert.match(mentionPosition, /style\.top = `\$\{top\}px`/);
+  assert.doesNotMatch(mentionPosition, /maxHeight|max-height/);
+  assert.match(js, /mentionPicker\.style\.visibility = 'hidden';[\s\S]*?classList\.add\('open'\);[\s\S]*?positionMentionPickerAtCaret\(\);[\s\S]*?removeProperty\('visibility'\)/);
+  const caretMentionPosition = mentionPosition.match(/const caretRect[\s\S]*$/)?.[0] || '';
+  assert.match(caretMentionPosition, /const gap = 4 \* safeScale/);
+  assert.match(caretMentionPosition, /pickerRect\.height > spaceBelow && pickerRect\.height <= spaceAbove/);
+  assert.match(caretMentionPosition, /pickerHeight - 4[\s\S]*?anchorRect\.bottom[\s\S]*?\+ 4/);
+  assert.match(caretMentionPosition, /const top = openUpward \? rawTop : Math\.max\(2, rawTop\)/);
+});
+
+test('inline mode capsule anchors the picker beside itself with the same complete-fit flip rule', () => {
+  const generationPosition = js.match(/function positionGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(generationPosition, /anchorEl = generationModeControl/);
+  assert.match(generationPosition, /const anchorRect = anchor\.getBoundingClientRect\(\)/);
+  assert.match(generationPosition, /panelRect\.height > spaceBelow && panelRect\.height <= spaceAbove/);
+  assert.match(generationPosition, /anchorRect\.top - gap - panelRect\.height[\s\S]*?anchorRect\.bottom \+ gap/);
+  assert.match(generationPosition, /anchorRect\.left - \(4 \* safeScaleX\)/);
+  assert.match(generationPosition, /offsetParent[\s\S]*?safeScaleX[\s\S]*?safeScaleY/);
+  assert.match(js, /smart-prompt-prefix-activate[\s\S]*?openGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)/);
 });
 
 test('mode prefix reuses the media-token caret overlay at document position one and keeps a stable pointer cursor', () => {
@@ -82,13 +151,12 @@ test('generation-mode accents reuse the canvas blue theme token', () => {
   assert.match(css, /smart-prompt-inline-prefix-chip[^}]*var\(--connection-flow\)/);
   assert.match(css, /generation-mode-btn\.active[^}]*var\(--connection-flow\)/);
   assert.match(css, /generation-mode-option\.active[^}]*var\(--connection-flow\)/);
-  assert.match(css, /generation-mode-check[^}]*color:var\(--connection-flow\)/);
 });
 
-test('bottom parameter popovers require real pointer movement before hover can open them', () => {
-  assert.match(js, /ctrl\.onpointermove = event => \{[\s\S]*?classList\.add\('hover-armed'\)/);
-  assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?classList\.remove\('interacting', 'hover-armed'\)/);
-  assert.match(js, /function disarmDynamicParamHover\(/);
+test('bottom parameter popovers stay locked until the pointer leaves the whole row', () => {
+  assert.match(js, /ctrl\.onpointermove = event => \{[\s\S]*?dynamicParamHoverDisarmFrame \|\| dynamicParams\.classList\.contains\('hover-reentry-required'\)[\s\S]*?classList\.add\('hover-armed'\)/);
+  assert.match(js, /dynamicParams\.addEventListener\('mouseleave',[\s\S]*?classList\.remove\('switching-smart-popovers', 'hover-reentry-required'\)/);
+  assert.match(js, /function disarmDynamicParamHover\([\s\S]*?requestAnimationFrame[\s\S]*?dynamicParams\?\.classList\.toggle\('hover-reentry-required', dynamicParams\.matches\(':hover'\)\)/);
   assert.match(js, /function closeGenerationModePanel\(\)[\s\S]*?disarmDynamicParamHover\(\)/);
   assert.match(css, /dynamic-params \.smart-control:not\(\.hover-armed\)[^}]*hover \.smart-popover[^}]*visibility:hidden/);
 });

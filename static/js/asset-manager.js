@@ -2608,10 +2608,11 @@ function renderPromptRow(item, readonly){
         <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly || item.builtin ? 'disabled' : ''}>
         <div class="prompt-card-cover">
             <i data-lucide="${assistant ? 'bot' : (item.icon || 'sparkles')}"></i>
-            <span class="prompt-tag">${escapeHtml(assistant ? '系统指令' : promptCategoryLabel(item.category))}</span>
+            ${item.builtin ? '<span class="prompt-tag prompt-tag-builtin"><span class="prompt-tag-label">内置</span></span>' : ''}
+            <span class="prompt-tag"><span class="prompt-tag-label">${escapeHtml(assistant ? '系统指令' : promptCategoryLabel(item.category))}</span></span>
         </div>
         <div class="prompt-row-main">
-            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong>${item.builtin ? '<span class="prompt-tag prompt-tag-builtin">内置</span>' : ''}</div>
+            <div class="prompt-row-title"><strong title="${escapeAttr(item.name || '提示词')}">${escapeHtml(item.name || '提示词')}</strong></div>
             <div class="prompt-row-scene">${escapeHtml(item.description || '未填写用途说明')}</div>
         </div>
     </article>`;
