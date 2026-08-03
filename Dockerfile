@@ -15,7 +15,7 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install --requirement requirements.txt
 
-COPY --chown=app:app main.py VERSION ./
+COPY --chown=app:app main.py prompt_catalog.py VERSION ./
 COPY --chown=app:app static ./static
 COPY --chown=app:app workflows ./workflows
 
