@@ -17,6 +17,10 @@ test('secret previews stay separate from writable secret fields', () => {
   assert.match(source, /item\.venice_client_preview/);
   assert.doesNotMatch(source, /item\.__client\s*\|\|/);
   assert.match(source, /__client:item\.venice_client \|\| undefined/);
+  assert.match(source, /api_key:item\.api_key \|\| undefined/);
+  assert.match(source, /wallet_api_key:item\.wallet_api_key \|\| undefined/);
+  assert.doesNotMatch(source, /api_key:item\.key_preview/);
+  assert.doesNotMatch(source, /wallet_api_key:item\.wallet_key_preview/);
 });
 
 test('Venice model rows expose compact configurable I2I and T2V routes', () => {
@@ -45,9 +49,15 @@ test('Venice routes follow source model rename and deletion', () => {
 
 test('chat model ID and name fields use the same compact prefixes', () => {
   assert.match(source, /function standardModelFieldsHtml/);
-  assert.match(source, /if\(kind !== 'chat'\)/);
+  assert.match(source, /kind === 'chat'/);
   assert.match(source, /model-inputs model-prefixed-inputs/);
   assert.match(css, /\.model-prefixed-inputs/);
   assert.match(css, /\.model-prefixed-inputs \.model-id-field[^}]*flex:1\.18/);
   assert.match(css, /\.model-prefixed-inputs \.model-name-field[^}]*flex:\.82/);
+});
+
+test('RunningHub image and video model rows reuse the ID and NM prefixes', () => {
+  assert.match(source, /item\?\.id === 'runninghub'/);
+  assert.match(source, /item\?\.protocol[\s\S]*=== 'runninghub'/);
+  assert.match(source, /standardModelFieldsHtml\(kind, index, model, alias, item\)/);
 });

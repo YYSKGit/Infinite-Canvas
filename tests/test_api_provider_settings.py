@@ -51,6 +51,19 @@ class ApiProviderSettingsTests(unittest.TestCase):
         self.assertNotIn("__client", public)
         self.assertEqual(public["venice_client_preview"], "••••••••tail")
 
+    def test_public_runninghub_provider_never_exposes_writable_key_fields(self):
+        provider = {"id": "runninghub", "name": "RunningHub", "protocol": "runninghub"}
+        with (
+            patch.object(main, "runninghub_provider_with_workflow_store", side_effect=lambda item: item),
+            patch.object(main, "provider_env_key_value", return_value="coin-key-tail"),
+            patch.object(main, "runninghub_wallet_key_value", return_value="wallet-key-tail"),
+        ):
+            public = main.public_provider(provider)
+        self.assertNotIn("api_key", public)
+        self.assertNotIn("wallet_api_key", public)
+        self.assertEqual(public["key_preview"], "••••••••tail")
+        self.assertEqual(public["wallet_key_preview"], "••••••••tail")
+
     def test_venice_web_headers_add_configured_browser_user_agent(self):
         with patch.object(main, "VENICE_LAST_BROWSER_USER_AGENT", ""):
             headers = main.venice_web_headers({"Accept": "application/json"})

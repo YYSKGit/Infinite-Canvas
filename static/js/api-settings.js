@@ -3309,8 +3309,11 @@ function veniceModelFieldsHtml(kind, index, model, alias, item){
         <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
     </div>`;
 }
-function standardModelFieldsHtml(kind, index, model, alias){
-    if(kind !== 'chat'){
+function standardModelFieldsHtml(kind, index, model, alias, item){
+    const usePrefixes = kind === 'chat'
+        || item?.id === 'runninghub'
+        || String(item?.protocol || '').toLowerCase() === 'runninghub';
+    if(!usePrefixes){
         return `<div class="model-inputs">
             <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
             <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
@@ -3343,7 +3346,7 @@ function renderModels(kind){
         const alias = String(aliases[String(model || '').trim()] || '');
         const fieldsHtml = showVeniceRoute
             ? veniceModelFieldsHtml(kind, index, model, alias, item)
-            : standardModelFieldsHtml(kind, index, model, alias);
+            : standardModelFieldsHtml(kind, index, model, alias, item);
         return `
         <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}">
             ${fieldsHtml}
