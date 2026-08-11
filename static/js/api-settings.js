@@ -3290,13 +3290,41 @@ function veniceModelRouteHtml(kind, index, model, item){
     const routes = (item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {};
     const target = String(routes[source]?.[routeName] || '');
     const label = routeName === 'image_edit' ? 'I2I' : 'T2V';
+    const fieldLabel = tr(routeName === 'image_edit' ? 'api.veniceImageRouteLabel' : 'api.veniceVideoRouteLabel');
     const placeholder = tr(routeName === 'image_edit' ? 'api.veniceImageRoutePlaceholder' : 'api.veniceVideoRoutePlaceholder');
-    const title = target
-        ? `${label} ${tr('api.veniceRouteConfigured')}：${target}`
-        : `${label} ${tr('api.veniceRouteMissing')}`;
+    const title = fieldLabel;
     return `<div class="venice-model-route${target ? '' : ' is-missing'}" title="${escapeAttr(title)}">
         <span>${label}</span>
         <input value="${escapeAttr(target)}" placeholder="${escapeAttr(placeholder)}" oninput="updateVeniceModelRoute('${kind}', ${index}, this)">
+    </div>`;
+}
+function veniceModelFieldsHtml(kind, index, model, alias, item){
+    return `<div class="model-prefixed-field venice-model-field venice-model-id-field">
+        <span title="${escapeAttr(tr('api.currentModelId'))}">ID</span>
+        <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
+    </div>
+    ${veniceModelRouteHtml(kind, index, model, item)}
+    <div class="model-prefixed-field venice-model-field venice-model-name-field">
+        <span title="${escapeAttr(tr('api.modelDisplayName'))}">NM</span>
+        <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
+    </div>`;
+}
+function standardModelFieldsHtml(kind, index, model, alias){
+    if(kind !== 'chat'){
+        return `<div class="model-inputs">
+            <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
+            <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
+        </div>`;
+    }
+    return `<div class="model-inputs model-prefixed-inputs">
+        <div class="model-prefixed-field model-id-field">
+            <span title="${escapeAttr(tr('api.currentModelId'))}">ID</span>
+            <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
+        </div>
+        <div class="model-prefixed-field model-name-field">
+            <span title="${escapeAttr(tr('api.modelDisplayName'))}">NM</span>
+            <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
+        </div>
     </div>`;
 }
 function renderModels(kind){
@@ -3311,19 +3339,19 @@ function renderModels(kind){
     const showProtocol = kind !== 'video' && providerSupportsModelProtocol(item);
     const showVeniceRoute = Boolean(veniceModelRouteName(kind)) && String(item?.protocol || '').toLowerCase() === 'venice';
     const aliases = (item?.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
-    list.innerHTML = models.map((model, index) => {
+    const rowsHtml = models.map((model, index) => {
         const alias = String(aliases[String(model || '').trim()] || '');
+        const fieldsHtml = showVeniceRoute
+            ? veniceModelFieldsHtml(kind, index, model, alias, item)
+            : standardModelFieldsHtml(kind, index, model, alias);
         return `
         <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}">
-            <div class="model-inputs">
-                <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
-                <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
-            </div>
+            ${fieldsHtml}
             ${modelProtocolSelectHtml(kind, index, model, item)}
-            ${veniceModelRouteHtml(kind, index, model, item)}
             <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
         </div>
     `}).join('');
+    list.innerHTML = rowsHtml;
     refreshIcons();
 }
 function msLoraTargetOptions(selected){
@@ -3596,9 +3624,7 @@ function updateVeniceModelRoute(kind, index, input){
     const routeControl = input?.closest?.('.venice-model-route');
     if(routeControl){
         routeControl.classList.toggle('is-missing', !target);
-        routeControl.title = target
-            ? `${routeName === 'image_edit' ? 'I2I' : 'T2V'} ${tr('api.veniceRouteConfigured')}：${target}`
-            : `${routeName === 'image_edit' ? 'I2I' : 'T2V'} ${tr('api.veniceRouteMissing')}`;
+        routeControl.title = tr(routeName === 'image_edit' ? 'api.veniceImageRouteLabel' : 'api.veniceVideoRouteLabel');
     }
 }
 function updateModelAlias(kind, index, value){

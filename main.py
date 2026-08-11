@@ -8837,9 +8837,8 @@ def venice_video_text_model(model, provider=None):
     return venice_model_route(raw, "text_to_video", provider)
 
 def venice_missing_model_route_detail(model, route_name):
-    capability = "图片编辑（I2I）" if route_name == "image_edit" else "文生视频（T2V）"
-    field_name = "编辑模型" if route_name == "image_edit" else "文生视频模型"
-    return f"当前 Venice 模型 {model} 未配置{capability}关联关系。请在 API 设置的该模型行填写{field_name}，或切换模型。"
+    route_label = "I2I" if route_name == "image_edit" else "T2V"
+    return f"Venice 模型 {model} 未配置 {route_label} 关联模型，请到 API 设置补充或切换模型。"
 
 def venice_video_has_media(payload: CanvasVideoRequest) -> bool:
     if any(str(getattr(ref, "url", "") or "").strip() for ref in (payload.images or [])):

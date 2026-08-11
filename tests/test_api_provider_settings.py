@@ -41,6 +41,10 @@ class ApiProviderSettingsTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             main.normalize_model_routes({"same-model": {"image_edit": "same_model"}})
 
+    def test_missing_venice_route_error_stays_compact(self):
+        detail = main.venice_missing_model_route_detail("example-model", "image_edit")
+        self.assertEqual(detail, "Venice 模型 example-model 未配置 I2I 关联模型，请到 API 设置补充或切换模型。")
+
     def test_public_venice_provider_never_uses_the_writable_client_field_for_preview(self):
         with patch.object(main, "venice_client_cookie_value", return_value="real-cookie-tail"):
             public = main.public_provider({"id": "venice", "name": "Venice", "protocol": "venice"})
