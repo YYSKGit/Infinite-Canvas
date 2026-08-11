@@ -544,7 +544,7 @@ function volcengineAssetKeyHintText(item){
     return `${ak} · ${sk}`;
 }
 function veniceClientHintText(item){
-    return item?.has_venice_client ? `当前 __client 已保存：${item.__client_env || 'API/.env'} ${item.__client || ''}` : '还没有保存 Venice 的 __client Cookie。';
+    return item?.has_venice_client ? `当前 __client 已保存：${item.__client_env || 'API/.env'} ${item.venice_client_preview || ''}` : '还没有保存 Venice 的 __client Cookie。';
 }
 function isNewUserProvider(item){
     if(!item) return false;
@@ -2421,7 +2421,7 @@ function renderEditor(){
     if(lockedApi) applyLockedRecommendedProtocol(item);
     if(protocolInput){
         protocolInput.value = item.id === 'runninghub' ? 'runninghub' : item.id === 'volcengine' ? 'volcengine' : (item.protocol || 'openai');
-        protocolInput.disabled = FIXED_PROTOCOL_PROVIDER_IDS.has(item.id) || Boolean(lockedApi);
+        protocolInput.disabled = FIXED_PROTOCOL_PROVIDER_IDS.has(item.id) || String(item.protocol || '').toLowerCase() === 'venice' || Boolean(lockedApi);
         protocolInput.title = lockedApi ? '推荐平台使用固定协议' : (protocolInput.disabled ? '内置平台使用固定协议' : '');
     }
     if(imageRequestModeInput){
@@ -2499,7 +2499,7 @@ function renderEditor(){
     if(isVenice){
         if(veniceClientInput){
             veniceClientInput.value = '';
-            veniceClientInput.placeholder = item.has_venice_client ? `保持当前 __client ${item.__client || ''}` : '输入 Venice 的 __client Cookie';
+            veniceClientInput.placeholder = item.has_venice_client ? `保持当前 __client ${item.venice_client_preview || ''}` : '输入 Venice 的 __client Cookie';
         }
         if(veniceClientHint){
             veniceClientHint.textContent = veniceClientHintText(item);
@@ -3262,9 +3262,11 @@ async function clearVeniceClientOnly(){
     const ok = await saveProviders();
     if(ok && veniceClientInput) veniceClientInput.value = '';
 }
-const FIXED_PROTOCOL_PROVIDER_IDS = new Set(['modelscope', 'volcengine', 'runninghub']);
+const FIXED_PROTOCOL_PROVIDER_IDS = new Set(['modelscope', 'volcengine', 'runninghub', 'venice']);
 function providerSupportsModelProtocol(item){
-    return Boolean(item) && !FIXED_PROTOCOL_PROVIDER_IDS.has(item.id);
+    return Boolean(item)
+        && String(item.protocol || '').toLowerCase() !== 'venice'
+        && !FIXED_PROTOCOL_PROVIDER_IDS.has(item.id);
 }
 function modelProtocolSelectHtml(kind, index, model, item){
     if(kind === 'video' || !providerSupportsModelProtocol(item)) return '';
@@ -3277,6 +3279,26 @@ function modelProtocolSelectHtml(kind, index, model, item){
         ${opt('gemini', 'Gemini')}
     </select>`;
 }
+function veniceModelRouteName(kind){
+    return kind === 'image' ? 'image_edit' : kind === 'video' ? 'text_to_video' : '';
+}
+function veniceModelRouteHtml(kind, index, model, item){
+    if(String(item?.protocol || '').toLowerCase() !== 'venice') return '';
+    const routeName = veniceModelRouteName(kind);
+    if(!routeName) return '';
+    const source = String(model || '').trim();
+    const routes = (item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {};
+    const target = String(routes[source]?.[routeName] || '');
+    const label = routeName === 'image_edit' ? 'I2I' : 'T2V';
+    const placeholder = tr(routeName === 'image_edit' ? 'api.veniceImageRoutePlaceholder' : 'api.veniceVideoRoutePlaceholder');
+    const title = target
+        ? `${label} ${tr('api.veniceRouteConfigured')}：${target}`
+        : `${label} ${tr('api.veniceRouteMissing')}`;
+    return `<div class="venice-model-route${target ? '' : ' is-missing'}" title="${escapeAttr(title)}">
+        <span>${label}</span>
+        <input value="${escapeAttr(target)}" placeholder="${escapeAttr(placeholder)}" oninput="updateVeniceModelRoute('${kind}', ${index}, this)">
+    </div>`;
+}
 function renderModels(kind){
     const item = provider();
     const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
@@ -3287,16 +3309,18 @@ function renderModels(kind){
         return;
     }
     const showProtocol = kind !== 'video' && providerSupportsModelProtocol(item);
+    const showVeniceRoute = Boolean(veniceModelRouteName(kind)) && String(item?.protocol || '').toLowerCase() === 'venice';
     const aliases = (item?.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
     list.innerHTML = models.map((model, index) => {
         const alias = String(aliases[String(model || '').trim()] || '');
         return `
-        <div class="model-row${showProtocol ? ' has-protocol' : ''}">
+        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}">
             <div class="model-inputs">
                 <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
                 <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
             </div>
             ${modelProtocolSelectHtml(kind, index, model, item)}
+            ${veniceModelRouteHtml(kind, index, model, item)}
             <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
         </div>
     `}).join('');
@@ -3548,7 +3572,34 @@ function updateModel(kind, index, value){
             if(newName) item.model_aliases[newName] = alias;
         }
     }
+    if(item.model_routes && typeof item.model_routes === 'object' && oldName && oldName !== newName && Object.prototype.hasOwnProperty.call(item.model_routes, oldName)){
+        const routes = item.model_routes[oldName];
+        delete item.model_routes[oldName];
+        if(newName) item.model_routes[newName] = routes;
+    }
     if(kind === 'image') renderMsLoras();
+}
+function updateVeniceModelRoute(kind, index, input){
+    const item = provider();
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : '';
+    const routeName = veniceModelRouteName(kind);
+    const source = String(item?.[key]?.[index] || '').trim();
+    if(!item || String(item.protocol || '').toLowerCase() !== 'venice' || !source || !routeName) return;
+    if(!item.model_routes || typeof item.model_routes !== 'object') item.model_routes = {};
+    const target = String(input?.value ?? input ?? '').trim();
+    if(target){
+        item.model_routes[source] = {...(item.model_routes[source] || {}), [routeName]:target};
+    } else if(item.model_routes[source]){
+        delete item.model_routes[source][routeName];
+        if(!Object.keys(item.model_routes[source]).length) delete item.model_routes[source];
+    }
+    const routeControl = input?.closest?.('.venice-model-route');
+    if(routeControl){
+        routeControl.classList.toggle('is-missing', !target);
+        routeControl.title = target
+            ? `${routeName === 'image_edit' ? 'I2I' : 'T2V'} ${tr('api.veniceRouteConfigured')}：${target}`
+            : `${routeName === 'image_edit' ? 'I2I' : 'T2V'} ${tr('api.veniceRouteMissing')}`;
+    }
 }
 function updateModelAlias(kind, index, value){
     const item = provider();
@@ -3588,6 +3639,9 @@ function removeModel(kind, index){
     // 清理不再使用的显示名称别名
     if(removed && item.model_aliases && typeof item.model_aliases === 'object' && !modelProtocolStillUsed(item, removed)){
         delete item.model_aliases[removed];
+    }
+    if(removed && item.model_routes && typeof item.model_routes === 'object' && !modelProtocolStillUsed(item, removed)){
+        delete item.model_routes[removed];
     }
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
@@ -3674,6 +3728,7 @@ async function saveProviders(){
                 video_models:item.video_models || [],
                 model_protocols:(item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {},
                 model_aliases:(item.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {},
+                model_routes:(item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {},
                 ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
                 ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
                 rh_apps:item.id === 'runninghub' ? (item.rh_apps || []) : [],

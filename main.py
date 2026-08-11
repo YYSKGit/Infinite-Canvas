@@ -392,6 +392,22 @@ VENICE_DEFAULT_IMAGE_MODELS = [
 VENICE_DEFAULT_VIDEO_MODELS = [
     "seedance-2-0-enhanced-reference-to-video",
 ]
+VENICE_DEFAULT_MODEL_ROUTES = {
+    "chroma": {"image_edit": "firered-image-edit"},
+    "z-image-turbo": {"image_edit": "qwen-edit-uncensored"},
+    "grok-imagine-image-quality": {"image_edit": "grok-imagine-quality-edit"},
+    "grok-imagine": {"image_edit": "grok-imagine-edit"},
+    "qwen-image-2-pro": {"image_edit": "qwen-image-2-pro-edit"},
+    "qwen-image-2": {"image_edit": "qwen-image-2-edit"},
+    "seedream-v5-pro": {"image_edit": "seedream-v5-pro-edit"},
+    "seedream-v5-lite": {"image_edit": "seedream-v5-lite-edit"},
+    "seedream-v4": {"image_edit": "seedream-v4-edit"},
+    "seedance-2-0-enhanced-reference-to-video": {"text_to_video": "seedance-2-0-enhanced-text-to-video"},
+    "seedance-2-0-mini-enhanced-reference-to-video": {"text_to_video": "seedance-2-0-mini-enhanced-text-to-video"},
+    "wan-2-7-reference-to-video": {"text_to_video": "wan-2-7-text-to-video"},
+    "wan-2-7-image-to-video": {"text_to_video": "wan-2-7-text-to-video"},
+    "wan-2-7-enhanced-image-to-video": {"text_to_video": "wan-2-7-enhanced-text-to-video"},
+}
 VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
 VENICE_OUTERFACE_VIDEO_QUOTE_URL = "https://outerface.venice.ai/api/inference/video/quote"
@@ -792,7 +808,7 @@ def normalize_venice_client_cookie(value: str) -> str:
     return text
 
 def validate_venice_client_cookie(value: str) -> str:
-    cookie = normalize_venice_client_cookie(value)
+    cookie = validate_secret_input(normalize_venice_client_cookie(value), "Venice 的 __client Cookie")
     if not cookie:
         raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 不能为空。")
     # Header 必须是 ASCII；并拒绝常见的占位/脱敏误填
@@ -800,8 +816,6 @@ def validate_venice_client_cookie(value: str) -> str:
         cookie.encode("ascii")
     except UnicodeEncodeError as exc:
         raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 包含非 ASCII 字符，可能误填了“保持当前...”或脱敏文本，请重新粘贴浏览器中的原始 __client 值。") from exc
-    if "••" in cookie or "保持当前" in cookie or cookie.startswith("..."):
-        raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 看起来是占位/脱敏文本，请粘贴浏览器 Cookie 中的原始 __client 值。")
     if any(ch in cookie for ch in ("\r", "\n")):
         raise HTTPException(status_code=400, detail="Venice 的 __client Cookie 格式不合法。")
     return cookie
@@ -817,6 +831,18 @@ def mask_secret(value):
         return ""
     tail = value[-4:] if len(value) > 4 else value
     return f"••••••••{tail}"
+
+def validate_secret_input(value, label="密钥"):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if (
+        re.match(r"^[*•·]{4,}", text)
+        or "保持当前" in text
+        or text.startswith("...")
+    ):
+        raise HTTPException(status_code=400, detail=f"{label} 看起来是页面占位/脱敏文本，请重新粘贴原始值。")
+    return text
 
 def strip_auth_scheme(value, scheme="Bearer"):
     text = str(value or "").strip()
@@ -897,6 +923,7 @@ def default_api_providers():
             "image_models": VENICE_DEFAULT_IMAGE_MODELS,
             "chat_models": [],
             "video_models": VENICE_DEFAULT_VIDEO_MODELS,
+            "model_routes": VENICE_DEFAULT_MODEL_ROUTES,
             "ms_loras": [],
             "ms_defaults_version": 0,
         },
@@ -987,6 +1014,11 @@ def merge_default_api_providers(providers):
         current["image_models"] = model_list_from_values([*(current.get("image_models") or []), *default_image_models])
         current["chat_models"] = model_list_from_values([*(current.get("chat_models") or []), *default_chat_models])
         current["video_models"] = []
+    for current in merged:
+        if str((current or {}).get("protocol") or "").strip().lower() != "venice":
+            continue
+        if not current.get("model_routes"):
+            current["model_routes"] = normalize_model_routes(VENICE_DEFAULT_MODEL_ROUTES)
     return merged
 
 def normalize_model_list(values):
@@ -1298,6 +1330,11 @@ def normalize_provider(item):
     if provider_id == "runninghub":
         protocol = "runninghub"
         base_url = base_url or RUNNINGHUB_DEFAULT_BASE_URL
+    model_routes = normalize_model_routes(item.get("model_routes"))
+    if protocol == "venice" and not model_routes:
+        model_routes = normalize_model_routes(VENICE_DEFAULT_MODEL_ROUTES)
+    elif protocol != "venice":
+        model_routes = {}
     return {
         "id": provider_id,
         "name": name,
@@ -1313,6 +1350,7 @@ def normalize_provider(item):
         "video_models": model_list_from_values(item.get("video_models") or []),
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
         "model_aliases": normalize_model_aliases(item.get("model_aliases")),
+        "model_routes": model_routes,
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
         "ms_defaults_version": int(item.get("ms_defaults_version") or 0),
         "rh_apps": normalize_runninghub_entries(item.get("rh_apps") or [], "app"),
@@ -1377,7 +1415,7 @@ def public_provider(provider):
         client_cookie = venice_client_cookie_value(provider["id"])
         item.update({
             "has_venice_client": bool(client_cookie),
-            "__client": mask_secret(client_cookie),
+            "venice_client_preview": mask_secret(client_cookie),
             "__client_env": venice_client_env(provider["id"]),
         })
     return item
@@ -2565,6 +2603,7 @@ class ApiProviderPayload(BaseModel):
     video_models: List[str] = []
     model_protocols: Dict[str, str] = {}
     model_aliases: Dict[str, str] = {}
+    model_routes: Dict[str, Dict[str, str]] = {}
     ms_loras: List[Dict[str, Any]] = []
     ms_defaults_version: int = 0
     rh_apps: List[Dict[str, Any]] = []
@@ -4412,11 +4451,34 @@ def normalize_model_aliases(value):
                 out[name] = alias
     return out
 
+def normalize_model_routes(value):
+    """Normalize optional Venice source-model to mode-specific target-model routes."""
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for raw_source, raw_routes in value.items():
+        source = str(raw_source or "").strip()
+        if not source or not isinstance(raw_routes, dict):
+            continue
+        selected_model(source, source)
+        routes = {}
+        for route_name in ("image_edit", "text_to_video"):
+            target = str(raw_routes.get(route_name) or "").strip()
+            if not target:
+                continue
+            selected_model(target, target)
+            if target.lower().replace("_", "-") == source.lower().replace("_", "-"):
+                raise HTTPException(status_code=400, detail=f"Venice 模型 {source} 的关联模型不能指向自身。")
+            routes[route_name] = target
+        if routes:
+            normalized[source] = routes
+    return normalized
+
 def effective_protocol(provider, model=""):
     """返回某模型实际生效的协议：优先单模型覆盖，否则用平台全局协议。"""
     base = provider_protocol(provider)
     pid = str((provider or {}).get("id") or "").strip().lower()
-    if pid in FIXED_PROTOCOL_PROVIDER_IDS:
+    if pid in FIXED_PROTOCOL_PROVIDER_IDS or base == "venice":
         return base
     overrides = (provider or {}).get("model_protocols")
     if isinstance(overrides, dict):
@@ -8601,24 +8663,6 @@ VENICE_IMAGE_BLOCK_HEADERS = (
     "x-venice-is-adult-model-content-violation",
     "x-venice-contains-minor",
 )
-VENICE_IMAGE_EDIT_MODEL_ALIASES = {
-    "chroma": "firered-image-edit",
-    "z-image-turbo": "qwen-edit-uncensored",
-    "grok-imagine-image-quality": "grok-imagine-quality-edit",
-    "grok-imagine": "grok-imagine-edit",
-    "qwen-image-2-pro": "qwen-image-2-pro-edit",
-    "qwen-image-2": "qwen-image-2-edit",
-    "seedream-v5-pro": "seedream-v5-pro-edit",
-    "seedream-v5-lite": "seedream-v5-lite-edit",
-    "seedream-v4": "seedream-v4-edit"
-}
-VENICE_VIDEO_TEXT_MODEL_ALIASES = {
-    "seedance-2-0-enhanced-reference-to-video": "seedance-2-0-enhanced-text-to-video",
-    "seedance-2-0-mini-enhanced-reference-to-video": "seedance-2-0-mini-enhanced-text-to-video",
-    "wan-2-7-reference-to-video": "wan-2-7-text-to-video",
-    "wan-2-7-image-to-video": "wan-2-7-text-to-video",
-    "wan-2-7-enhanced-image-to-video": "wan-2-7-enhanced-text-to-video"
-}
 VENICE_FREE_IMAGE_MODELS = frozenset({
     "chroma",
     "firered-image-edit",
@@ -8705,23 +8749,45 @@ def venice_reference_image_input(ref, max_size=4096):
         return value.split(";base64,", 1)[1]
     return value
 
-def venice_image_edit_model(model):
+def venice_model_route(model, route_name, provider=None):
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+    normalized = raw.lower().replace("_", "-")
+    routes = (provider or {}).get("model_routes")
+    if not isinstance(routes, dict) or not routes:
+        routes = VENICE_DEFAULT_MODEL_ROUTES
+    for source, source_routes in routes.items():
+        if str(source or "").strip().lower().replace("_", "-") != normalized:
+            continue
+        if not isinstance(source_routes, dict):
+            return None
+        target = str(source_routes.get(route_name) or "").strip()
+        return target or None
+    return None
+
+def venice_image_edit_model(model, provider=None):
     raw = str(model or "").strip()
     if not raw:
         return None
     normalized = raw.lower().replace("_", "-")
     if normalized.endswith("-edit"):
         return raw
-    return VENICE_IMAGE_EDIT_MODEL_ALIASES.get(normalized)
+    return venice_model_route(raw, "image_edit", provider)
 
-def venice_video_text_model(model):
+def venice_video_text_model(model, provider=None):
     raw = str(model or "").strip()
     if not raw:
         return None
     normalized = raw.lower().replace("_", "-")
     if normalized.endswith("-text-to-video"):
         return raw
-    return VENICE_VIDEO_TEXT_MODEL_ALIASES.get(normalized)
+    return venice_model_route(raw, "text_to_video", provider)
+
+def venice_missing_model_route_detail(model, route_name):
+    capability = "图片编辑（I2I）" if route_name == "image_edit" else "文生视频（T2V）"
+    field_name = "编辑模型" if route_name == "image_edit" else "文生视频模型"
+    return f"当前 Venice 模型 {model} 未配置{capability}关联关系。请在 API 设置的该模型行填写{field_name}，或切换模型。"
 
 def venice_video_has_media(payload: CanvasVideoRequest) -> bool:
     if any(str(getattr(ref, "url", "") or "").strip() for ref in (payload.images or [])):
@@ -9249,11 +9315,11 @@ async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queu
 async def generate_venice_video(client, payload, provider, requested_model):
     requested_model = selected_model(requested_model, "seedance-2-0-enhanced-reference-to-video")
     has_media_input = venice_video_has_media(payload)
-    model = requested_model if has_media_input else venice_video_text_model(requested_model)
+    model = requested_model if has_media_input else venice_video_text_model(requested_model, provider)
     if not model:
         raise HTTPException(
             status_code=400,
-            detail=f"当前选择的 Venice 视频模型 {requested_model} 没有对应的文生视频模型。",
+            detail=venice_missing_model_route_detail(requested_model, "text_to_video"),
         )
     aspect_ratio = venice_video_aspect_ratio(payload)
     provider_prompts = payload.provider_prompts if isinstance(payload.provider_prompts, dict) else {}
@@ -9425,9 +9491,9 @@ def venice_reference_image_bytes(ref) -> tuple:
 
 async def generate_venice_web_image_edit(client, prompt, model, ref, provider):
     """Post to the outerface multi-edit endpoint as multipart/form-data."""
-    edit_model = venice_image_edit_model(model)
+    edit_model = venice_image_edit_model(model, provider)
     if not edit_model:
-        raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {model} 没有对应的编辑模型，无法执行图片编辑。")
+        raise HTTPException(status_code=400, detail=venice_missing_model_route_detail(model, "image_edit"))
     img_bytes, mime, filename = venice_reference_image_bytes(ref)
     if not img_bytes:
         raise HTTPException(status_code=400, detail="Venice 图片编辑：无法读取参考图片内容。")
@@ -13098,7 +13164,7 @@ async def save_providers(payload: List[ApiProviderPayload]):
         if item.clear_key:
             env_updates[key_env] = ""
         elif item.api_key is not None and item.api_key.strip():
-            env_updates[key_env] = item.api_key.strip()
+            env_updates[key_env] = validate_secret_input(item.api_key, f"{provider['name']} API Key")
         if str(provider.get("protocol") or "").strip().lower() == "venice":
             client_env = venice_client_env(provider["id"])
             if item.clear_venice_client:
@@ -13110,18 +13176,18 @@ async def save_providers(payload: List[ApiProviderPayload]):
             if item.clear_wallet_key:
                 env_updates[wallet_env] = ""
             elif item.wallet_api_key is not None and item.wallet_api_key.strip():
-                env_updates[wallet_env] = item.wallet_api_key.strip()
+                env_updates[wallet_env] = validate_secret_input(item.wallet_api_key, "RunningHub 账户余额 API Key")
         if provider["id"] == "volcengine":
             ak_env = volcengine_access_key_env()
             sk_env = volcengine_secret_key_env()
             if item.clear_volcengine_access_key_id:
                 env_updates[ak_env] = ""
             elif item.volcengine_access_key_id is not None and item.volcengine_access_key_id.strip():
-                env_updates[ak_env] = item.volcengine_access_key_id.strip()
+                env_updates[ak_env] = validate_secret_input(item.volcengine_access_key_id, "火山引擎 Access Key ID")
             if item.clear_volcengine_secret_access_key:
                 env_updates[sk_env] = ""
             elif item.volcengine_secret_access_key is not None and item.volcengine_secret_access_key.strip():
-                env_updates[sk_env] = item.volcengine_secret_access_key.strip()
+                env_updates[sk_env] = validate_secret_input(item.volcengine_secret_access_key, "火山引擎 Secret Access Key")
         if provider["id"] == "comfly":
             env_updates["COMFLY_BASE_URL"] = provider["base_url"]
             env_updates["IMAGE_MODELS"] = ",".join(provider["image_models"])
@@ -14064,11 +14130,11 @@ async def get_venice_video_quote(payload: VeniceVideoQuoteRequest):
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
     requested_model = selected_model(payload.model, "seedance-2-0-reference-to-video")
-    model = requested_model if payload.has_media_input else venice_video_text_model(requested_model)
+    model = requested_model if payload.has_media_input else venice_video_text_model(requested_model, provider)
     if not model:
         raise HTTPException(
             status_code=400,
-            detail=f"当前选择的 Venice 视频模型 {requested_model} 没有对应的文生视频模型。",
+            detail=venice_missing_model_route_detail(requested_model, "text_to_video"),
         )
     body = {
         "audio": bool(payload.generate_audio),
@@ -14114,9 +14180,9 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
     requested_model = selected_model(payload.model, "grok-imagine-image-quality")
-    model = venice_image_edit_model(requested_model) if payload.has_reference_image else requested_model
+    model = venice_image_edit_model(requested_model, provider) if payload.has_reference_image else requested_model
     if not model:
-        raise HTTPException(status_code=400, detail=f"当前选择的 Venice 模型 {requested_model} 没有对应的编辑模型。")
+        raise HTTPException(status_code=400, detail=venice_missing_model_route_detail(requested_model, "image_edit"))
     resolution = venice_size_resolution(payload.resolution)
     if str(model).strip().lower().replace("_", "-") in VENICE_FREE_IMAGE_MODELS:
         return {

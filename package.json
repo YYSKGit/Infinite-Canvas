@@ -4,7 +4,7 @@
   "scripts": {
     "build:prompt-editor": "esbuild frontend/smart-prompt-editor.js --bundle --format=iife --platform=browser --target=es2020 --outfile=static/js/smart-prompt-editor.js",
     "build:generation-prompt-model": "esbuild frontend/generation-prompt-model.mjs --bundle --format=iife --global-name=GenerationPromptModel --platform=browser --target=es2020 --outfile=static/js/generation-prompt-model.js",
-    "test": "node --test frontend/prompt-model.test.mjs frontend/generation-prompt-model.test.mjs frontend/generation-mode-ui-source.test.mjs frontend/prompt-catalog-ui-source.test.mjs frontend/prompt-migration-source.test.mjs frontend/smart-reference-state.test.mjs frontend/smart-ancestor-cascade.test.mjs frontend/smart-task-cancel.test.mjs",
+    "test": "node --test frontend/prompt-model.test.mjs frontend/generation-prompt-model.test.mjs frontend/generation-mode-ui-source.test.mjs frontend/prompt-catalog-ui-source.test.mjs frontend/prompt-migration-source.test.mjs frontend/api-settings-source.test.mjs frontend/smart-reference-state.test.mjs frontend/smart-ancestor-cascade.test.mjs frontend/smart-task-cancel.test.mjs",
     "test:prompt-model": "node --test frontend/prompt-model.test.mjs",
     "test:generation-prompt": "node --test frontend/generation-prompt-model.test.mjs",
     "test:smart-reference": "node --test frontend/smart-reference-state.test.mjs"
