@@ -150,6 +150,8 @@ function applyCliProtocolDefaults(item, protocol){
     }
 }
 let rhWorkflowEditorState = { open:false, index:-1, entry:null, config:null, expanded:{}, activeNodeId:'', graph:{ k:1, x:0, y:0, w:0, h:0 }, pan:null, bound:false, previewParams:{}, previewRunning:false, previewStatus:'', previewOutputs:[] };
+let rhWorkflowEditorScrollLock = null;
+const RH_WORKFLOW_EDITOR_BLUR_OVERSCAN = 24;
 let rhEditorMode = 'workflow';
 let recommendInlineOpen = false;
 let providerDragId = '';
@@ -435,6 +437,32 @@ function workflowNodeCategory(node){
 }
 function rhWorkflowFieldKey(field){
     return `${field?.nodeId || ''}::${field?.fieldName || ''}`;
+}
+const RH_EDITOR_CUSTOM_FIELD_PROPS = [
+    'label',
+    'enabled',
+    'sourceFromUpstream',
+    'fieldType',
+    'options',
+    'random_enabled',
+    'min',
+    'max',
+    'step',
+    'imageOrder',
+    'required'
+];
+function mergeRhFetchedFields(fetchedFields, currentFields){
+    const currentByKey = new Map((currentFields || []).map(field => [rhWorkflowFieldKey(field), field]));
+    return (fetchedFields || []).map(field => {
+        const current = currentByKey.get(rhWorkflowFieldKey(field));
+        if(!current) return field;
+        const merged = {...field};
+        RH_EDITOR_CUSTOM_FIELD_PROPS.forEach(prop => {
+            if(!Object.prototype.hasOwnProperty.call(current, prop)) return;
+            merged[prop] = Array.isArray(current[prop]) ? [...current[prop]] : current[prop];
+        });
+        return merged;
+    });
 }
 function rhWorkflowFieldKind(field){
     const type = String(field?.fieldType || '').toUpperCase();
@@ -951,6 +979,7 @@ async function openRhWorkflowEditor(index){
     rhEditorMode = 'workflow';
     rhWorkflowEditorState = { open:true, index, entry, config:null, expanded:{}, activeNodeId:'', graph:{ k:1, x:0, y:0, w:0, h:0 }, pan:null, bound:false, previewParams:{}, previewRunning:false, previewStatus:'', previewOutputs:[] };
     if(rhWorkflowEditorOverlay) rhWorkflowEditorOverlay.classList.add('open');
+    lockRhWorkflowEditorViewport();
     renderRhWorkflowEditorLoading('正在加载工作流...');
     refreshIcons();
     try {
@@ -968,6 +997,7 @@ async function openRhAppEditor(index){
     rhEditorMode = 'app';
     rhWorkflowEditorState = { open:true, index, entry, config:null, expanded:{}, activeNodeId:'app', graph:{ k:1, x:0, y:0, w:0, h:0 }, pan:null, bound:false, previewParams:{}, previewRunning:false, previewStatus:'', previewOutputs:[] };
     if(rhWorkflowEditorOverlay) rhWorkflowEditorOverlay.classList.add('open');
+    lockRhWorkflowEditorViewport();
     renderRhWorkflowEditorLoading('正在加载应用参数...');
     refreshIcons();
     try {
@@ -976,8 +1006,74 @@ async function openRhAppEditor(index){
         renderRhWorkflowEditorLoading(e.message || '应用参数加载失败');
     }
 }
+function rhWorkflowEditorUiScale(){
+    if(!document.documentElement.classList.contains('studio-ui-scaled')) return 1;
+    const scale = Number(getComputedStyle(document.documentElement).getPropertyValue('--studio-ui-scale'));
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+function rhWorkflowEditorOverlayMetrics(lock, viewportWidth, viewportHeight, scale, overscan=0){
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    const safeOverscan = Math.max(0, Number(overscan) || 0);
+    return {
+        top:(Number(lock?.top || 0) - safeOverscan) / safeScale,
+        left:(Number(lock?.left || 0) - safeOverscan) / safeScale,
+        width:(Number(viewportWidth || 0) + safeOverscan * 2) / safeScale,
+        height:(Number(viewportHeight || 0) + safeOverscan * 2) / safeScale
+    };
+}
+function layoutRhWorkflowEditorOverlay(){
+    if(!rhWorkflowEditorOverlay || !rhWorkflowEditorScrollLock) return;
+    const scale = rhWorkflowEditorUiScale();
+    const metrics = rhWorkflowEditorOverlayMetrics(
+        rhWorkflowEditorScrollLock,
+        window.innerWidth,
+        window.innerHeight,
+        scale,
+        RH_WORKFLOW_EDITOR_BLUR_OVERSCAN
+    );
+    rhWorkflowEditorOverlay.style.top = `${metrics.top}px`;
+    rhWorkflowEditorOverlay.style.left = `${metrics.left}px`;
+    rhWorkflowEditorOverlay.style.width = `${metrics.width}px`;
+    rhWorkflowEditorOverlay.style.height = `${metrics.height}px`;
+}
+function notifyRhWorkflowEditorHost(open){
+    try {
+        window.parent?.postMessage({type:'studio-child-modal-state', open:open === true, page:'api-settings'}, '*');
+    } catch(e) {}
+}
+function lockRhWorkflowEditorViewport(){
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    rhWorkflowEditorScrollLock = {
+        top:Number(scrollingElement?.scrollTop || document.body.scrollTop || window.scrollY || 0),
+        left:Number(scrollingElement?.scrollLeft || document.body.scrollLeft || window.scrollX || 0)
+    };
+    layoutRhWorkflowEditorOverlay();
+    document.documentElement.classList.add('rh-workflow-editor-open');
+    document.body.classList.add('rh-workflow-editor-open');
+    notifyRhWorkflowEditorHost(true);
+}
+function unlockRhWorkflowEditorViewport(){
+    const lock = rhWorkflowEditorScrollLock;
+    rhWorkflowEditorScrollLock = null;
+    document.documentElement.classList.remove('rh-workflow-editor-open');
+    document.body.classList.remove('rh-workflow-editor-open');
+    notifyRhWorkflowEditorHost(false);
+    if(rhWorkflowEditorOverlay){
+        ['top','left','width','height'].forEach(prop => rhWorkflowEditorOverlay.style.removeProperty(prop));
+    }
+    if(lock){
+        const scrollingElement = document.scrollingElement || document.documentElement;
+        if(scrollingElement){
+            scrollingElement.scrollTop = lock.top;
+            scrollingElement.scrollLeft = lock.left;
+        }
+        document.body.scrollTop = lock.top;
+        document.body.scrollLeft = lock.left;
+    }
+}
 function closeRhWorkflowEditor(){
     if(rhWorkflowEditorOverlay) rhWorkflowEditorOverlay.classList.remove('open');
+    unlockRhWorkflowEditorViewport();
     rhWorkflowEditorState.open = false;
 }
 function renderRhWorkflowEditorLoading(text){
@@ -1135,15 +1231,21 @@ async function fetchRhAppEditor(force=false){
     const entry = state.entry;
     const appId = String(entry?.appId || entry?.id || '').trim();
     if(!appId) throw new Error('appId 为空');
+    const currentConfig = state.config;
+    const draftTitle = rhWorkflowEditName?.value.trim() || currentConfig?.title || entry.title || `AI 应用 ${appId.slice(-6)}`;
+    const draftDescription = rhWorkflowEditNote?.value.trim() || currentConfig?.description || entry.note || '';
     if(force) renderRhWorkflowEditorLoading('正在重新拉取...');
     const res = await fetch(`/api/runninghub/app-info?webappId=${encodeURIComponent(appId)}`);
     const data = await res.json();
     if(!res.ok || data.success === false) throw new Error(data.detail || '拉取应用参数失败');
-    const fields = rhAppFieldSourceList(data).map(normalizeFetchedRhAppField);
+    const fields = mergeRhFetchedFields(
+        rhAppFieldSourceList(data).map(normalizeFetchedRhAppField),
+        currentConfig?.fields
+    );
     state.config = {
         appId,
-        title:rhWorkflowEditName?.value.trim() || entry.title || `AI 应用 ${appId.slice(-6)}`,
-        description:rhWorkflowEditNote?.value.trim() || entry.note || '',
+        title:draftTitle,
+        description:draftDescription,
         fields,
         raw:data.data || data
     };
@@ -1159,25 +1261,31 @@ async function fetchRhWorkflowEditor(force=false){
     if(!entry) return null;
     const workflowId = String(entry.workflowId || entry.id || '').trim();
     if(!workflowId) throw new Error('workflowId 为空');
+    const currentConfig = state.config;
+    const draftTitle = rhWorkflowEditName?.value.trim() || currentConfig?.title || entry.title || workflowId;
+    const draftDescription = rhWorkflowEditNote?.value.trim() || currentConfig?.description || entry.note || '';
     if(force) renderRhWorkflowEditorLoading('正在重新拉取...');
     const res = await fetch('/api/runninghub/workflows/fetch', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
             workflowId,
-            title:rhWorkflowEditName?.value.trim() || entry.title || workflowId,
-            description:rhWorkflowEditNote?.value.trim() || entry.note || ''
+            title:draftTitle,
+            description:draftDescription
         })
     });
     const data = await res.json();
     if(!res.ok || data.success === false) throw new Error(data.detail || '拉取工作流失败');
     state.config = normalizeRhWorkflowConfig({
         workflowId:data.data.workflowId,
-        title:data.data.title,
-        description:data.data.description,
-        fields:(data.data.fields || []).map(normalizeFetchedRhWorkflowField),
+        title:draftTitle,
+        description:draftDescription,
+        fields:mergeRhFetchedFields(
+            (data.data.fields || []).map(normalizeFetchedRhWorkflowField),
+            currentConfig?.fields
+        ),
         workflowJson:data.data.workflowJson || {},
-        optionalImageMode:entry.optionalImageMode || 'prune-workflow',
+        optionalImageMode:currentConfig?.optionalImageMode || entry.optionalImageMode || 'prune-workflow',
         raw:data.data.raw || {}
     }, entry);
     state.graph = { k:1, x:0, y:0, w:0, h:0 };
@@ -1220,6 +1328,41 @@ function openRhWorkflowNodePopover(nodeId, anchorEl){
 function closeRhNodePopover(){
     document.getElementById('rhNodePopover')?.remove();
 }
+function rhEditorPopoverViewportPosition(anchorRect, popWidth, popHeight, viewportWidth, viewportHeight, placement='right'){
+    const margin = 16;
+    const gap = placement === 'below' ? 10 : 12;
+    const anchor = anchorRect || {left:viewportWidth / 2, right:viewportWidth / 2, top:viewportHeight / 2, bottom:viewportHeight / 2};
+    let left = placement === 'below' ? anchor.left : anchor.right + gap;
+    let top = placement === 'below' ? anchor.bottom + gap : anchor.top;
+    if(placement === 'below' && top + popHeight > viewportHeight - margin) top = anchor.top - popHeight - gap;
+    if(placement !== 'below' && left + popWidth > viewportWidth - margin) left = anchor.left - popWidth - gap;
+    left = Math.max(margin, Math.min(left, Math.max(margin, viewportWidth - popWidth - margin)));
+    top = Math.max(margin, Math.min(top, Math.max(margin, viewportHeight - popHeight - margin)));
+    return {left, top};
+}
+function mountRhEditorPopover(pop, anchorEl, placement='right'){
+    const host = rhWorkflowEditorOverlay || document.body;
+    host.appendChild(pop);
+    const anchorRect = anchorEl?.getBoundingClientRect?.();
+    const popRect = pop.getBoundingClientRect();
+    const viewportPosition = rhEditorPopoverViewportPosition(
+        anchorRect,
+        popRect.width,
+        popRect.height,
+        window.innerWidth,
+        window.innerHeight,
+        placement
+    );
+    if(host === rhWorkflowEditorOverlay){
+        const hostRect = host.getBoundingClientRect();
+        const scale = rhWorkflowEditorUiScale();
+        pop.style.left = `${(viewportPosition.left - hostRect.left) / scale}px`;
+        pop.style.top = `${(viewportPosition.top - hostRect.top) / scale}px`;
+    } else {
+        pop.style.left = `${viewportPosition.left}px`;
+        pop.style.top = `${viewportPosition.top}px`;
+    }
+}
 function renderRhNodePopover(nodeId, anchorEl){
     closeRhNodePopover();
     const config = rhWorkflowEditorState.config;
@@ -1242,16 +1385,7 @@ function renderRhNodePopover(nodeId, anchorEl){
         </div>
         <div class="rh-popover-body">${fields.map(field => renderRhWorkflowEditorField(field)).join('')}</div>
     `;
-    document.body.appendChild(pop);
-    const rect = anchorEl?.getBoundingClientRect?.();
-    const modalRect = rhWorkflowEditorOverlay?.getBoundingClientRect?.() || {left:0, top:0, right:window.innerWidth, bottom:window.innerHeight};
-    let left = rect ? rect.right + 12 : window.innerWidth / 2 - 190;
-    let top = rect ? rect.top : window.innerHeight / 2 - 180;
-    const width = 390;
-    if(left + width > modalRect.right - 16) left = Math.max(modalRect.left + 16, (rect?.left || left) - width - 12);
-    top = Math.max(modalRect.top + 74, Math.min(top, modalRect.bottom - 420));
-    pop.style.left = `${left}px`;
-    pop.style.top = `${top}px`;
+    mountRhEditorPopover(pop, anchorEl, 'right');
     refreshIcons();
 }
 function toggleRhWorkflowEditorField(key){
@@ -1832,7 +1966,7 @@ function renderRhAppFieldCard(field){
                 <strong>${escapeHtml(field.label || field.fieldName)}</strong>
                 <span>${escapeHtml(field.fieldName)} · ${escapeHtml(rhWorkflowFieldKind(field))}</span>
             </div>
-            <i data-lucide="settings-2" class="w-4 h-4"></i>
+            <button class="rh-app-field-settings" type="button" title="配置字段" aria-label="配置${escapeAttr(field.label || field.fieldName)}" onclick="event.stopPropagation();openRhAppFieldPopover('${escapeAttr(key)}', this.closest('.rh-app-field-card'))"><i data-lucide="settings-2" class="w-4 h-4"></i></button>
         </div>
     `;
 }
@@ -1855,16 +1989,7 @@ function openRhAppFieldPopover(key, anchorEl){
         </div>
         <div class="rh-popover-body">${renderRhWorkflowEditorField(field)}</div>
     `;
-    document.body.appendChild(pop);
-    const rect = anchorEl?.getBoundingClientRect?.();
-    const modalRect = rhWorkflowEditorOverlay?.getBoundingClientRect?.() || {left:0, top:0, right:window.innerWidth, bottom:window.innerHeight};
-    const width = 390;
-    let left = rect ? rect.left : window.innerWidth / 2 - 190;
-    let top = rect ? rect.bottom + 10 : window.innerHeight / 2 - 180;
-    if(left + width > modalRect.right - 16) left = modalRect.right - width - 16;
-    if(top + 420 > modalRect.bottom - 16) top = Math.max(modalRect.top + 74, (rect?.top || top) - 420);
-    pop.style.left = `${Math.max(modalRect.left + 16, left)}px`;
-    pop.style.top = `${top}px`;
+    mountRhEditorPopover(pop, anchorEl, 'below');
     refreshIcons();
 }
 function computeRhWorkflowEditorLayers(workflow){
@@ -3814,9 +3939,33 @@ window.addEventListener('message', event => {
         else renderEditor();
     }
 });
+window.addEventListener('resize', () => {
+    if(rhWorkflowEditorState.open) layoutRhWorkflowEditorOverlay();
+});
+window.addEventListener('studio-ui-scale-change', () => {
+    if(rhWorkflowEditorState.open) requestAnimationFrame(layoutRhWorkflowEditorOverlay);
+});
 rhWorkflowEditorOverlay?.addEventListener('mousedown', event => {
     if(event.target === rhWorkflowEditorOverlay) closeRhWorkflowEditor();
 });
+function rhEditorCanConsumeWheel(target, deltaY){
+    let element = target instanceof Element ? target : null;
+    while(element && element !== document.body){
+        const style = getComputedStyle(element);
+        const scrollable = /auto|scroll/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+        if(scrollable){
+            if(deltaY < 0 && element.scrollTop > 0) return true;
+            if(deltaY > 0 && element.scrollTop + element.clientHeight < element.scrollHeight - 1) return true;
+        }
+        element = element.parentElement;
+    }
+    return false;
+}
+document.addEventListener('wheel', event => {
+    if(!rhWorkflowEditorState.open || event.defaultPrevented) return;
+    if(rhEditorCanConsumeWheel(event.target, event.deltaY)) return;
+    event.preventDefault();
+}, {passive:false});
 document.addEventListener('keydown', event => {
     if(event.key === 'Escape' && rhWorkflowEditorState.open) closeRhWorkflowEditor();
 });

@@ -5,6 +5,20 @@ import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../static/js/api-settings.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('../static/css/api-settings.css', import.meta.url), 'utf8');
 const html = await readFile(new URL('../static/api-settings.html', import.meta.url), 'utf8');
+const indexHtml = await readFile(new URL('../static/index.html', import.meta.url), 'utf8');
+
+function extractFunction(name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `missing function ${name}`);
+  const bodyStart = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') depth -= 1;
+    if (depth === 0) return source.slice(start, index + 1);
+  }
+  throw new Error(`unterminated function ${name}`);
+}
 
 test('model sections are ordered as chat, image, then video', () => {
   const chatIndex = html.indexOf('id="chatModelList"');
@@ -60,4 +74,78 @@ test('RunningHub image and video model rows reuse the ID and NM prefixes', () =>
   assert.match(source, /item\?\.id === 'runninghub'/);
   assert.match(source, /item\?\.protocol[\s\S]*=== 'runninghub'/);
   assert.match(source, /standardModelFieldsHtml\(kind, index, model, alias, item\)/);
+});
+
+test('RunningHub editor locks the page behind its modal', () => {
+  assert.match(css, /html\.rh-workflow-editor-open,[\s\S]*body\.rh-workflow-editor-open\s*\{[^}]*overflow:hidden !important/);
+  assert.match(css, /\.rh-workflow-editor-overlay\s*\{[^}]*position:absolute;[^}]*overscroll-behavior:none/);
+  assert.match(css, /\.rh-workflow-editor-modal\s*\{[^}]*height:min\(980px, 96vh\)[^}]*overscroll-behavior:contain/);
+  assert.match(source, /function rhWorkflowEditorUiScale\(\)[\s\S]*--studio-ui-scale/);
+  assert.match(source, /RH_WORKFLOW_EDITOR_BLUR_OVERSCAN = 24/);
+  assert.match(source, /rhWorkflowEditorOverlayMetrics\([\s\S]*RH_WORKFLOW_EDITOR_BLUR_OVERSCAN[\s\S]*\);/);
+  assert.match(source, /function unlockRhWorkflowEditorViewport\(\)[\s\S]*scrollingElement\.scrollTop = lock\.top/);
+  assert.match(source, /postMessage\(\{type:'studio-child-modal-state', open:open === true, page:'api-settings'\}/);
+  assert.match(source, /function rhEditorCanConsumeWheel\(target, deltaY\)/);
+  assert.match(source, /document\.addEventListener\('wheel',[\s\S]*event\.preventDefault\(\);[\s\S]*\{passive:false\}\)/);
+  assert.match(indexHtml, /body\.studio-child-modal-open \.sidebar\s*\{[^}]*pointer-events: none/);
+  assert.doesNotMatch(indexHtml, /--studio-modal-sidebar-width/);
+  assert.doesNotMatch(indexHtml, /body\.studio-child-modal-open \.app-shell::after/);
+  assert.doesNotMatch(indexHtml, /setStudioChildModalState[\s\S]*getBoundingClientRect/);
+  assert.match(indexHtml, /function setStudioChildModalState\(open, source = null\)/);
+  assert.match(indexHtml, /event\.data\?\.type === 'studio-child-modal-state'/);
+});
+
+test('RunningHub modal viewport metrics compensate transformed UI scale', () => {
+  const metrics = new Function(`return (${extractFunction('rhWorkflowEditorOverlayMetrics')});`)();
+  const viewport = metrics({top:480, left:24}, 1920, 1080, 0.8, 24);
+  assert.deepEqual(viewport, {top:570, left:0, width:2460, height:1410});
+  assert.equal(viewport.top * 0.8 - 480, -24);
+  assert.equal(viewport.left * 0.8 - 24, -24);
+  assert.equal(viewport.width * 0.8, 1968);
+  assert.equal(viewport.height * 0.8, 1128);
+});
+
+test('RunningHub field popovers stay clickable and inside the scaled editor viewport', () => {
+  assert.match(css, /\.rh-node-popover\s*\{[^}]*position:absolute/);
+  assert.match(source, /function mountRhEditorPopover\(pop, anchorEl, placement='right'\)[\s\S]*rhWorkflowEditorOverlay[\s\S]*host\.appendChild\(pop\)/);
+  assert.match(source, /class="rh-app-field-settings"[\s\S]*openRhAppFieldPopover/);
+  const position = new Function(`return (${extractFunction('rhEditorPopoverViewportPosition')});`)();
+  assert.deepEqual(
+    position({left:620, right:940, top:600, bottom:696}, 390, 420, 1280, 720, 'below'),
+    {left:620, top:170}
+  );
+  assert.deepEqual(
+    position({left:1100, right:1200, top:500, bottom:570}, 390, 300, 1280, 720, 'right'),
+    {left:698, top:404}
+  );
+});
+
+test('RunningHub refetch preserves custom settings for unchanged fields', () => {
+  const fieldKey = field => `${field?.nodeId || ''}::${field?.fieldName || ''}`;
+  const customProps = [
+    'label', 'enabled', 'sourceFromUpstream', 'fieldType', 'options',
+    'random_enabled', 'min', 'max', 'step', 'imageOrder', 'required'
+  ];
+  const mergeRhFetchedFields = new Function(
+    'rhWorkflowFieldKey',
+    'RH_EDITOR_CUSTOM_FIELD_PROPS',
+    `return (${extractFunction('mergeRhFetchedFields')});`
+  )(fieldKey, customProps);
+  const current = [{
+    nodeId:'app', fieldName:'prompt', fieldValue:'old default', label:'自定义提示词',
+    enabled:false, sourceFromUpstream:true, fieldType:'SELECT', options:['A', 'B'],
+    random_enabled:true, min:'2', max:'8', step:'2', imageOrder:3, required:false
+  }];
+  const fetched = [
+    {nodeId:'app', fieldName:'prompt', fieldValue:'new default', label:'提示词', enabled:true, fieldType:'TEXT', options:[]},
+    {nodeId:'app', fieldName:'amount', fieldValue:'1', label:'生成批次', enabled:true, fieldType:'SLIDER', options:[]}
+  ];
+  const merged = mergeRhFetchedFields(fetched, current);
+  assert.equal(merged[0].fieldValue, 'new default');
+  assert.equal(merged[0].label, '自定义提示词');
+  assert.equal(merged[0].enabled, false);
+  assert.equal(merged[0].fieldType, 'SELECT');
+  assert.deepEqual(merged[0].options, ['A', 'B']);
+  assert.equal(merged[1].label, '生成批次');
+  assert.equal(merged[1].enabled, true);
 });

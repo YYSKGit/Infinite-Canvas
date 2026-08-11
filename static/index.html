@@ -191,6 +191,10 @@
             transition-delay: 0s;
         }
 
+        body.studio-child-modal-open .sidebar {
+            pointer-events: none;
+        }
+
         body.studio-scale-host .sidebar {
             height: calc(100vh / var(--studio-ui-scale, 1));
             max-height: calc(100vh / var(--studio-ui-scale, 1));
@@ -1741,7 +1745,7 @@
             <iframe id="frame-online" data-src="/static/online.html?v=2027.01.1.1.1785142912" scrolling="yes"></iframe>
             <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2027.01.1.1.1784195839" scrolling="yes"></iframe>
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2027.01.1.1.1785782754" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1786462686" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2027.01.1.1.1786465257" scrolling="yes"></iframe>
             <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2027.01.1.1.1785142912" scrolling="yes"></iframe>
             <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2027.01.1.1.1785142912" class="active" scrolling="yes"></iframe>
 
@@ -1959,6 +1963,7 @@
         }
 
         function switchUI(el, id, options = {}) {
+            setStudioChildModalState(false);
             resetStudioRootScroll();
             if(!PAGE_IDS.includes(id)) id = DEFAULT_PAGE_ID;
             const previous = document.querySelector('iframe.active');
@@ -2010,6 +2015,12 @@
             resetStudioRootScroll();
         }
 
+        function setStudioChildModalState(open, source = null) {
+            const activeFrame = document.querySelector('iframe.active');
+            if(open && source && source !== activeFrame?.contentWindow) return;
+            document.body.classList.toggle('studio-child-modal-open', open === true);
+        }
+
         function forwardStudioApiChange(data) {
             if(!data || !['providers-changed','workflows-changed','comfy-instances-changed'].includes(data.type)) return;
             document.querySelectorAll('iframe').forEach(iframe => {
@@ -2021,6 +2032,10 @@
 
         window.addEventListener('message', event => {
             if (event.origin && event.origin !== location.origin) return;
+            if(event.data?.type === 'studio-child-modal-state') {
+                setStudioChildModalState(event.data.open === true, event.source);
+                return;
+            }
             forwardStudioApiChange(event.data);
         });
 
