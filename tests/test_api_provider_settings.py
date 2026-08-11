@@ -89,6 +89,51 @@ class ApiProviderSettingsTests(unittest.TestCase):
             self.assertEqual(main.remember_venice_browser_user_agent("curl/8.0"), "")
             self.assertEqual(main.VENICE_LAST_BROWSER_USER_AGENT, browser_user_agent)
 
+    def test_venice_credit_total_includes_purchased_balance_and_cycle_usage(self):
+        response = AsyncMock()
+        response.status_code = 200
+        response.json = lambda: {"token": "test-token"}
+        token_payload = {
+            "veniceCredits": 8035,
+            "bundledCreditsUsage": {
+                "monthlyRefillCredits": 7500,
+                "availableCredits": 7535,
+                "usedThisCycle": 5,
+            },
+        }
+        with (
+            patch.object(main, "venice_web_request", AsyncMock(return_value=response)),
+            patch.object(main, "venice_decode_jwt_payload", return_value=token_payload),
+        ):
+            usage = asyncio.run(main.venice_fetch_credit_usage(object(), {"id": "venice"}))
+
+        self.assertEqual(usage["remaining_credits"], 8035)
+        self.assertEqual(usage["total_credits"], 8040)
+        self.assertEqual(usage["used_credits"], 5)
+        self.assertEqual(usage["available_credits"], 7535)
+
+    def test_venice_monthly_refill_remains_total_floor(self):
+        response = AsyncMock()
+        response.status_code = 200
+        response.json = lambda: {"token": "test-token"}
+        token_payload = {
+            "veniceCredits": 7400,
+            "bundledCreditsUsage": {
+                "monthlyRefillCredits": 7500,
+                "availableCredits": 7400,
+                "usedThisCycle": 100,
+            },
+        }
+        with (
+            patch.object(main, "venice_web_request", AsyncMock(return_value=response)),
+            patch.object(main, "venice_decode_jwt_payload", return_value=token_payload),
+        ):
+            usage = asyncio.run(main.venice_fetch_credit_usage(object(), {"id": "venice"}))
+
+        self.assertEqual(usage["remaining_credits"], 7400)
+        self.assertEqual(usage["total_credits"], 7500)
+        self.assertEqual(usage["used_credits"], 100)
+
 
 class FakeBrowserWebSocket:
     def __init__(self, user_agent):

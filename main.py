@@ -9311,13 +9311,23 @@ async def venice_fetch_credit_usage(client, provider):
     usage = token_payload.get("bundledCreditsUsage")
     if not isinstance(usage, dict):
         raise HTTPException(status_code=502, detail="Venice session payload 缺少 bundledCreditsUsage。")
-    # Venice exposes `veniceCredits` as the remaining bundled-credit balance,
-    # not the amount already consumed.  Keep both meanings explicit here so a
-    # caller cannot accidentally present the balance as usage.
-    remaining_credits = venice_required_int(token_payload, "veniceCredits", "veniceCredits")
-    total_credits = venice_required_int(usage, "monthlyRefillCredits", "bundledCreditsUsage.monthlyRefillCredits")
+    # Venice exposes `veniceCredits` as the remaining account balance, not the
+    # amount already consumed.  It can include bundled, purchased, and bonus
+    # credits, so keep it separate from the monthly subscription refill.
+    remaining_credits = max(0, venice_required_int(token_payload, "veniceCredits", "veniceCredits"))
+    monthly_refill_credits = venice_required_int(
+        usage,
+        "monthlyRefillCredits",
+        "bundledCreditsUsage.monthlyRefillCredits",
+    )
     available_credits = venice_required_int(usage, "availableCredits", "bundledCreditsUsage.availableCredits")
-    remaining_credits = max(0, min(total_credits, remaining_credits))
+    used_this_cycle = max(0, venice_optional_int(usage, "usedThisCycle") or 0)
+    # `monthlyRefillCredits` is only the subscription refill baseline.  The
+    # account-level `veniceCredits` balance can also contain purchased or bonus
+    # credits, so it must not be capped to that baseline.  Include this cycle's
+    # consumption when reconstructing the display total, while retaining the
+    # monthly refill as the floor for ordinary subscription-only accounts.
+    total_credits = max(monthly_refill_credits, remaining_credits + used_this_cycle)
     return {
         "remaining_credits": remaining_credits,
         "used_credits": max(0, total_credits - remaining_credits),
@@ -9325,7 +9335,7 @@ async def venice_fetch_credit_usage(client, provider):
         "available_credits": available_credits,
         "next_refill_at": venice_optional_int(usage, "nextRefillAt"),
         "tier_cap": venice_optional_int(usage, "tierCap"),
-        "used_this_cycle": venice_optional_int(usage, "usedThisCycle"),
+        "used_this_cycle": used_this_cycle,
         "user_type": str(token_payload.get("userType") or ""),
     }
 
