@@ -3733,6 +3733,11 @@ function updateModel(kind, index, value){
         delete item.model_routes[oldName];
         if(newName) item.model_routes[newName] = routes;
     }
+    if(kind === 'image' && item.image_capabilities && typeof item.image_capabilities === 'object' && oldName && oldName !== newName && Object.prototype.hasOwnProperty.call(item.image_capabilities, oldName)){
+        const capability = item.image_capabilities[oldName];
+        delete item.image_capabilities[oldName];
+        if(newName) item.image_capabilities[newName] = capability;
+    }
     if(kind === 'image') renderMsLoras();
 }
 function updateVeniceModelRoute(kind, index, input){
@@ -3796,6 +3801,9 @@ function removeModel(kind, index){
     }
     if(removed && item.model_routes && typeof item.model_routes === 'object' && !modelProtocolStillUsed(item, removed)){
         delete item.model_routes[removed];
+    }
+    if(kind === 'image' && removed && item.image_capabilities && typeof item.image_capabilities === 'object' && !modelProtocolStillUsed(item, removed)){
+        delete item.image_capabilities[removed];
     }
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
@@ -3883,6 +3891,7 @@ async function saveProviders(){
                 model_protocols:(item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {},
                 model_aliases:(item.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {},
                 model_routes:(item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {},
+                image_capabilities:(item.image_capabilities && typeof item.image_capabilities === 'object') ? item.image_capabilities : {},
                 ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
                 ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
                 rh_apps:item.id === 'runninghub' ? (item.rh_apps || []) : [],

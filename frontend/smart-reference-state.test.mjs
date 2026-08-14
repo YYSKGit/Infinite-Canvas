@@ -242,6 +242,7 @@ test('Venice fan-out submits one reference image per API task', async () => {
         smartLogActualGenerationRequest:() => {},
         smartPayloadReferenceMediaCounts:() => ({total:1, images:1, videos:0, audios:0}),
         sizeForRun:() => '1024x1024',
+        imageSizeSpecForRun:() => ({mode:'preset', aspect_ratio:'1:1', resolution:'1K'}),
         rememberSmartRunTaskId:() => {},
         runningHubProgressNodeForContext:() => null,
         tr:key => key,
@@ -269,6 +270,7 @@ test('Venice fan-out submits one reference image per API task', async () => {
         requestBodies.map(body => body.reference_images.map(ref => ref.url)),
         [['/a.png'], ['/a.png'], ['/b.png'], ['/b.png']]
     );
+    assert.ok(requestBodies.every(body => body.size_spec?.aspect_ratio === '1:1'));
 });
 
 test('buildPromptRequest preserves upstream provenance in the refs saved for reruns', () => {

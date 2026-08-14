@@ -441,6 +441,7 @@ VENICE_DEFAULT_MODEL_ROUTES = {
     "z-image-turbo": {"image_edit": "qwen-edit-uncensored"},
     "grok-imagine-image-quality": {"image_edit": "grok-imagine-quality-edit"},
     "grok-imagine": {"image_edit": "grok-imagine-edit"},
+    "gpt-image-2": {"image_edit": "gpt-image-2-edit"},
     "qwen-image-2-pro": {"image_edit": "qwen-image-2-pro-edit"},
     "qwen-image-2": {"image_edit": "qwen-image-2-edit"},
     "seedream-v5-pro": {"image_edit": "seedream-v5-pro-edit"},
@@ -451,6 +452,18 @@ VENICE_DEFAULT_MODEL_ROUTES = {
     "wan-2-7-reference-to-video": {"text_to_video": "wan-2-7-text-to-video"},
     "wan-2-7-image-to-video": {"text_to_video": "wan-2-7-text-to-video"},
     "wan-2-7-enhanced-image-to-video": {"text_to_video": "wan-2-7-enhanced-text-to-video"},
+}
+# Provider/model capabilities describe the upstream request shape. "auto" is a
+# user request mode and therefore intentionally is not a capability value.
+IMAGE_SIZE_MODES = {"pixel", "aspect", "aspect_resolution", "enumerated", "schema"}
+IMAGE_QUALITY_VALUES = {"low", "medium", "high"}
+VENICE_DEFAULT_IMAGE_SIZE_MODE = "aspect_resolution"
+VENICE_IMAGE_CAPABILITY_OVERRIDES = {
+    "chroma": {"size_mode": "pixel"},
+    "z-image-turbo": {"size_mode": "pixel"},
+    "qwen-image-2": {"size_mode": "aspect"},
+    "qwen-image-2-pro": {"size_mode": "aspect"},
+    "gpt-image-2": {"supports_quality": True},
 }
 VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
@@ -976,6 +989,13 @@ def default_api_providers():
             "chat_models": [],
             "video_models": VENICE_DEFAULT_VIDEO_MODELS,
             "model_routes": VENICE_DEFAULT_MODEL_ROUTES,
+            "image_capabilities": {
+                model: {
+                    "size_mode": VENICE_IMAGE_CAPABILITY_OVERRIDES.get(model, {}).get("size_mode", VENICE_DEFAULT_IMAGE_SIZE_MODE),
+                    "supports_quality": bool(VENICE_IMAGE_CAPABILITY_OVERRIDES.get(model, {}).get("supports_quality")),
+                }
+                for model in VENICE_DEFAULT_IMAGE_MODELS
+            },
             "ms_loras": [],
             "ms_defaults_version": 0,
         },
@@ -1071,6 +1091,14 @@ def merge_default_api_providers(providers):
             continue
         if not current.get("model_routes"):
             current["model_routes"] = normalize_model_routes(VENICE_DEFAULT_MODEL_ROUTES)
+        current["image_capabilities"] = image_capabilities_for_models(
+            current.get("image_models"),
+            current.get("image_capabilities"),
+            legacy_size_modes=current.get("image_size_modes"),
+            defaults=VENICE_IMAGE_CAPABILITY_OVERRIDES,
+            default_size_mode=VENICE_DEFAULT_IMAGE_SIZE_MODE,
+        )
+        current.pop("image_size_modes", None)
     return merged
 
 def normalize_model_list(values):
@@ -1318,6 +1346,78 @@ def normalize_image_request_mode(value):
     mode = str(value or "").strip().lower()
     return mode if mode in SUPPORTED_IMAGE_REQUEST_MODES else "openai"
 
+def normalize_image_size_modes(value):
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for model, mode in value.items():
+        model_name = str(model or "").strip()
+        mode_name = str(mode or "").strip().lower().replace("-", "_")
+        if model_name and mode_name in IMAGE_SIZE_MODES:
+            normalized[model_name] = mode_name
+    return normalized
+
+def normalize_capability_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+def normalize_image_capabilities(value):
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for model, raw in value.items():
+        model_name = str(model or "").strip()
+        if not model_name or not isinstance(raw, dict):
+            continue
+        size_mode = str(raw.get("size_mode") or "").strip().lower().replace("-", "_")
+        capability = {"size_mode": size_mode if size_mode in IMAGE_SIZE_MODES else ""}
+        if "supports_quality" in raw:
+            capability["supports_quality"] = normalize_capability_bool(raw.get("supports_quality"))
+        elif "quality_options" in raw:
+            # Deprecated compatibility input from the first capability format.
+            capability["supports_quality"] = bool(raw.get("quality_options"))
+        if capability["size_mode"] or "supports_quality" in capability:
+            normalized[model_name] = capability
+    return normalized
+
+def image_capabilities_for_models(models, value, legacy_size_modes=None, defaults=None, default_size_mode=""):
+    """Resolve one complete capability record per current image model."""
+    configured = normalize_image_capabilities(value)
+    seeded = normalize_image_capabilities(defaults)
+    legacy_modes = normalize_image_size_modes(legacy_size_modes)
+    normalize_id = lambda model: str(model or "").strip().lower().replace("_", "-")
+    configured_by_id = {normalize_id(model): capability for model, capability in configured.items()}
+    seeded_by_id = {normalize_id(model): capability for model, capability in seeded.items()}
+    legacy_by_id = {normalize_id(model): mode for model, mode in legacy_modes.items()}
+    fallback_mode = str(default_size_mode or "").strip().lower().replace("-", "_")
+    if fallback_mode not in IMAGE_SIZE_MODES:
+        fallback_mode = ""
+    resolved = {}
+    for model in model_list_from_values(models or []):
+        model_id = normalize_id(model)
+        configured_capability = configured_by_id.get(model_id)
+        seeded_capability = seeded_by_id.get(model_id) or {}
+        size_mode = (
+            (configured_capability or {}).get("size_mode")
+            or legacy_by_id.get(model_id)
+            or seeded_capability.get("size_mode")
+            or fallback_mode
+        )
+        supports_quality = (
+            configured_capability.get("supports_quality")
+            if configured_capability is not None and "supports_quality" in configured_capability
+            else bool(seeded_capability.get("supports_quality"))
+        )
+        if size_mode or supports_quality or configured_capability is not None:
+            resolved[model] = {
+                "size_mode": size_mode,
+                "supports_quality": bool(supports_quality),
+            }
+    return resolved
+
 def provider_endpoint_url(provider, key, default_path):
     base_url = str((provider or {}).get("base_url") or AI_BASE_URL).strip().rstrip("/")
     override = str((provider or {}).get(key) or "").strip()
@@ -1383,10 +1483,25 @@ def normalize_provider(item):
         protocol = "runninghub"
         base_url = base_url or RUNNINGHUB_DEFAULT_BASE_URL
     model_routes = normalize_model_routes(item.get("model_routes"))
+    image_models = model_list_from_values(item.get("image_models") or [])
     if protocol == "venice" and not model_routes:
         model_routes = normalize_model_routes(VENICE_DEFAULT_MODEL_ROUTES)
     elif protocol != "venice":
         model_routes = {}
+    if protocol == "venice":
+        image_capabilities = image_capabilities_for_models(
+            image_models,
+            item.get("image_capabilities"),
+            legacy_size_modes=item.get("image_size_modes"),
+            defaults=VENICE_IMAGE_CAPABILITY_OVERRIDES,
+            default_size_mode=VENICE_DEFAULT_IMAGE_SIZE_MODE,
+        )
+    else:
+        image_capabilities = image_capabilities_for_models(
+            image_models,
+            item.get("image_capabilities"),
+            legacy_size_modes=item.get("image_size_modes"),
+        )
     return {
         "id": provider_id,
         "name": name,
@@ -1397,12 +1512,13 @@ def normalize_provider(item):
         "image_edit_endpoint": image_edit_endpoint,
         "enabled": bool(item.get("enabled", True)),
         "primary": bool(item.get("primary", False)),
-        "image_models": model_list_from_values(item.get("image_models") or []),
+        "image_models": image_models,
         "chat_models": model_list_from_values(item.get("chat_models") or []),
         "video_models": model_list_from_values(item.get("video_models") or []),
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
         "model_aliases": normalize_model_aliases(item.get("model_aliases")),
         "model_routes": model_routes,
+        "image_capabilities": image_capabilities,
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
         "ms_defaults_version": int(item.get("ms_defaults_version") or 0),
         "rh_apps": normalize_runninghub_entries(item.get("rh_apps") or [], "app"),
@@ -2494,11 +2610,19 @@ class AIReference(BaseModel):
     kind: str = ""
     mime: str = ""
 
+class ImageSizeSpec(BaseModel):
+    mode: str = "preset"
+    aspect_ratio: str = ""
+    resolution: str = ""
+    width: Optional[int] = None
+    height: Optional[int] = None
+
 class OnlineImageRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=ONLINE_IMAGE_PROMPT_MAX_LENGTH)
     provider_id: str = "comfly"
     model: str = ""
     size: str = "1024x1024"
+    size_spec: Optional[ImageSizeSpec] = None
     quality: str = "auto"
     n: int = 1
     reference_images: List[AIReference] = []
@@ -2570,6 +2694,9 @@ class VeniceImageQuoteRequest(BaseModel):
     provider_id: str = "venice"
     model: str = "grok-imagine-image-quality"
     resolution: str = "1K"
+    size: str = ""
+    size_spec: Optional[ImageSizeSpec] = None
+    quality: str = "auto"
     has_reference_image: bool = False
 
 class TempShUploadRequest(BaseModel):
@@ -2656,6 +2783,9 @@ class ApiProviderPayload(BaseModel):
     model_protocols: Dict[str, str] = {}
     model_aliases: Dict[str, str] = {}
     model_routes: Dict[str, Dict[str, str]] = {}
+    image_capabilities: Dict[str, Dict[str, Any]] = {}
+    # Deprecated compatibility input. Normalized providers only persist image_capabilities.
+    image_size_modes: Dict[str, str] = {}
     ms_loras: List[Dict[str, Any]] = []
     ms_defaults_version: int = 0
     rh_apps: List[Dict[str, Any]] = []
@@ -5540,7 +5670,14 @@ def jimeng_output_values(raw):
     return deduped
 
 JIMENG_RATIO_CHOICES = [(21, 9), (16, 9), (3, 2), (4, 3), (1, 1), (3, 4), (2, 3), (9, 16)]
-def jimeng_ratio_from_size(size, fallback="1:1"):
+def jimeng_ratio_from_size(size, fallback="1:1", size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    requested = normalized_image_aspect_ratio(resolved.get("aspect_ratio"))
+    if requested:
+        left, right = (int(value) for value in requested.split(":"))
+        ratio = left / max(1, right)
+        best_left, best_right = min(JIMENG_RATIO_CHOICES, key=lambda item: abs(math.log(ratio / (item[0] / item[1]))))
+        return f"{best_left}:{best_right}"
     width, height = parse_size_pair(size)
     if not width or not height:
         return fallback
@@ -5562,7 +5699,7 @@ def jimeng_image_model_version(model, mode="text2image"):
     allowed = JIMENG_IMAGE2IMAGE_MODELS if mode == "image2image" else JIMENG_TEXT2IMAGE_MODELS
     return version if version in allowed else ""
 
-def jimeng_image_resolution(model, size, mode="text2image"):
+def jimeng_image_resolution(model, size, mode="text2image", size_spec=None):
     text = str(model or "").lower()
     if "4k" in text:
         desired = "4k"
@@ -5570,6 +5707,8 @@ def jimeng_image_resolution(model, size, mode="text2image"):
         desired = "1k"
     elif "2k" in text:
         desired = "2k"
+    elif size_spec:
+        desired = (resolve_image_size_spec(size, size_spec).get("resolution") or "2K").lower()
     else:
         width, height = parse_size_pair(size)
         desired = "4k" if max(width, height) > 2048 else "2k"
@@ -5793,7 +5932,7 @@ async def jimeng_prepare_local_media(ref_url, kind="image"):
             return path, temp_paths
     raise HTTPException(status_code=400, detail=f"即梦 CLI 只支持本地文件参考素材，无法读取：{text[:120]}")
 
-async def generate_jimeng_provider_image(prompt, size, model, reference_images=None, provider=None):
+async def generate_jimeng_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None):
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
     temp_paths = []
     try:
@@ -5806,7 +5945,7 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
                 "image2image",
                 f"--images={jimeng_cli_path_arg(image_path)}",
                 f"--prompt={prompt}",
-                f"--resolution_type={jimeng_image_resolution(model, size, 'image2image')}",
+                f"--resolution_type={jimeng_image_resolution(model, size, 'image2image', size_spec)}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
             if model_version:
@@ -5816,8 +5955,8 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
             args = [
                 "text2image",
                 f"--prompt={prompt}",
-                f"--ratio={jimeng_ratio_from_size(size)}",
-                f"--resolution_type={jimeng_image_resolution(model, size, 'text2image')}",
+                f"--ratio={jimeng_ratio_from_size(size, size_spec=size_spec)}",
+                f"--resolution_type={jimeng_image_resolution(model, size, 'text2image', size_spec)}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
             if model_version:
@@ -8577,6 +8716,165 @@ def parse_size_pair(size):
         return 0, 0
     return int(match.group(1)), int(match.group(2))
 
+IMAGE_SIZE_PRESETS = {
+    "1:1": {"1K": (1024, 1024), "2K": (2048, 2048), "4K": (4096, 4096)},
+    "2:3": {"1K": (1024, 1536), "2K": (1360, 2048), "4K": (2352, 3520)},
+    "3:2": {"1K": (1536, 1024), "2K": (2048, 1360), "4K": (3520, 2352)},
+    "3:4": {"1K": (1008, 1344), "2K": (1536, 2048), "4K": (2448, 3264)},
+    "4:3": {"1K": (1344, 1008), "2K": (2048, 1536), "4K": (3264, 2448)},
+    "9:16": {"1K": (720, 1280), "2K": (1152, 2048), "4K": (2160, 3840)},
+    "16:9": {"1K": (1280, 720), "2K": (2048, 1152), "4K": (3840, 2160)},
+    "21:9": {"1K": (1280, 544), "2K": (2048, 880), "4K": (3840, 1648)},
+    "9:21": {"1K": (544, 1280), "2K": (880, 2048), "4K": (1648, 3840)},
+}
+IMAGE_SIZE_PRESET_LOOKUP = {
+    dimensions: (aspect_ratio, resolution)
+    for aspect_ratio, tiers in IMAGE_SIZE_PRESETS.items()
+    for resolution, dimensions in tiers.items()
+}
+
+def normalized_image_aspect_ratio(value, fallback=""):
+    aliases = {
+        "square": "1:1", "portrait": "2:3", "landscape": "3:2",
+        "portrait43": "3:4", "landscape43": "4:3", "story": "9:16",
+        "wide": "16:9", "ultrawide": "21:9", "ultratall": "9:21",
+    }
+    raw = str(value or "").strip().lower().replace("／", ":").replace("/", ":")
+    raw = aliases.get(raw, raw)
+    if raw in IMAGE_SIZE_PRESETS:
+        return raw
+    match = re.fullmatch(r"(\d{1,5})\s*:\s*(\d{1,5})", raw)
+    if not match:
+        return fallback
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return fallback
+    divisor = math.gcd(width, height) or 1
+    return f"{width // divisor}:{height // divisor}"
+
+def closest_supported_image_aspect(value, choices, fallback="1:1"):
+    requested = normalized_image_aspect_ratio(value)
+    if not requested:
+        return fallback
+    if requested in choices:
+        return requested
+    left, right = (int(part) for part in requested.split(":"))
+    ratio = left / max(1, right)
+    def distance(candidate):
+        candidate_left, candidate_right = (int(part) for part in candidate.split(":"))
+        return abs(math.log(ratio / (candidate_left / candidate_right)))
+    return min(choices, key=distance)
+
+def image_resolution_tier(value, fallback=""):
+    raw = str(value or "").strip().upper()
+    return raw if raw in {"1K", "2K", "4K"} else fallback
+
+def inferred_image_resolution(width, height, fallback="1K"):
+    exact = IMAGE_SIZE_PRESET_LOOKUP.get((int(width or 0), int(height or 0)))
+    if exact:
+        return exact[1]
+    width, height = int(width or 0), int(height or 0)
+    if width <= 0 or height <= 0:
+        return fallback
+    long_edge = max(width, height)
+    pixels = width * height
+    if long_edge >= 3072 or pixels >= 7_500_000:
+        return "4K"
+    if long_edge >= 1800 or pixels >= 2_400_000:
+        return "2K"
+    return "1K"
+
+def image_size_spec_data(value):
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    return dict(value) if isinstance(value, dict) else {}
+
+def resolve_image_size_spec(size="", size_spec=None):
+    """Keep the user's sizing intent structured; legacy pixel-only callers remain supported."""
+    raw_size = str(size or "").strip()
+    data = image_size_spec_data(size_spec)
+    mode = str(data.get("mode") or "").strip().lower().replace("-", "_")
+    legacy_width, legacy_height = parse_size_pair(raw_size)
+    explicit_width = int(data.get("width") or 0)
+    explicit_height = int(data.get("height") or 0)
+
+    if data and mode not in {"auto", "preset", "custom_pixels"}:
+        raise HTTPException(status_code=400, detail=f"不支持的图片尺寸模式：{mode or '(empty)'}")
+    if mode == "auto" or (not data and raw_size.lower() == "auto"):
+        return {"mode": "auto", "aspect_ratio": "", "resolution": "", "width": 0, "height": 0, "legacy_size": "auto"}
+
+    if not data:
+        preset = IMAGE_SIZE_PRESET_LOOKUP.get((legacy_width, legacy_height))
+        if preset:
+            aspect_ratio, resolution = preset
+            return {
+                "mode": "preset", "aspect_ratio": aspect_ratio, "resolution": resolution,
+                "width": legacy_width, "height": legacy_height, "legacy_size": f"{legacy_width}x{legacy_height}",
+            }
+        raw_resolution = image_resolution_tier(raw_size)
+        raw_aspect = normalized_image_aspect_ratio(raw_size)
+        if raw_resolution or raw_aspect:
+            aspect_ratio = raw_aspect or "1:1"
+            resolution = raw_resolution or "1K"
+            width, height = IMAGE_SIZE_PRESETS.get(aspect_ratio, {}).get(resolution, (0, 0))
+            return {
+                "mode": "preset", "aspect_ratio": aspect_ratio, "resolution": resolution,
+                "width": width, "height": height, "legacy_size": f"{width}x{height}" if width and height else raw_size,
+            }
+        if legacy_width > 0 and legacy_height > 0:
+            divisor = math.gcd(legacy_width, legacy_height) or 1
+            return {
+                "mode": "custom_pixels",
+                "aspect_ratio": f"{legacy_width // divisor}:{legacy_height // divisor}",
+                "resolution": inferred_image_resolution(legacy_width, legacy_height),
+                "width": legacy_width, "height": legacy_height,
+                "legacy_size": f"{legacy_width}x{legacy_height}",
+            }
+        return {"mode": "preset", "aspect_ratio": "1:1", "resolution": "1K", "width": 1024, "height": 1024, "legacy_size": "1024x1024"}
+
+    if mode == "custom_pixels":
+        width = explicit_width or legacy_width
+        height = explicit_height or legacy_height
+        if not (16 <= width <= 32768 and 16 <= height <= 32768):
+            raise HTTPException(status_code=400, detail="自定义图片尺寸的宽和高必须在 16–32768 像素之间。")
+        divisor = math.gcd(width, height) or 1
+        aspect_ratio = normalized_image_aspect_ratio(data.get("aspect_ratio"), f"{width // divisor}:{height // divisor}")
+        return {
+            "mode": "custom_pixels", "aspect_ratio": aspect_ratio,
+            "resolution": image_resolution_tier(data.get("resolution"), inferred_image_resolution(width, height)),
+            "width": width, "height": height, "legacy_size": f"{width}x{height}",
+        }
+
+    aspect_ratio = normalized_image_aspect_ratio(data.get("aspect_ratio"))
+    resolution = image_resolution_tier(data.get("resolution"))
+    if not aspect_ratio or not resolution:
+        legacy_preset = IMAGE_SIZE_PRESET_LOOKUP.get((legacy_width, legacy_height))
+        if legacy_preset:
+            aspect_ratio = aspect_ratio or legacy_preset[0]
+            resolution = resolution or legacy_preset[1]
+    aspect_ratio = aspect_ratio or "1:1"
+    resolution = resolution or "1K"
+    width, height = IMAGE_SIZE_PRESETS.get(aspect_ratio, {}).get(resolution, (legacy_width, legacy_height))
+    if width <= 0 or height <= 0:
+        ratio_match = re.fullmatch(r"(\d+):(\d+)", aspect_ratio)
+        ratio = int(ratio_match.group(1)) / int(ratio_match.group(2)) if ratio_match else 1
+        long_edge = {"1K": 1536, "2K": 2048, "4K": 3840}[resolution]
+        width = long_edge if ratio >= 1 else max(64, int(long_edge * ratio) // 16 * 16)
+        height = max(64, int(long_edge / ratio) // 16 * 16) if ratio >= 1 else long_edge
+    return {
+        "mode": "preset", "aspect_ratio": aspect_ratio, "resolution": resolution,
+        "width": int(width), "height": int(height), "legacy_size": f"{int(width)}x{int(height)}",
+    }
+
+def image_size_legacy_value(resolved):
+    return str((resolved or {}).get("legacy_size") or "1024x1024")
+
+def image_size_request_meta(resolved):
+    return {
+        key: value for key, value in (resolved or {}).items()
+        if key in {"mode", "aspect_ratio", "resolution", "width", "height"}
+    }
+
 CHAT_RATIO_SIZE_OPTIONS = {
     "1:1": ("1024x1024", "1536x1536", "2048x2048"),
     "2:3": ("720x1080", "1024x1536", "1365x2048"),
@@ -8679,7 +8977,15 @@ def gpt_image_2_size_exceeds_supported(size):
     width, height = parse_size_pair(size)
     return bool(width and height and (max(width, height) > GPT_IMAGE2_MAX_EDGE or width * height > GPT_IMAGE2_MAX_PIXELS))
 
-def apimart_size_resolution(size):
+def apimart_size_resolution(size, size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    if resolved["mode"] != "auto":
+        supported = (
+            "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16",
+            "2:1", "1:2", "3:1", "1:3", "21:9", "9:21",
+        )
+        aspect_ratio = closest_supported_image_aspect(resolved["aspect_ratio"], supported)
+        return aspect_ratio, (resolved["resolution"] or "1K").lower()
     width, height = parse_size_pair(size)
     if not width or not height:
         raw = str(size or "").strip().lower()
@@ -8706,9 +9012,6 @@ def apimart_size_resolution(size):
     best = min(common, key=lambda item: abs(ratio - item[0] / item[1]))
     return best[2], resolution
 
-VENICE_PIXEL_MODELS = ("venice-sd35", "qwen-image", "z-image-turbo", "chroma")
-VENICE_ASPECT_MODELS = ("qwen-image-2",)
-VENICE_RESOLUTION_MODELS = ("gpt-image-2", "nano-banana-2", "nano-banana-pro")
 VENICE_IMAGE_BLOCK_HEADERS = (
     "x-venice-is-blurred",
     "x-venice-is-content-violation",
@@ -8740,59 +9043,108 @@ def venice_api_root(provider=None):
         return f"{base_url}/v1"
     return f"{base_url}/api/v1"
 
-def venice_size_aspect_ratio(size):
-    width, height = parse_size_pair(size)
-    if not width or not height:
-        return "1:1"
-    divisor = math.gcd(width, height) or 1
-    return f"{max(1, width // divisor)}:{max(1, height // divisor)}"
+def venice_size_aspect_ratio(size, size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    return resolved.get("aspect_ratio") or "1:1"
 
-def venice_size_resolution(size):
-    raw = str(size or "").strip().lower()
-    if raw in {"1k", "2k", "4k"}:
-        return raw.upper()
-    width, height = parse_size_pair(size)
-    if not width or not height:
-        return "1K"
-    long_edge = max(width, height)
-    pixels = width * height
-    if long_edge >= 3072 or pixels >= 7_500_000:
-        return "4K"
-    if long_edge >= 1800 or pixels >= 2_400_000:
-        return "2K"
-    return "1K"
+def venice_size_resolution(size, size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    return resolved.get("resolution") or "1K"
 
-def venice_model_sizing_mode(model):
-    text = str(model or "").strip().lower()
-    if any(key in text for key in VENICE_RESOLUTION_MODELS):
-        return "resolution"
-    if any(key in text for key in VENICE_ASPECT_MODELS):
-        return "aspect"
-    if any(key in text for key in VENICE_PIXEL_MODELS):
-        return "pixel"
-    return "resolution"
+def provider_model_image_capability(provider, model):
+    capabilities = normalize_image_capabilities((provider or {}).get("image_capabilities"))
+    normalized_model = str(model or "").strip().lower().replace("_", "-")
+    for configured_model, capability in capabilities.items():
+        if str(configured_model or "").strip().lower().replace("_", "-") == normalized_model:
+            return capability
+    return {}
 
-def venice_image_request_body(prompt, size, quality, model):
+def provider_model_image_size_mode(provider, model, fallback="enumerated"):
+    capability = provider_model_image_capability(provider, model)
+    if capability.get("size_mode"):
+        return capability["size_mode"]
+    # Compatibility for callers that construct an old provider dict directly.
+    modes = normalize_image_size_modes((provider or {}).get("image_size_modes"))
+    normalized_model = str(model or "").strip().lower().replace("_", "-")
+    for configured_model, mode in modes.items():
+        if str(configured_model or "").strip().lower().replace("_", "-") == normalized_model:
+            return mode
+    return fallback
+
+def venice_model_capability(model, provider=None):
+    normalized_model = str(model or "").strip().lower().replace("_", "-")
+    override = next((
+        capability for configured_model, capability in VENICE_IMAGE_CAPABILITY_OVERRIDES.items()
+        if str(configured_model or "").strip().lower().replace("_", "-") == normalized_model
+    ), {})
+    configured = provider_model_image_capability(provider, model)
+    return {
+        "size_mode": configured.get("size_mode") or override.get("size_mode") or VENICE_DEFAULT_IMAGE_SIZE_MODE,
+        "supports_quality": (
+            configured.get("supports_quality")
+            if "supports_quality" in configured
+            else bool(override.get("supports_quality"))
+        ),
+    }
+
+def venice_model_sizing_mode(model, provider=None):
+    mode = venice_model_capability(model, provider).get("size_mode") or VENICE_DEFAULT_IMAGE_SIZE_MODE
+    return "resolution" if mode == "aspect_resolution" else mode
+
+def compile_venice_image_quality(quality, model, provider=None):
+    requested = str(quality or "").strip().lower().replace("-", "_")
+    if requested in {"", "auto"}:
+        return ""
+    supports_quality = bool(venice_model_capability(model, provider).get("supports_quality"))
+    return requested if supports_quality and requested in IMAGE_QUALITY_VALUES else ""
+
+def venice_image_quote_body(model, resolution, quality="auto", provider=None, capability_model=None):
+    variant = {
+        "modelId": str(model or ""),
+        "resolution": image_resolution_tier(resolution, "1K"),
+    }
+    compiled_quality = compile_venice_image_quality(quality, capability_model or model, provider)
+    if compiled_quality:
+        variant["quality"] = compiled_quality
+    return {"variants": [variant]}
+
+def compile_venice_image_size(size, model, size_spec=None, provider=None, clamp_pixels=False):
+    resolved = resolve_image_size_spec(size, size_spec)
+    mode = venice_model_sizing_mode(model, provider)
+    compiled = {"sizing_mode": mode}
+    if mode == "pixel":
+        width = resolved["width"] or 1024
+        height = resolved["height"] or 1024
+        if clamp_pixels:
+            width, height = venice_outerface_clamp_size(int(width), int(height))
+        compiled.update({"width": int(width), "height": int(height)})
+    elif mode == "aspect":
+        compiled["aspect_ratio"] = resolved["aspect_ratio"] or "1:1"
+    else:
+        compiled["aspect_ratio"] = resolved["aspect_ratio"] or "1:1"
+        compiled["resolution"] = resolved["resolution"] or "1K"
+    return compiled
+
+def venice_image_request_body(prompt, size, quality, model, size_spec=None, provider=None):
     body = {
         "model": model,
         "prompt": str(prompt or ""),
         "format": "png",
         "safe_mode": False,
     }
-    mode = venice_model_sizing_mode(model)
+    compiled_size = compile_venice_image_size(size, model, size_spec, provider)
+    mode = compiled_size["sizing_mode"]
     if mode == "pixel":
-        width, height = parse_size_pair(size)
-        if not width or not height:
-            width, height = 1024, 1024
-        body["width"] = max(1, min(1280, int(width)))
-        body["height"] = max(1, min(1280, int(height)))
+        body["width"] = max(1, min(1280, compiled_size["width"]))
+        body["height"] = max(1, min(1280, compiled_size["height"]))
     elif mode == "aspect":
-        body["aspect_ratio"] = venice_size_aspect_ratio(size)
+        body["aspect_ratio"] = compiled_size["aspect_ratio"]
     else:
-        body["aspect_ratio"] = venice_size_aspect_ratio(size)
-        body["resolution"] = venice_size_resolution(size)
-    if quality in {"low", "medium", "high"}:
-        body["quality"] = quality
+        body["aspect_ratio"] = compiled_size["aspect_ratio"]
+        body["resolution"] = compiled_size["resolution"]
+    compiled_quality = compile_venice_image_quality(quality, model, provider)
+    if compiled_quality:
+        body["quality"] = compiled_quality
     return body
 
 def venice_reference_image_input(ref, max_size=4096):
@@ -9506,30 +9858,14 @@ def venice_outerface_clamp_size(width: int, height: int) -> tuple:
         w, h = w * scale, h * scale
     return max(1, round(w)), max(1, round(h))
 
-def venice_outerface_image_body(prompt, size, model, user_id):
-    width, height = parse_size_pair(size)
-    if not width or not height:
-        width, height = 1024, 1024
-    width, height = venice_outerface_clamp_size(int(width), int(height))
-    divisor = math.gcd(width, height) or 1
-    aspect_ratio = f"{max(1, width // divisor)}:{max(1, height // divisor)}"
-    long_edge = max(width, height)
-    pixels = width * height
-    if long_edge >= 3072 or pixels >= 7_500_000:
-        resolution = "4K"
-    elif long_edge >= 1800 or pixels >= 2_400_000:
-        resolution = "2K"
-    else:
-        resolution = "1K"
-    return {
+def venice_outerface_image_body(prompt, size, model, user_id, size_spec=None, provider=None, quality="auto"):
+    compiled_size = compile_venice_image_size(size, model, size_spec, provider, clamp_pixels=True)
+    mode = compiled_size["sizing_mode"]
+    body = {
         "type": "image",
         "format": "png",
         "modelId": str(model or ""),
         "prompt": str(prompt or ""),
-        "width": int(width),
-        "height": int(height),
-        "aspectRatio": aspect_ratio,
-        "resolution": resolution,
         "stylePreset": "None",
         "seed": random.randint(1, 999_999_999),
         "steps": 0,
@@ -9542,10 +9878,21 @@ def venice_outerface_image_body(prompt, size, model, user_id):
         "clientProcessingTime": 1,
         "variants": 1,
     }
+    if mode == "pixel":
+        body.update({"width": compiled_size["width"], "height": compiled_size["height"]})
+    elif mode == "aspect":
+        body["aspectRatio"] = compiled_size["aspect_ratio"]
+    else:
+        body["aspectRatio"] = compiled_size["aspect_ratio"]
+        body["resolution"] = compiled_size["resolution"]
+    compiled_quality = compile_venice_image_quality(quality, model, provider)
+    if compiled_quality:
+        body["quality"] = compiled_quality
+    return body
 
-async def generate_venice_web_image(client, prompt, size, model, provider):
+async def generate_venice_web_image(client, prompt, size, model, provider, size_spec=None, quality="auto"):
     async def send(jwt, user_id):
-        body = venice_outerface_image_body(prompt, size, model, user_id)
+        body = venice_outerface_image_body(prompt, size, model, user_id, size_spec, provider, quality)
         headers = venice_web_headers({
             "Accept": "image/*",
             "Content-Type": "application/json",
@@ -9578,7 +9925,7 @@ def venice_reference_image_bytes(ref) -> tuple:
         return base64.b64decode(b64), mime, f"image{ext}"
     return b"", "image/jpeg", "image.jpg"
 
-async def generate_venice_web_image_edit(client, prompt, model, ref, provider):
+async def generate_venice_web_image_edit(client, prompt, model, ref, provider, quality="auto"):
     """Post to the outerface multi-edit endpoint as multipart/form-data."""
     edit_model = venice_image_edit_model(model, provider)
     if not edit_model:
@@ -9593,6 +9940,9 @@ async def generate_venice_web_image_edit(client, prompt, model, ref, provider):
         "prompt": str(prompt or ""),
         "requestId": venice_outerface_request_id(),
     }
+    compiled_quality = compile_venice_image_quality(quality, model, provider)
+    if compiled_quality:
+        data["quality"] = compiled_quality
     async def send(jwt, _user_id):
         headers = venice_web_headers({
             "Authorization": f"Bearer {jwt}",
@@ -9744,11 +10094,12 @@ def friendly_chat_error_detail(text, model="", provider=None):
         return "请求过于频繁，已被上游限流，请稍后再试。"
     return ""
 
-async def generate_modelscope_provider_image(prompt, size, model, reference_images=None, provider=None):
+async def generate_modelscope_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None):
     clean_token = modelscope_api_key()
     if not clean_token:
         raise HTTPException(status_code=400, detail="未配置 ModelScope API Key，请在 API 设置中填写。")
-    width, height = parse_size_pair(size)
+    resolved_size = resolve_image_size_spec(size, size_spec)
+    width, height = resolved_size["width"], resolved_size["height"]
     refs = []
     for ref in (reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX]:
         if not ref.get("url"):
@@ -9813,17 +10164,15 @@ def gemini_endpoint_url(provider, model):
     model_name = urllib.parse.quote(gemini_model_name(model), safe="")
     return provider_endpoint_url(provider, "image_generation_endpoint", f"/v1beta/models/{model_name}:generateContent")
 
-def gemini_image_config(size):
-    width, height = parse_size_pair(size)
-    if not width or not height:
-        raw = str(size or "").strip().upper()
-        if raw in {"1K", "2K", "4K"}:
-            return {"aspectRatio": "1:1", "imageSize": raw}
-        if re.fullmatch(r"\d+\s*:\s*\d+", raw):
-            return {"aspectRatio": raw.replace(" ", ""), "imageSize": "1K"}
-        return {"aspectRatio": "1:1", "imageSize": "2K"}
-    aspect_ratio, resolution = apimart_size_resolution(size)
-    return {"aspectRatio": aspect_ratio, "imageSize": resolution.upper()}
+def gemini_image_config(size, size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    if resolved["mode"] == "auto":
+        return {}
+    supported = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9")
+    return {
+        "aspectRatio": closest_supported_image_aspect(resolved["aspect_ratio"], supported),
+        "imageSize": resolved["resolution"] or "1K",
+    }
 
 def gemini_reference_part(ref):
     value = reference_to_data_url(ref, max_size=1536)
@@ -9837,7 +10186,7 @@ def gemini_reference_part(ref):
         return {"fileData": {"mimeType": "image/png", "fileUri": value}}
     return None
 
-async def generate_gemini_provider_image(prompt, size, model, reference_images=None, provider=None):
+async def generate_gemini_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None):
     model_name = gemini_model_name(model)
     endpoint = gemini_endpoint_url(provider, model_name)
     parts = [{"text": prompt.strip()}]
@@ -9845,12 +10194,13 @@ async def generate_gemini_provider_image(prompt, size, model, reference_images=N
         part = gemini_reference_part(ref)
         if part:
             parts.append(part)
+    generation_config = {"responseModalities": ["TEXT", "IMAGE"]}
+    image_config = gemini_image_config(size, size_spec)
+    if image_config:
+        generation_config["imageConfig"] = image_config
     body = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-            "imageConfig": gemini_image_config(size),
-        },
+        "generationConfig": generation_config,
     }
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)) as client:
         response = await client.post(endpoint, headers=api_headers(provider=provider), json=body)
@@ -9867,9 +10217,9 @@ def volcengine_image_payload(ref):
         return None
     return value
 
-async def generate_volcengine_provider_image(prompt, size, model, reference_images=None, provider=None):
+async def generate_volcengine_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None):
     endpoint = volcengine_endpoint_url(provider)
-    size = normalize_volcengine_size(size, model)
+    size = normalize_volcengine_size(image_size_legacy_value(resolve_image_size_spec(size, size_spec)), model)
     body = {
         "model": model,
         "prompt": prompt,
@@ -10328,6 +10678,15 @@ def runninghub_schema_value(field, preferred=None):
         return default
     return options[0] if options else preferred
 
+def runninghub_requested_quality_value(field, quality):
+    requested = str(quality or "").strip().lower().replace("-", "_")
+    if requested in {"", "auto"}:
+        return None
+    for option in runninghub_schema_options(field):
+        if option.strip().lower().replace("-", "_") == requested:
+            return option
+    return runninghub_schema_value(field, requested)
+
 def runninghub_schema_field(params, *keys):
     wanted = {str(k).lower() for k in keys if k}
     for field in params or []:
@@ -10338,25 +10697,19 @@ def runninghub_schema_field(params, *keys):
             return field
     return None
 
-def runninghub_aspect_from_size(size, fallback="1:1"):
-    width, height = parse_size_pair(size)
-    if width and height:
-        divisor = math.gcd(width, height) or 1
-        return f"{width // divisor}:{height // divisor}"
+def runninghub_aspect_from_size(size, fallback="1:1", size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    if resolved.get("aspect_ratio"):
+        return resolved["aspect_ratio"]
     raw = str(size or "").strip().lower()
     if re.fullmatch(r"(auto|\d+\s*:\s*\d+)", raw):
         return raw.replace(" ", "")
     return fallback
 
-def runninghub_resolution_from_size(size, fallback="2k"):
-    width, height = parse_size_pair(size)
-    if width and height:
-        long_edge = max(width, height)
-        if long_edge >= 3200:
-            return "4k"
-        if long_edge >= 1400:
-            return "2k"
-        return "1k"
+def runninghub_resolution_from_size(size, fallback="2k", size_spec=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    if resolved.get("resolution"):
+        return resolved["resolution"].lower()
     raw = str(size or "").strip().lower()
     return raw if raw in {"1k", "2k", "4k", "480p", "720p", "1080p", "native1080p"} else fallback
 
@@ -10756,7 +11109,7 @@ async def runninghub_upload_local_to_filename(client, provider, url, use_wallet=
         return raw["data"]["fileName"]
     raise HTTPException(status_code=502, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 上传素材失败：{raw}")
 
-async def generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry):
+async def generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry, size_spec=None, quality="auto"):
     """运行 RunningHub 工作流 / AI 应用（与智能画布一致的运行方式），返回首张图片结果。"""
     kind = entry["kind"]
     entry_id = entry["id"]
@@ -10764,10 +11117,11 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
     idx_map = rh_field_indexes(fields)
     use_wallet = False
     timeout = httpx.Timeout(connect=20.0, read=1800.0, write=240.0, pool=20.0)
-    aspect = runninghub_aspect_from_size(size, "")
-    resolution = runninghub_resolution_from_size(size, "")
-    width, height = parse_size_pair(size)
-    def requested_size_field_value(field):
+    resolved_size = resolve_image_size_spec(size, size_spec)
+    aspect = resolved_size.get("aspect_ratio") or ""
+    resolution = (resolved_size.get("resolution") or "").lower()
+    width, height = resolved_size.get("width") or 0, resolved_size.get("height") or 0
+    def requested_image_field_value(field):
         names = {
             str(field.get("fieldName") or "").strip().lower(),
             str(field.get("fieldKey") or "").strip().lower(),
@@ -10781,6 +11135,8 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             return width
         if height and "height" in names:
             return height
+        if names & {"quality", "imagequality", "image_quality", "质量", "品质"}:
+            return runninghub_requested_quality_value(field, quality)
         return None
     async with httpx.AsyncClient(timeout=timeout) as client:
         uploaded = []
@@ -10820,7 +11176,7 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             elif kind_f == "number" and field.get("random_enabled") is True:
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": rh_random_field_value(field)})
             else:
-                value = requested_size_field_value(field)
+                value = requested_image_field_value(field)
                 if value is None:
                     value = rh_default_value(field)
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": value})
@@ -10878,15 +11234,16 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         timeout_hint = f"；最近错误：{retry_state.get('last_error')}" if retry_state.get("last_error") else ""
         raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload}{timeout_hint}")
 
-async def generate_runninghub_provider_image(prompt, size, model, reference_images=None, provider=None):
+async def generate_runninghub_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None, quality="auto"):
     entry = runninghub_entry_config_from_model(provider, model)
     if entry:
-        return await generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry)
+        return await generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry, size_spec, quality)
     model_def = await runninghub_model_definition(provider, model)
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or model)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
-    aspect = runninghub_aspect_from_size(size, "1:1")
-    resolution = runninghub_resolution_from_size(size, "2k")
+    resolved_size = resolve_image_size_spec(size, size_spec)
+    aspect = resolved_size.get("aspect_ratio") or "1:1"
+    resolution = (resolved_size.get("resolution") or "2K").lower()
     body = {"prompt": prompt}
     if runninghub_schema_field(params, "aspectRatio"):
         field = runninghub_schema_field(params, "aspectRatio")
@@ -10897,15 +11254,17 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
     if runninghub_schema_field(params, "resolution"):
         field = runninghub_schema_field(params, "resolution")
         body["resolution"] = runninghub_schema_value(field, resolution)
-    width, height = parse_size_pair(size)
+    width, height = resolved_size.get("width") or 0, resolved_size.get("height") or 0
     if width and height:
         if runninghub_schema_field(params, "width"):
             body["width"] = width
         if runninghub_schema_field(params, "height"):
             body["height"] = height
-    quality_field = runninghub_schema_field(params, "quality")
+    quality_field = runninghub_schema_field(params, "quality", "imageQuality", "image_quality")
     if quality_field:
-        body["quality"] = runninghub_schema_value(quality_field, "medium")
+        requested_quality = runninghub_requested_quality_value(quality_field, quality)
+        if requested_quality is not None:
+            body[str(quality_field.get("fieldKey") or "quality")] = requested_quality
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=1800.0, write=180.0, pool=20.0)) as client:
         image_urls = []
         for ref in (reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX]:
@@ -11027,7 +11386,7 @@ async def generate_runninghub_video(payload, provider):
         local_urls = [await save_remote_video_to_output(url, prefix="rh_video_") for url in urls]
         return {"videos": local_urls, "task_id": task_id, "raw": result}
 
-async def generate_venice_provider_image(prompt, size, quality, model, reference_images=None, provider=None):
+async def generate_venice_provider_image(prompt, size, quality, model, reference_images=None, provider=None, size_spec=None):
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
     timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -11035,28 +11394,30 @@ async def generate_venice_provider_image(prompt, size, quality, model, reference
             image_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() != "mask"]
             if len(image_refs) != 1 or len(refs) != len(image_refs):
                 raise HTTPException(status_code=400, detail="Venice 图片编辑当前只支持单张参考图，不支持 mask 或多图参考。")
-            return await generate_venice_web_image_edit(client, prompt, model, image_refs[0], provider)
+            return await generate_venice_web_image_edit(client, prompt, model, image_refs[0], provider, quality)
         # Text-to-image: use the web (outerface) interface for free model support
-        return await generate_venice_web_image(client, prompt, size, model, provider)
+        return await generate_venice_web_image(client, prompt, size, model, provider, size_spec, quality)
 
-async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly"):
+async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", size_spec=None):
     provider = get_api_provider(provider_id)
+    resolved_size = resolve_image_size_spec(size, size_spec)
+    size = image_size_legacy_value(resolved_size)
     if provider["id"] == "modelscope":
-        return await generate_modelscope_provider_image(prompt, size, model, reference_images, provider)
+        return await generate_modelscope_provider_image(prompt, size, model, reference_images, provider, resolved_size)
     if is_codex_provider(provider):
         return await generate_codex_provider_image(prompt, size, model, reference_images, provider)
     if is_gemini_cli_provider(provider):
         return await generate_gemini_cli_provider_image(prompt, size, model, reference_images, provider)
     if is_jimeng_provider(provider):
-        return await generate_jimeng_provider_image(prompt, size, model, reference_images, provider)
+        return await generate_jimeng_provider_image(prompt, size, model, reference_images, provider, resolved_size)
     if is_runninghub_provider(provider):
-        return await generate_runninghub_provider_image(prompt, size, model, reference_images, provider)
+        return await generate_runninghub_provider_image(prompt, size, model, reference_images, provider, resolved_size, quality)
     if effective_protocol(provider, model) == "gemini":
-        return await generate_gemini_provider_image(prompt, size, model, reference_images, provider)
+        return await generate_gemini_provider_image(prompt, size, model, reference_images, provider, resolved_size)
     if is_venice_provider(provider):
-        return await generate_venice_provider_image(prompt, size, quality, model, reference_images, provider)
+        return await generate_venice_provider_image(prompt, size, quality, model, reference_images, provider, resolved_size)
     if is_volcengine_provider(provider):
-        return await generate_volcengine_provider_image(prompt, size, model, reference_images, provider)
+        return await generate_volcengine_provider_image(prompt, size, model, reference_images, provider, resolved_size)
     is_gpt2 = is_gpt_image_2_model(model)
     is_apimart = is_apimart_provider(provider)
     # 不对 GPT 尺寸做任何缩小/拦截：用户选什么尺寸就原样发给上游；
@@ -11091,7 +11452,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             body = {
                 "model": model,
                 "prompt": prompt,
-                "aspect_ratio": runninghub_aspect_from_size(size, "1:1"),
+                "aspect_ratio": resolved_size.get("aspect_ratio") or "1:1",
             }
             if image_refs:
                 body["images"] = [await openai_video_proxy_public_reference_url(ref) for ref in image_refs[:6]]
@@ -11128,7 +11489,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             body = {"model": model, "prompt": prompt, "size": size, "extra_body": extra_body}
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
         elif is_apimart:
-            apimart_size, resolution = apimart_size_resolution(size)
+            apimart_size, resolution = apimart_size_resolution(size, resolved_size)
             # APIMart 的 GPT-Image-2 图生图仍走 /images/generations，
             # 通过 image_urls 传参考图，不使用 OpenAI multipart /images/edits。
             body = {
@@ -13983,8 +14344,22 @@ async def build_online_image_result(payload: OnlineImageRequest):
     refs = [ref.model_dump() for ref in payload.reference_images if ref.url]
     image_refs = image_references(refs)
     count = max(1, min(8, int(payload.n or 1)))
+    resolved_size = resolve_image_size_spec(payload.size, payload.size_spec)
+    effective_quality = (
+        compile_venice_image_quality(payload.quality, model, provider) or "auto"
+        if is_venice_provider(provider)
+        else str(payload.quality or "auto")
+    )
     async def generate_one():
-        image_data, raw_item = await generate_ai_image(payload.prompt, payload.size, payload.quality, model, image_refs, provider["id"])
+        image_data, raw_item = await generate_ai_image(
+            payload.prompt,
+            payload.size,
+            payload.quality,
+            model,
+            image_refs,
+            provider["id"],
+            resolved_size,
+        )
         try:
             image_items = extract_images(raw_item) if isinstance(raw_item, dict) else [image_data]
         except HTTPException:
@@ -14027,7 +14402,14 @@ async def build_online_image_result(payload: OnlineImageRequest):
         "provider_name": provider.get("name") or provider["id"],
         "task_id": extract_task_id(raw) if isinstance(raw, dict) else None,
         "request_id": raw.get("id") if isinstance(raw, dict) else None,
-        "params": {"provider_id": provider["id"], "model": model, "size": payload.size, "quality": payload.quality, "n": count, "reference_images": refs},
+        "params": {
+            "provider_id": provider["id"], "model": model,
+            "size": image_size_legacy_value(resolved_size),
+            "size_spec": image_size_request_meta(resolved_size),
+            "quality": payload.quality,
+            "effective_quality": effective_quality,
+            "n": count, "reference_images": refs,
+        },
         "raw_usage": raw.get("usage") if isinstance(raw, dict) else None,
     }
     save_to_history(result)
@@ -14272,24 +14654,26 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
     model = venice_image_edit_model(requested_model, provider) if payload.has_reference_image else requested_model
     if not model:
         raise HTTPException(status_code=400, detail=venice_missing_model_route_detail(requested_model, "image_edit"))
-    resolution = venice_size_resolution(payload.resolution)
+    requested_size = payload.size or payload.resolution
+    resolved_size = resolve_image_size_spec(requested_size, payload.size_spec)
+    compiled_size = compile_venice_image_size(requested_size, model, resolved_size, provider)
+    resolution = compiled_size.get("resolution") or resolved_size.get("resolution") or "1K"
+    quality = compile_venice_image_quality(payload.quality, requested_model, provider)
     if str(model).strip().lower().replace("_", "-") in VENICE_FREE_IMAGE_MODELS:
         return {
             "provider_id": str(provider.get("id") or payload.provider_id),
             "model": model,
             "requested_model": requested_model,
             "is_edit": bool(payload.has_reference_image),
+            "sizing_mode": compiled_size.get("sizing_mode"),
+            "aspect_ratio": compiled_size.get("aspect_ratio") or resolved_size.get("aspect_ratio") or "",
             "resolution": resolution,
+            "quality": quality or "auto",
             "quote": 0,
             "usd": 0,
             "cny": 0,
         }
-    body = {
-        "variants": [{
-            "modelId": model,
-            "resolution": resolution,
-        }],
-    }
+    body = venice_image_quote_body(model, resolution, payload.quality, provider, requested_model)
     timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         async def send(jwt, _user_id):
@@ -14316,7 +14700,10 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
         "model": model,
         "requested_model": requested_model,
         "is_edit": bool(payload.has_reference_image),
+        "sizing_mode": compiled_size.get("sizing_mode"),
+        "aspect_ratio": compiled_size.get("aspect_ratio") or resolved_size.get("aspect_ratio") or "",
         "resolution": resolution,
+        "quality": quality or "auto",
         "quote": quote,
         "usd": round(quote / 100, 4),
         "cny": round(quote / 100 * 7, 2),

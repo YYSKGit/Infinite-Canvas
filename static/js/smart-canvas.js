@@ -6407,10 +6407,14 @@ function syncVeniceImageQuote(){
     }
     const subject = activeSettingsSubject() || activeComposerNode();
     const taskCount = veniceImageQuoteTaskCount(subject);
+    const sizeSpec = imageSizeSpecForRun(settings);
     const payload = {
         provider_id:String(settings.provider_id || 'venice'),
         model:String(settings.model || ''),
-        resolution:veniceImageQuoteResolution(),
+        resolution:sizeSpec.resolution || veniceImageQuoteResolution(),
+        size:sizeForRun(settings),
+        size_spec:sizeSpec,
+        quality:String(settings.quality || 'auto'),
         has_reference_image:veniceImageQuoteHasReferenceImage(subject)
     };
     if(!payload.model){
@@ -6624,6 +6628,31 @@ function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSi
     }
     const ratioKey = ratioValue && SIZE_MAP[ratioValue] ? ratioValue : 'square';
     return SIZE_MAP[ratioKey]?.[resolutionKey] || SIZE_MAP.square[resolutionKey] || SIZE_MAP.square['1k'];
+}
+function imageSizeSpecForRun(sourceSettings=settings, prefix=''){
+    const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
+    const resolutionKey = prefix ? `${prefix}Resolution` : 'resolution';
+    const customRatioKey = prefix ? `${prefix}CustomRatio` : 'customRatio';
+    const customSizeKey = prefix ? `${prefix}CustomSize` : 'customSize';
+    const ratioMap = {
+        square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4', landscape43:'4:3',
+        story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21'
+    };
+    const resolution = String(sourceSettings?.[resolutionKey] || '1k').trim().toUpperCase();
+    if(resolution === 'AUTO') return {mode:'auto'};
+    if(resolution === 'CUSTOM'){
+        const parsed = parseSizeValue(sourceSettings?.[customSizeKey] || '');
+        return {
+            mode:'custom_pixels',
+            width:Number(parsed?.width) || 0,
+            height:Number(parsed?.height) || 0
+        };
+    }
+    const rawRatio = String(sourceSettings?.[ratioKey] || 'square');
+    const aspectRatio = rawRatio === 'custom' || rawRatio === 'source'
+        ? String(sourceSettings?.[customRatioKey] || '').trim()
+        : (ratioMap[rawRatio] || '1:1');
+    return {mode:'preset', aspect_ratio:aspectRatio || '1:1', resolution};
 }
 function normalizeApiSizeSettings(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
@@ -22810,7 +22839,15 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
         ? requestMeta.providerPrompts
         : {};
     const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
-    const basePayload = {prompt:apiPrompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), quality:runSettings.quality || 'auto', n:1};
+    const basePayload = {
+        prompt:apiPrompt,
+        provider_id:runSettings.provider_id,
+        model:runSettings.model,
+        size:sizeForRun(runSettings),
+        size_spec:imageSizeSpecForRun(runSettings),
+        quality:runSettings.quality || 'auto',
+        n:1
+    };
     const payloads = jobs.map(job => ({
         ...basePayload,
         reference_images:imageRefsOnly(job.refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(apiImageReferencePayload)
