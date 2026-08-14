@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2027.01.1.1.1784115476"></script>
     <script src="/static/js/i18n.js?v=2027.01.1.1.1784194894"></script>
     <script src="/static/js/image-preview.js?v=2027.01.1.1.1783154646"></script>
-    <script src="/static/js/history-bulk-manager.js?v=2027.01.1.1.1784085241"></script>
+    <script src="/static/js/history-bulk-manager.js?v=2027.01.1.1.1786736817"></script>
     <style>
         @import url('/static/vendor/css/fonts.css?v=2027.01.1.1.1783154653');
         :root { --accent:#111827; --bg:#f9fafb; --card:#fff; --easing:cubic-bezier(0.4,0,0.2,1); }
@@ -30,10 +30,10 @@
         .nano-input { background:var(--card); border:1px solid #eef0f2; transition:all .3s var(--easing); }
         .nano-input:focus { border-color:#000; box-shadow:0 0 0 1px #000; }
         .upload-item { background:var(--card); border:1px dashed #e2e8f0; transition:all .4s var(--easing); position:relative; overflow:hidden; }
-        .upload-item:hover,.upload-item.drag-over { border-color:#000; transform:translateY(-2px); }
+        .upload-item:hover,.upload-item.drag-over { border-color:#000; }
         .preview-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; animation:fadeIn .5s var(--easing); }
         .glass-btn { background:#111827; transition:all .3s var(--easing); }
-        .glass-btn:hover { background:#000; transform:translateY(-1px); box-shadow:0 12px 24px rgba(0,0,0,.1); }
+        .glass-btn:hover { background:#000; }
         .result-frame { background:#fff; border-radius:32px; border:1px solid #f1f5f9; box-shadow:0 2px 15px rgba(0,0,0,.02); }
         .tool-panel { background:#fff; border:1px solid #edf0f3; border-radius:24px; padding:12px; display:flex; flex-direction:column; gap:10px; }
         .model-pill { background:#f8fafc; border:1px solid #edf2f7; border-radius:999px; padding:3px; display:grid; grid-template-columns:1fr 1fr; gap:2px; }
@@ -59,7 +59,6 @@
         @media (min-width:768px){ .masonry-grid{ grid-template-columns:repeat(4,1fr); } }
         @media (max-width:640px){ .size-row{ grid-template-columns:1fr; } }
         .masonry-item { aspect-ratio:1/1; border-radius:24px; overflow:hidden; background:#fff; border:1px solid #f1f5f9; transition:all .5s var(--easing); }
-        .masonry-item:hover { transform:translateY(-6px); box-shadow:0 20px 40px rgba(0,0,0,.08); }
         .gallery-lightbox { background:rgba(255,255,255,.99); backdrop-filter:blur(22px) saturate(1.05); }
         @keyframes fadeIn { from{opacity:0} to{opacity:1} }
     </style>

@@ -51,7 +51,7 @@ html.studio-theme-dark body .provider-card-banner .ms-icon-dark { display:block;
 .add-btn { width:100%; height:40px; border:1px dashed var(--line-strong); border-radius:12px; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:800; transition:all .15s ease; }
 .add-btn:hover { color:var(--text); border-color:var(--faint); background:var(--soft); }
 .api-link-btn { width:100%; height:40px; border:1px solid var(--line); border-radius:12px; background:var(--soft); color:var(--text); display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:850; text-decoration:none; transition:all .15s ease; }
-.api-link-btn:hover { border-color:var(--text); background:var(--text); color:var(--bg); transform:translateY(-1px); box-shadow:0 8px 18px rgba(15,23,42,.12); }
+.api-link-btn:hover { border-color:var(--text); background:var(--text); color:var(--bg); }
 body.studio-theme-dark .api-link-btn,
 html.studio-theme-dark body .api-link-btn { background:#f5f6f8; border-color:#f5f6f8; color:#0e1014; box-shadow:0 8px 18px rgba(0,0,0,.24); }
 body.studio-theme-dark .api-link-btn:hover,
@@ -109,7 +109,6 @@ html.studio-theme-dark body .recommend-tag.recommend-perk-tag svg { color:#b98cf
 .recommend-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:auto; padding-top:10px; }
 .recommend-actions a,.recommend-actions button { min-width:0; height:34px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; gap:6px; text-decoration:none; font-size:11.5px; font-weight:900; border:1px solid var(--line); transition:all .15s ease; }
 .recommend-register { background:var(--text); color:var(--bg); border-color:var(--text) !important; }
-.recommend-register:hover { transform:translateY(-1px); box-shadow:0 8px 18px rgba(15,23,42,.18); }
 .recommend-fill { background:var(--soft); color:var(--text); }
 .recommend-fill:hover { border-color:var(--text); }
 .recommend-note { margin:8px 20px 18px; padding:10px 12px; border-radius:12px; background:var(--soft); color:var(--muted); border:1px solid var(--line); font-size:11px; line-height:1.55; font-weight:750; }
@@ -248,7 +247,7 @@ html.studio-theme-dark body .action-btn.danger-btn { color:#fecaca; border-color
 body.studio-theme-dark .action-btn.danger-btn:hover,
 html.studio-theme-dark body .action-btn.danger-btn:hover { background:#7f1d1d; color:#fff; border-color:#f87171; box-shadow:0 8px 18px rgba(127,29,29,.28); }
 .action-btn.save-btn { background:var(--accent); color:var(--bg); border-color:var(--accent); }
-.action-btn.save-btn:hover { transform:translateY(-1px); box-shadow:0 6px 16px rgba(15,23,42,.15); background:var(--accent); color:var(--bg); border-color:var(--accent); }
+.action-btn.save-btn:hover { background:var(--accent); color:var(--bg); border-color:var(--accent); }
 .action-btn.save-btn.is-saved { background:#16a34a; color:#fff; border-color:#16a34a; box-shadow:0 8px 18px rgba(22,163,74,.22); }
 body.studio-theme-dark .action-btn.save-btn,
 html.studio-theme-dark body .action-btn.save-btn { background:#f5f6f8; color:#0e1014; border-color:#f5f6f8; box-shadow:0 8px 18px rgba(0,0,0,.22); }
@@ -268,8 +267,7 @@ body.theme-dark .api-page-save-btn:hover {
     background:#ffffff !important;
     color:#020617 !important;
     border-color:#ffffff !important;
-    transform:translateY(-1px);
-    box-shadow:0 12px 26px rgba(0,0,0,.4), inset 0 0 0 1px rgba(15,23,42,.08) !important;
+    box-shadow:0 8px 20px rgba(0,0,0,.32), inset 0 0 0 1px rgba(15,23,42,.08) !important;
 }
 body.studio-theme-dark .api-page-delete-btn,
 html.studio-theme-dark body .api-page-delete-btn,
@@ -285,8 +283,7 @@ body.theme-dark .api-page-delete-btn:hover {
     background:#7f1d1d !important;
     color:#ffffff !important;
     border-color:#b91c1c !important;
-    transform:translateY(-1px);
-    box-shadow:0 10px 22px rgba(127,29,29,.3) !important;
+    box-shadow:none !important;
 }
 /* MS 使用提示（按 provider 显示） */
 /* 模型选择器浮层 */
@@ -369,7 +366,7 @@ body.studio-theme-dark .rh-key-item { border-color:var(--line-strong); backgroun
 .rh-key-desc { margin-top:4px; color:var(--muted); font-size:11px; line-height:1.45; font-weight:650; }
 .rh-key-links { display:flex; align-items:center; justify-content:flex-end; gap:7px; flex-wrap:wrap; color:var(--faint); font-size:11px; line-height:1.5; font-weight:800; }
 .rh-key-links a { height:30px; padding:0 11px; border:1px solid var(--line-strong); border-radius:9px; background:var(--panel); color:var(--text); display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:900; text-decoration:none; box-shadow:0 2px 6px rgba(15,23,42,.06); transition:all .15s ease; }
-.rh-key-links a:hover { border-color:var(--text); transform:translateY(-1px); box-shadow:0 8px 18px rgba(15,23,42,.12); }
+.rh-key-links a:hover { border-color:var(--text); }
 .rh-key-links a svg { flex:0 0 auto; }
 body.show-runninghub .api-standard-key-row,
 body.show-runninghub .api-key-label,
@@ -781,8 +778,6 @@ html.studio-theme-dark body .page-head .status {
 .provider-card:hover {
     border-color:var(--api-line-strong);
     background:var(--api-surface-bg);
-    transform:translateY(-1px);
-    box-shadow:var(--api-shadow-sm);
 }
 
 .provider-card.active {
@@ -979,7 +974,6 @@ html.studio-theme-dark body .field-frame {
     border-color:var(--api-line-strong);
     background:var(--api-soft-bg);
     color:var(--text);
-    transform:translateY(-1px);
 }
 
 .action-btn.primary-btn {
@@ -2284,7 +2278,6 @@ html.studio-theme-dark body .recommend-fill .recommend-step {
 .recommend-fill:hover {
     background:var(--muted);
     color:var(--bg);
-    transform:translateY(-1px);
     filter:none;
 }
 
@@ -2435,7 +2428,6 @@ html.studio-theme-dark body .recommend-tag {
 .recommend-fill:hover {
     background:#475569;
     color:#fff;
-    transform:translateY(-1px);
 }
 
 .recommend-note {
@@ -5006,7 +4998,6 @@ html.studio-theme-dark body .recommend-platform-card {
     background:var(--soft) !important;
     border-color:var(--line-strong) !important;
     color:var(--text) !important;
-    transform:translateY(-1px) !important;
 }
 
 .onboarding-save-btn,
@@ -5022,7 +5013,6 @@ html.studio-theme-dark body .recommend-platform-card {
     background:var(--panel) !important;
     border-color:var(--line-strong) !important;
     color:var(--text) !important;
-    transform:translateY(-1px) !important;
     box-shadow:none !important;
 }
 
@@ -5138,7 +5128,6 @@ html.studio-theme-dark body .recommend-inline-card .recommend-guide-save-btn:hov
     background:var(--api-light-primary-hover) !important;
     border-color:var(--api-light-primary-hover) !important;
     color:#ffffff !important;
-    transform:translateY(-1px) !important;
     box-shadow:none !important;
 }
 

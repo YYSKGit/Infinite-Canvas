@@ -173,7 +173,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-icon-btn { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--muted); background:var(--card-solid); border:1px solid var(--line); cursor:pointer; transition:all .15s var(--ease); }
 .ws-icon-btn:hover { color:var(--text); border-color:var(--line-2); background:var(--soft); box-shadow:0 6px 14px var(--shadow); }
 .ws-primary-btn { height:36px; padding:0 14px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; gap:7px; background:var(--strong); color:var(--strong-text); border:none; cursor:pointer; font-size:12px; font-weight:850; box-shadow:0 8px 18px var(--shadow); }
-.ws-primary-btn:hover { transform:translateY(-1px); box-shadow:0 12px 24px var(--shadow-strong); }
 /* 粘贴到此项目：剪切后才出现的强调按钮，固定高对比色避免主题变量冲淡文字。 */
 .ws-paste-btn { height:36px; padding:0 13px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; gap:7px; background:#1d4ed8; color:#fff; border:1px solid rgba(255,255,255,.18); cursor:pointer; font-size:12px; font-weight:850; box-shadow:0 8px 18px rgba(37,99,235,.28); }
 .ws-paste-btn:hover { background:#1e40af; box-shadow:0 10px 22px rgba(37,99,235,.34); }
@@ -211,7 +210,7 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
     transition:box-shadow .16s var(--ease), border-color .16s var(--ease), transform .16s var(--ease), background .16s var(--ease);
 }
 .ws-card::before { display:none; }
-.ws-card:hover { border-color:var(--line-2); box-shadow:0 16px 36px var(--shadow-strong); transform:translateY(-2px); }
+.ws-card:hover { border-color:var(--line-2); }
 .ws-card.dragging { box-shadow:0 20px 48px var(--shadow-strong); border-color:var(--line-2); transform:none; z-index:50; cursor:grabbing; transition:none; }
 .ws-card.cc-marked { border-color:var(--line-2); }
 .ws-card.cut { opacity:.56; border-style:dashed; }
@@ -418,7 +417,7 @@ html[data-studio-scale="off"].studio-scale-managed .ws-paste-btn span {
 .storage-grid { flex:1; min-height:0; overflow:auto; padding:14px 18px; display:grid; grid-template-columns:repeat(auto-fill,minmax(172px,1fr)); grid-auto-rows:max-content; gap:12px; align-content:start; }
 .storage-empty { grid-column:1/-1; min-height:220px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--faint); font-size:12px; text-align:center; }
 .storage-card { position:relative; min-height:193px; align-self:start; overflow:hidden; border-radius:9px; border:1px solid var(--line); background:var(--card-solid); cursor:pointer; transition:border-color .15s,transform .15s; }
-.storage-card:hover { transform:translateY(-1px); border-color:var(--line-2); }.storage-card.selected { border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.2); }
+.storage-card:hover { border-color:var(--line-2); }.storage-card.selected { border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.2); }
 .storage-thumb { position:relative; height:138px; min-height:138px; display:flex; align-items:center; justify-content:center; background:var(--soft); overflow:hidden; }
 .storage-thumb img,.storage-thumb video { width:100%; height:100%; object-fit:cover; }.storage-thumb audio { width:90%; }.storage-thumb > svg { width:34px; height:34px; color:var(--faint); }
 .storage-video-mark { position:absolute; right:7px; bottom:7px; display:flex; align-items:center; gap:3px; padding:3px 6px; border-radius:999px; background:rgba(15,23,42,.82); color:#fff; font-size:9px; font-weight:800; pointer-events:none; }.storage-video-mark svg { width:10px; height:10px; fill:currentColor; }

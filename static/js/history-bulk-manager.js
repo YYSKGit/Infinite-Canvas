@@ -43,7 +43,7 @@
                 text-transform: uppercase; cursor: pointer;
                 transition: all .25s cubic-bezier(.4,0,.2,1); white-space: nowrap;
             }
-            .hbm-btn:hover { border-color: #111827; transform: translateY(-1px); }
+            .hbm-btn:hover { border-color: #111827; }
             .hbm-btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
             .hbm-btn.hbm-primary { background: #111827; color: #fff; border-color: #111827; }
             .hbm-btn.hbm-danger { background: #dc2626; color: #fff; border-color: #dc2626; }

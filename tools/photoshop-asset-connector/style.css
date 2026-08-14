@@ -372,7 +372,6 @@ sp-picker.compact-picker {
   border-color: var(--line-2);
   background: var(--soft-2);
   color: var(--text);
-  transform: translateY(-1px);
 }
 
 .icon-btn {
@@ -405,7 +404,6 @@ sp-picker.compact-picker {
   background: #f4f5ef;
   border-color: #f4f5ef;
   color: var(--strong-text);
-  transform: translateY(-1px);
 }
 
 .primary {
@@ -573,8 +571,6 @@ button[disabled], .primary[disabled], .primary-sm[disabled], .btn[disabled], .ic
 
 .card:hover {
   border-color: var(--line-2);
-  transform: translateY(-1px);
-  box-shadow: 0 12px 22px var(--shadow);
 }
 
 .card.selected {
