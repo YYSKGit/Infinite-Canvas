@@ -12,8 +12,10 @@ test('Smart Canvas submits structured size intent beside the legacy pixel size',
     assert.match(smartCanvasSource, /quality:String\(settings\.quality \|\| 'auto'\)/);
 });
 
-test('API settings saves hidden per-model capabilities without adding UI', () => {
+test('API settings saves and exposes editable per-model capabilities', () => {
     assert.match(apiSettingsSource, /image_capabilities:\(item\.image_capabilities/);
     assert.match(apiSettingsSource, /item\.image_capabilities\[newName\] = capability/);
     assert.match(apiSettingsSource, /delete item\.image_capabilities\[removed\]/);
+    assert.match(apiSettingsSource, /function veniceImageCapabilityHtml/);
+    assert.match(apiSettingsSource, /function updateVeniceImageCapability/);
 });
