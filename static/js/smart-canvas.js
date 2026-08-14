@@ -824,14 +824,14 @@ let settings = {
     provider_id:'',
     model:'',
     ratio:'square',
-    resolution:'auto',
+    resolution:'1k',
     customRatio:'',
     customRatioWidth:'',
     customRatioHeight:'',
     customSize:'',
     customWidth:'',
     customHeight:'',
-    quality:'auto',
+    quality:'medium',
     count:1,
     videoProvider:'',
     videoModel:'',
@@ -2825,7 +2825,7 @@ function isGptImageAutoSizeModel(model){
         || compact.endsWith('gptimage2');
 }
 function defaultSmartApiResolution(model){
-    return isGptImageAutoSizeModel(model) ? 'auto' : '1k';
+    return '1k';
 }
 function mediaItemForStorage(item){
     if(!item || typeof item !== 'object') return item;
@@ -5565,9 +5565,12 @@ function sanitizeSmartApiSelection(target=settings){
         if(models.length && !models.includes(target.model)) target.model = models[0] || '';
     }
     if((target.engine || 'api') === 'api' && (target.apiKind || 'image') !== 'video'){
-        const allowAuto = isGptImageAutoSizeModel(target.model);
-        if(!target.resolution) target.resolution = allowAuto ? 'auto' : '1k';
-        if(!allowAuto && target.resolution === 'auto') target.resolution = '1k';
+        if(String(target.resolution || '').toLowerCase() === 'auto'){
+            target.ratio = 'auto';
+            target.resolution = '1k';
+        }
+        if(!target.resolution) target.resolution = '1k';
+        normalizeImageSettingsForCapabilities(target);
     }
     if(target.videoProvider){
         const models = providerVideoModels(target.videoProvider);
@@ -5680,6 +5683,58 @@ function renderVideoResolutionControl(){
 function renderVideoToggleControl(key, label){
     const on = !!settings[key];
     return `<button type="button" class="setting-check ${on ? 'active' : ''}" data-toggle-param="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
+}
+function normalizeImageGenerationCount(value){
+    const count = Math.max(1, Number(value) || 1);
+    if(count >= 4) return 4;
+    if(count >= 2) return 2;
+    return 1;
+}
+function imageProviderDescriptor(source=settings){
+    const providerId = String(source?.provider_id || '').trim();
+    const provider = providerId === 'volcengine'
+        ? volcengineProvider()
+        : ((apiProviders || []).find(item => String(item?.id || '').trim() === providerId) || apiProviderById(providerId));
+    const model = String(source?.model || '').trim();
+    const normalizedModel = model.toLowerCase().replace(/_/g, '-');
+    const capabilities = provider?.image_capabilities && typeof provider.image_capabilities === 'object'
+        ? provider.image_capabilities
+        : {};
+    const capability = Object.entries(capabilities).find(([key]) => String(key || '').trim().toLowerCase().replace(/_/g, '-') === normalizedModel)?.[1] || {};
+    return {provider, providerId, model, capability};
+}
+function imageCapabilitiesFor(source=settings){
+    const descriptor = imageProviderDescriptor(source);
+    const rawMode = String(descriptor.capability?.size_mode || '').trim().toLowerCase().replace(/-/g, '_');
+    return {
+        sizeMode:['pixel','aspect','aspect_resolution'].includes(rawMode) ? rawMode : '',
+        supportsQuality:descriptor.capability?.supports_quality === true
+    };
+}
+function normalizeImageSettingsForCapabilities(target=settings){
+    if(!target || typeof target !== 'object') return target;
+    const caps = imageCapabilitiesFor(target);
+    if(String(target.resolution || '').toLowerCase() === 'auto'){
+        target.ratio = 'auto';
+        target.resolution = '1k';
+    }
+    const validResolutions = new Set(['1k','2k','4k','custom']);
+    target.resolution = String(target.resolution || '1k').toLowerCase();
+    if(!validResolutions.has(target.resolution)) target.resolution = '1k';
+    const validRatios = new Set(['auto','square','portrait','landscape','portrait43','landscape43','story','wide','ultrawide','ultratall','source']);
+    if(!validRatios.has(String(target.ratio || ''))) target.ratio = 'square';
+    // Pixel-only contracts need concrete dimensions, which cannot be derived
+    // from an automatic aspect ratio without inventing a square fallback.
+    if(caps.sizeMode === 'pixel' && target.ratio === 'auto') target.ratio = 'square';
+    if(!['low','medium','high'].includes(String(target.quality || '').toLowerCase())) target.quality = 'medium';
+    else target.quality = String(target.quality).toLowerCase();
+    target.count = normalizeImageGenerationCount(target.count);
+    return target;
+}
+function imageQualityForRequest(source=settings){
+    if(!imageCapabilitiesFor(source).supportsQuality) return '';
+    const quality = String(source?.quality || '').trim().toLowerCase();
+    return ['low','medium','high'].includes(quality) ? quality : 'medium';
 }
 function videoProviderDescriptor(source=settings){
     const providerId = String(source?.videoProvider || '').trim();
@@ -5875,20 +5930,105 @@ function renderVideoSettingsControl(){
         .filter(Boolean)
         .map(content => renderVideoSettingSection('', content, 'video-settings-parameter-section'))
         .join('');
-    return `<div class="smart-control video-settings-control">
-        <button class="smart-pill video-settings-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
+    return `<div class="smart-control parameter-settings-control video-settings-control">
+        <button class="smart-pill parameter-settings-pill video-settings-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
             <i data-lucide="sliders-horizontal"></i>
             <span class="video-settings-summary">${escapeHtml(summaryParts.join(' · '))}</span>
             ${audioSummary}
             <i data-lucide="chevron-up" class="pill-caret"></i>
         </button>
-        <div class="smart-popover video-settings-popover" role="dialog" aria-label="视频参数">
+        <div class="smart-popover parameter-settings-popover video-settings-popover" role="dialog" aria-label="视频参数">
             ${renderVideoSettingSection(tr('smart.videoAspect'), aspectHtml)}
             ${renderVideoSettingSection(tr('smart.videoResolution'), resolutionHtml)}
             ${renderVideoSettingSection(tr('smart.videoDuration'), durationHtml)}
             ${generalSettingsHtml}
             ${renderVideoSettingSection('素材用途', referenceHtml)}
             ${advancedSettingsHtml}
+        </div>
+    </div>`;
+}
+function renderImageSettingSection(title, content, className=''){
+    if(!content) return '';
+    return `<section class="image-settings-section ${escapeHtml(className)}">
+        ${title ? `<div class="image-settings-section-title">${escapeHtml(title)}</div>` : ''}
+        ${content}
+    </section>`;
+}
+function imageSettingsSummaryParts(source=settings){
+    const caps = imageCapabilitiesFor(source);
+    const count = normalizeImageGenerationCount(source?.count);
+    const resolution = String(source?.resolution || '1k').toLowerCase();
+    if(resolution === 'custom'){
+        const size = String(source?.customSize || '').trim() || tr('smart.custom');
+        return [size, ...(caps.supportsQuality ? [imageQualityLabel(source?.quality)] : []), `${count}${tr('smart.countUnit') ? ' ' + tr('smart.countUnit') : ''}`];
+    }
+    const ratio = String(source?.ratio || 'square');
+    const parts = [ratio === 'auto' ? tr('smart.imageAspectAuto') : ratioLabel('', source)];
+    if(caps.supportsQuality) parts.push(imageQualityLabel(source?.quality));
+    if(caps.sizeMode !== 'aspect') parts.push(resolution.toUpperCase());
+    parts.push(`${count}${tr('smart.countUnit') ? ' ' + tr('smart.countUnit') : ''}`);
+    return parts;
+}
+function imageQualityLabel(value){
+    const labels = {
+        low:tr('smart.qualityLowFull'),
+        medium:tr('smart.qualityStandard'),
+        high:tr('smart.qualityHighFull')
+    };
+    return labels[String(value || '').toLowerCase()] || labels.medium;
+}
+function syncImageSettingsSelection(ctrl){
+    if(!ctrl) return;
+    normalizeImageSettingsForCapabilities(settings);
+    ctrl.querySelectorAll('[data-image-setting-param]').forEach(button => {
+        const key = button.dataset.imageSettingParam;
+        button.classList.toggle('active', String(settings[key] ?? '') === button.dataset.imageSettingValue);
+    });
+    const summary = ctrl.querySelector('.image-settings-summary');
+    if(summary) summary.textContent = imageSettingsSummaryParts(settings).join(' · ');
+    if(settings.resolution !== 'custom') ctrl.querySelector('.image-custom-size-note')?.remove();
+}
+function renderImageSettingsControl(){
+    normalizeImageSettingsForCapabilities(settings);
+    const caps = imageCapabilitiesFor(settings);
+    const ratio = String(settings.ratio || 'square');
+    const resolution = String(settings.resolution || '1k').toLowerCase();
+    const quality = String(settings.quality || 'medium').toLowerCase();
+    const count = normalizeImageGenerationCount(settings.count);
+    const sourceRatio = sourceImageRatioLabel('');
+    const ratioOptions = [
+        ['auto',tr('smart.imageAspectAuto')],
+        ['square','1:1'], ['portrait','2:3'], ['landscape','3:2'], ['portrait43','3:4'], ['landscape43','4:3'],
+        ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'], ['ultratall','9:21'],
+        ...(sourceRatio ? [['source',sourceRatio]] : [])
+    ];
+    const autoDisabled = caps.sizeMode === 'pixel';
+    const qualityHtml = caps.supportsQuality ? `<div class="image-quality-grid">
+        ${['low','medium','high'].map(value => `<button type="button" class="${value === quality ? 'active' : ''}" data-image-setting-param="quality" data-image-setting-value="${value}">${escapeHtml(imageQualityLabel(value))}</button>`).join('')}
+    </div>` : '';
+    const resolutionHtml = caps.sizeMode === 'aspect' ? '' : `<div class="image-resolution-grid">
+        ${['1k','2k','4k'].map(value => `<button type="button" class="${value === resolution ? 'active' : ''}" data-image-setting-param="resolution" data-image-setting-value="${value}">${value.toUpperCase()}</button>`).join('')}
+    </div>`;
+    const ratioHtml = `<div class="image-ratio-grid">
+        ${ratioOptions.map(([value,label]) => `<button type="button" class="image-ratio-option ${value === ratio ? 'active' : ''}" data-image-setting-param="ratio" data-image-setting-value="${escapeHtml(value)}" ${value === 'auto' && autoDisabled ? `disabled title="${escapeHtml(tr('smart.imageAspectAutoPixelDisabled'))}"` : ''}><span class="ratio-icon ${ratioIconClass(value)}"></span><span>${escapeHtml(label)}</span></button>`).join('')}
+    </div>`;
+    const countHtml = `<div class="image-count-grid">
+        ${[1,2,4].map(value => `<button type="button" class="${value === count ? 'active' : ''}" data-image-setting-param="count" data-image-setting-value="${value}">${value}${escapeHtml(tr('smart.countUnit'))}</button>`).join('')}
+    </div>`;
+    const exactSizeLabel = String(tr('smart.currentExactSize')).replace('{size}', settings.customSize || tr('smart.custom'));
+    const customNote = resolution === 'custom' ? `<div class="image-custom-size-note"><span>${escapeHtml(exactSizeLabel)}</span></div>` : '';
+    return `<div class="smart-control parameter-settings-control image-settings-control">
+        <button class="smart-pill parameter-settings-pill image-settings-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <i data-lucide="sliders-horizontal"></i>
+            <span class="image-settings-summary">${escapeHtml(imageSettingsSummaryParts(settings).join(' · '))}</span>
+            <i data-lucide="chevron-up" class="pill-caret"></i>
+        </button>
+        <div class="smart-popover parameter-settings-popover image-settings-popover" role="dialog" aria-label="${escapeHtml(tr('smart.imageParameters'))}">
+            ${renderImageSettingSection(tr('smart.imageQuality'), qualityHtml)}
+            ${renderImageSettingSection(tr('smart.imageResolution'), resolutionHtml)}
+            ${customNote}
+            ${renderImageSettingSection(tr('smart.imageAspect'), ratioHtml)}
+            ${renderImageSettingSection(tr('smart.count'), countHtml)}
         </div>
     </div>`;
 }
@@ -6397,6 +6537,15 @@ function veniceImageQuoteHasReferenceImage(subject){
     const request = buildPromptRequest(subject, defaultRefs, false, smartLoopContext);
     return imageRefsOnly(request.refs).length > 0;
 }
+function veniceImageQuoteRequestPayload(subject){
+    return {
+        provider_id:String(settings.provider_id || 'venice'),
+        model:String(settings.model || ''),
+        resolution:veniceImageQuoteResolution(),
+        quality:imageQualityForRequest(settings),
+        has_reference_image:veniceImageQuoteHasReferenceImage(subject)
+    };
+}
 function syncVeniceImageQuote(){
     const active = settings.engine === 'api'
         && settings.apiKind !== 'video'
@@ -6407,22 +6556,14 @@ function syncVeniceImageQuote(){
     }
     const subject = activeSettingsSubject() || activeComposerNode();
     const taskCount = veniceImageQuoteTaskCount(subject);
-    const sizeSpec = imageSizeSpecForRun(settings);
-    const payload = {
-        provider_id:String(settings.provider_id || 'venice'),
-        model:String(settings.model || ''),
-        resolution:sizeSpec.resolution || veniceImageQuoteResolution(),
-        size:sizeForRun(settings),
-        size_spec:sizeSpec,
-        quality:String(settings.quality || 'auto'),
-        has_reference_image:veniceImageQuoteHasReferenceImage(subject)
-    };
+    const payload = veniceImageQuoteRequestPayload(subject);
     if(!payload.model){
         setVeniceImageQuoteStatus('error', '暂无报价');
         return;
     }
     const requestBody = JSON.stringify(payload);
-    const signature = JSON.stringify({...payload, task_count:taskCount});
+    // 比例不参与 Venice 报价；数量只在本地乘单张价格，也不应触发新的上游请求。
+    const signature = requestBody;
     const subjectId = String(subject?.id || 'unbound');
     const activeKey = `${subjectId}:${signature}`;
     const cached = subject?.veniceImageQuoteCache?.signature === signature
@@ -6434,7 +6575,6 @@ function syncVeniceImageQuote(){
         renderVeniceImageQuoteAmount(quote, taskCount);
         return;
     }
-    // 上游仍只询一次单任务价格；本地任务数进入缓存签名，避免拆分数量变化后显示旧总价。
     if(activeKey === veniceImageQuoteSignature) return;
     veniceImageQuoteSignature = activeKey;
     if(veniceImageQuoteTimer) clearTimeout(veniceImageQuoteTimer);
@@ -6465,7 +6605,7 @@ function syncVeniceImageQuote(){
                 subject.veniceImageQuoteCache = {signature, quote, usd, cny, updatedAt:cache.updatedAt};
                 scheduleSave();
             }
-            renderVeniceImageQuoteAmount(quote, taskCount);
+            renderVeniceImageQuoteAmount(quote, veniceImageQuoteTaskCount(subject));
         } catch(error) {
             if(error?.name === 'AbortError') return;
             if(requestToken !== veniceImageQuoteRequestToken || activeKey !== veniceImageQuoteSignature) return;
@@ -6614,6 +6754,7 @@ function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSi
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
     const resolutionKey = resolutionValue || '1k';
+    if(ratioValue === 'auto') return resolutionKey;
     if(ratioValue === 'custom' || ratioValue === 'source'){
         const parsed = parseRatioValue(customRatioValue);
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
@@ -6649,6 +6790,7 @@ function imageSizeSpecForRun(sourceSettings=settings, prefix=''){
         };
     }
     const rawRatio = String(sourceSettings?.[ratioKey] || 'square');
+    if(rawRatio === 'auto') return {mode:'auto_aspect', resolution};
     const aspectRatio = rawRatio === 'custom' || rawRatio === 'source'
         ? String(sourceSettings?.[customRatioKey] || '').trim()
         : (ratioMap[rawRatio] || '1:1');
@@ -6657,10 +6799,12 @@ function imageSizeSpecForRun(sourceSettings=settings, prefix=''){
 function normalizeApiSizeSettings(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
-    const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
-    if(!settings[resKey]) settings[resKey] = allowAuto ? 'auto' : '1k';
-    if(!allowAuto && settings[resKey] === 'auto') settings[resKey] = '1k';
-    if(settings[resKey] === 'auto' && !settings[ratioKey]) settings[ratioKey] = 'square';
+    if(!prefix && String(settings[resKey] || '').toLowerCase() === 'auto'){
+        settings[ratioKey] = 'auto';
+        settings[resKey] = '1k';
+    }
+    if(!settings[resKey]) settings[resKey] = '1k';
+    if(!settings[ratioKey]) settings[ratioKey] = 'square';
 }
 async function ensureComfyWorkflow(name){
     if(!name) return null;
@@ -6679,22 +6823,24 @@ function comfyParamValue(field){
 }
 function updateProviderModels(){ renderDynamicParams(); }
 function controlTypeKey(el){
-    return el ? Array.from(el.classList).find(c => c !== 'smart-control' && c.endsWith('-control')) || '' : '';
+    if(!el) return '';
+    const controlClasses = Array.from(el.classList).filter(c => c !== 'smart-control' && c.endsWith('-control'));
+    return controlClasses.find(c => c !== 'parameter-settings-control') || controlClasses[0] || '';
 }
-function clearVideoSettingsPopoverPosition(ctrl){
-    const popover = ctrl?.querySelector?.('.video-settings-popover');
+function clearParameterSettingsPopoverPosition(ctrl){
+    const popover = ctrl?.querySelector?.('.parameter-settings-popover');
     if(!popover) return;
     popover.style.removeProperty('left');
     popover.style.removeProperty('top');
     popover.style.removeProperty('right');
     popover.style.removeProperty('bottom');
     popover.style.removeProperty('transform');
-    delete ctrl._videoPopoverPosition;
+    delete ctrl._parameterPopoverPosition;
 }
-function captureVideoSettingsPopoverPosition(ctrl){
-    const popover = ctrl?.querySelector?.('.video-settings-popover');
+function captureParameterSettingsPopoverPosition(ctrl){
+    const popover = ctrl?.querySelector?.('.parameter-settings-popover');
     if(!popover) return null;
-    clearVideoSettingsPopoverPosition(ctrl);
+    clearParameterSettingsPopoverPosition(ctrl);
     // Measure the final resting position, not the hidden 4px entrance offset.
     popover.style.translate = 'none';
     const popoverRect = popover.getBoundingClientRect();
@@ -6702,71 +6848,71 @@ function captureVideoSettingsPopoverPosition(ctrl){
     popover.style.removeProperty('translate');
     const scaleX = ctrl.offsetWidth > 0 ? ctrlRect.width / ctrl.offsetWidth : 1;
     const scaleY = ctrl.offsetHeight > 0 ? ctrlRect.height / ctrl.offsetHeight : 1;
-    ctrl._videoPopoverPosition = {
+    ctrl._parameterPopoverPosition = {
         left:(popoverRect.left - ctrlRect.left) / (scaleX || 1),
         top:(popoverRect.top - ctrlRect.top) / (scaleY || 1)
     };
-    return ctrl._videoPopoverPosition;
+    return ctrl._parameterPopoverPosition;
 }
-function applyVideoSettingsPopoverPosition(ctrl, position=ctrl?._videoPopoverPosition){
-    const popover = ctrl?.querySelector?.('.video-settings-popover');
+function applyParameterSettingsPopoverPosition(ctrl, position=ctrl?._parameterPopoverPosition){
+    const popover = ctrl?.querySelector?.('.parameter-settings-popover');
     if(!popover || !position) return;
-    ctrl._videoPopoverPosition = {left:Number(position.left) || 0, top:Number(position.top) || 0};
-    popover.style.left = `${ctrl._videoPopoverPosition.left}px`;
-    popover.style.top = `${ctrl._videoPopoverPosition.top}px`;
+    ctrl._parameterPopoverPosition = {left:Number(position.left) || 0, top:Number(position.top) || 0};
+    popover.style.left = `${ctrl._parameterPopoverPosition.left}px`;
+    popover.style.top = `${ctrl._parameterPopoverPosition.top}px`;
     popover.style.right = 'auto';
     popover.style.bottom = 'auto';
     popover.style.transform = 'none';
 }
-function videoSettingsHasKeyboardFocus(ctrl){
+function parameterSettingsHasKeyboardFocus(ctrl){
     return Boolean(ctrl?.querySelector?.(':focus-visible'));
 }
-function videoSettingsShouldBeOpen(ctrl){
+function parameterSettingsShouldBeOpen(ctrl){
     return Boolean(ctrl && (
         (ctrl.matches(':hover') && ctrl.classList.contains('hover-armed'))
         || ctrl.classList.contains('pinned')
         || ctrl.classList.contains('interacting')
-        || videoSettingsHasKeyboardFocus(ctrl)
+        || parameterSettingsHasKeyboardFocus(ctrl)
     ));
 }
-function openVideoSettingsControl(ctrl, position=null){
-    if(!ctrl?.classList?.contains('video-settings-control')) return;
-    const popover = ctrl.querySelector('.video-settings-popover');
+function openParameterSettingsControl(ctrl, position=null){
+    if(!ctrl?.classList?.contains('parameter-settings-control')) return;
+    const popover = ctrl.querySelector('.parameter-settings-popover');
     if(!popover) return;
-    if(position) applyVideoSettingsPopoverPosition(ctrl, position);
-    else if(!ctrl._videoPopoverPosition){
-        const captured = captureVideoSettingsPopoverPosition(ctrl);
-        if(captured) applyVideoSettingsPopoverPosition(ctrl, captured);
+    if(position) applyParameterSettingsPopoverPosition(ctrl, position);
+    else if(!ctrl._parameterPopoverPosition){
+        const captured = captureParameterSettingsPopoverPosition(ctrl);
+        if(captured) applyParameterSettingsPopoverPosition(ctrl, captured);
     }
     // Commit the hidden vertical offset before opening so only the Y entrance
     // motion animates; fixed left/top never participate in the transition.
     popover.getBoundingClientRect();
     ctrl.classList.add('is-open');
-    ctrl.querySelector('.video-settings-pill')?.setAttribute('aria-expanded', 'true');
+    ctrl.querySelector('.parameter-settings-pill')?.setAttribute('aria-expanded', 'true');
 }
-function closeVideoSettingsControl(ctrl){
-    if(!ctrl?.classList?.contains('video-settings-control')) return;
+function closeParameterSettingsControl(ctrl){
+    if(!ctrl?.classList?.contains('parameter-settings-control')) return;
     ctrl.classList.remove('is-open');
-    ctrl.querySelector('.video-settings-pill')?.setAttribute('aria-expanded', 'false');
+    ctrl.querySelector('.parameter-settings-pill')?.setAttribute('aria-expanded', 'false');
     // Keep the locked position while opacity fades. It is reset invisibly
     // before the next fresh open, so the closing frame can never jump.
 }
-function syncVideoSettingsOpenState(ctrl){
-    if(!ctrl?.classList?.contains('video-settings-control')) return;
-    if(videoSettingsShouldBeOpen(ctrl)){
+function syncParameterSettingsOpenState(ctrl){
+    if(!ctrl?.classList?.contains('parameter-settings-control')) return;
+    if(parameterSettingsShouldBeOpen(ctrl)){
         if(!ctrl.classList.contains('is-open')){
-            const opacity = Number.parseFloat(getComputedStyle(ctrl.querySelector('.video-settings-popover')).opacity);
-            if(!(opacity > 0)) clearVideoSettingsPopoverPosition(ctrl);
+            const opacity = Number.parseFloat(getComputedStyle(ctrl.querySelector('.parameter-settings-popover')).opacity);
+            if(!(opacity > 0)) clearParameterSettingsPopoverPosition(ctrl);
         }
-        openVideoSettingsControl(ctrl);
+        openParameterSettingsControl(ctrl);
     } else {
-        closeVideoSettingsControl(ctrl);
+        closeParameterSettingsControl(ctrl);
     }
 }
 // 记住重渲染前哪个控件的弹层是打开的：pinned=点击药丸锁定，interacting=悬浮打开后点了里面的参数。
 // 重渲染会重建 DOM、丢掉这两个状态，所以渲染后要按原样恢复，否则点一下就收起来了。
 function openControlState(){
-    const el = dynamicParams?.querySelector('.video-settings-control.is-open')
+    const el = dynamicParams?.querySelector('.parameter-settings-control.is-open')
         || dynamicParams?.querySelector('.smart-control.pinned, .smart-control.interacting');
     const key = controlTypeKey(el);
     if(!key) return null;
@@ -6775,7 +6921,7 @@ function openControlState(){
         pinned:el.classList.contains('pinned'),
         interacting:el.classList.contains('interacting'),
         isOpen:el.classList.contains('is-open'),
-        popoverPosition:el._videoPopoverPosition ? {...el._videoPopoverPosition} : null
+        popoverPosition:el._parameterPopoverPosition ? {...el._parameterPopoverPosition} : null
     };
 }
 function restoreOpenControl(state){
@@ -6784,10 +6930,10 @@ function restoreOpenControl(state){
     if(!match) return;
     if(state.pinned) match.classList.add('pinned');
     if(state.interacting) match.classList.add('interacting');
-    if(state.isOpen && match.classList.contains('video-settings-control')){
-        openVideoSettingsControl(match, state.popoverPosition);
+    if(state.isOpen && match.classList.contains('parameter-settings-control')){
+        openParameterSettingsControl(match, state.popoverPosition);
         requestAnimationFrame(() => {
-            if(match.isConnected) syncVideoSettingsOpenState(match);
+            if(match.isConnected) syncParameterSettingsOpenState(match);
         });
     }
 }
@@ -6904,14 +7050,13 @@ function renderApiParams(){
     if(!settings.provider_id || !providers.some(p => p.id === settings.provider_id)) settings.provider_id = providers[0]?.id || '';
     const models = filterJimengImageModels(providerImageModels(settings.provider_id));
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
-    // 切换平台/模型时保留用户已选的分辨率（记忆），normalizeApiSizeSettings 只会修正非法的 auto。
+    // 图片比例、画质和数量由模型能力统一规整；旧版 resolution:auto 迁移为自动比例 + 1K。
     normalizeApiSizeSettings('');
-    const outpaintLocked = settings.outpaintResolutionLocked === true;
+    normalizeImageSettingsForCapabilities(settings);
     dynamicParams.innerHTML = `
         ${renderProviderControl(providers)}
         ${renderModelControl(models)}
-        ${renderSizePickerControl('', true)}
-        ${renderCountVisualControl()}
+        ${renderImageSettingsControl()}
     `;
 }
 function renderApiVideoParams(){
@@ -6933,12 +7078,11 @@ function renderVolcengineParams(){
     settings.provider_id = 'volcengine';
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
     normalizeApiSizeSettings('');
-    const outpaintLocked = settings.outpaintResolutionLocked === true;
+    normalizeImageSettingsForCapabilities(settings);
     dynamicParams.innerHTML = `
         ${renderProviderControl(providers)}
         ${renderModelControl(models)}
-        ${renderSizePickerControl('', true)}
-        ${renderCountVisualControl()}
+        ${renderImageSettingsControl()}
     `;
 }
 function renderVolcengineVideoParams(){
@@ -7119,12 +7263,12 @@ function renderSizeControls(prefix='', includeSource=false){
             ${ratios.map(([v,l]) => `<option value="${escapeHtml(v)}" ${v === (settings[ratioKey] || 'square') ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
         </select>`;
 }
-function ratioLabel(prefix=''){
+function ratioLabel(prefix='', source=settings){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const customKey = prefix ? `${prefix}CustomRatio` : 'customRatio';
     const sourceLabel = sourceImageRatioLabel(prefix) || tr('smart.imageRatio');
-    const map = {square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4', landscape43:'4:3', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21', source:sourceLabel, custom:settings[customKey] || tr('smart.custom')};
-    return map[settings[ratioKey] || 'square'] || '1:1';
+    const map = {auto:tr('smart.imageAspectAuto'), square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4', landscape43:'4:3', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21', source:sourceLabel, custom:source?.[customKey] || tr('smart.custom')};
+    return map[source?.[ratioKey] || 'square'] || '1:1';
 }
 function gcdInt(a, b){
     a = Math.abs(Math.round(Number(a) || 0));
@@ -7178,6 +7322,7 @@ function resolutionLabel(prefix=''){
     return value === 'custom' ? (settings[sizeKey] || tr('smart.custom')) : value.toUpperCase();
 }
 function ratioIconClass(value){
+    if(value === 'auto') return 'r-auto';
     if(value === 'portrait') return 'r-portrait';
     if(value === 'portrait43') return 'r-portrait43';
     if(value === 'landscape') return 'r-landscape';
@@ -7397,8 +7542,8 @@ function renderInlineCustomSizeFields(prefix=''){
     </div>`;
 }
 function renderQualityControl(){
-    const value = settings.quality || 'auto';
-    const labels = {auto:tr('smart.qualityAuto'), low:tr('smart.qualityLow'), medium:tr('smart.qualityMid'), high:tr('smart.qualityHigh')};
+    const value = ['low','medium','high'].includes(String(settings.quality || '').toLowerCase()) ? String(settings.quality).toLowerCase() : 'medium';
+    const labels = {low:tr('smart.qualityLowFull'), medium:tr('smart.qualityStandard'), high:tr('smart.qualityHighFull')};
     return `<div class="smart-control quality-control">
         <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(labels[value] || value)}</span></button>
         <div class="smart-popover compact-popover">
@@ -8003,7 +8148,7 @@ function smartComfyRandomValue(field){
     }
     return Math.floor(value);
 }
-function setDynamicSetting(key, value){
+function setDynamicSetting(key, value, options={}){
     const numericKeys = new Set(['count','width','height','videoDuration','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
     const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
     settings[key] = numericKeys.has(key) && value !== '' ? Number(value) : value;
@@ -8017,7 +8162,10 @@ function setDynamicSetting(key, value){
         if(settings.resolution === 'custom') settings.ratio = '';
         else if(!settings.ratio) settings.ratio = 'square';
     }
-    if(key === 'ratio') applySourceRatioToSettings('');
+    if(key === 'ratio'){
+        if(settings.resolution === 'custom') settings.resolution = '1k';
+        applySourceRatioToSettings('');
+    }
     if(key === 'msResolution'){
         if(settings.msResolution === 'custom') settings.msRatio = '';
         else if(!settings.msRatio) settings.msRatio = 'square';
@@ -8056,7 +8204,7 @@ function setDynamicSetting(key, value){
     }
     persistActiveSmartSettings();
     rememberRecentSmartSettings(settings, activeSettingsSubject());
-    if(layoutKeys.has(key)) renderDynamicParams();
+    if(layoutKeys.has(key) && options.render !== false) renderDynamicParams();
     else {
         if(['videoAspect','videoResolution','videoDuration'].includes(key)) syncVeniceVideoQuote();
         syncVeniceImageQuote();
@@ -8064,9 +8212,9 @@ function setDynamicSetting(key, value){
     scheduleSave();
 }
 function closeAllSmartPopovers(){
-    document.querySelectorAll('.smart-control.pinned, .smart-control.interacting, .video-settings-control.is-open').forEach(c => {
+    document.querySelectorAll('.smart-control.pinned, .smart-control.interacting, .parameter-settings-control.is-open').forEach(c => {
         c.classList.remove('pinned', 'interacting');
-        if(c.classList.contains('video-settings-control')) closeVideoSettingsControl(c);
+        if(c.classList.contains('parameter-settings-control')) closeParameterSettingsControl(c);
     });
     disarmDynamicParamHover();
 }
@@ -8074,7 +8222,7 @@ let dynamicParamHoverDisarmFrame = 0;
 function disarmDynamicParamHover(){
     dynamicParams?.querySelectorAll('.smart-control').forEach(ctrl => {
         ctrl.classList.remove('hover-armed');
-        if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+        if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
     });
     dynamicParams?.classList.toggle('hover-reentry-required', dynamicParams.matches(':hover'));
     if(dynamicParamHoverDisarmFrame) cancelAnimationFrame(dynamicParamHoverDisarmFrame);
@@ -8184,7 +8332,7 @@ function bindDynamicParams(){
             if(!nextControl || !dynamicParams.classList.contains('switching-smart-popovers')) return;
             if(switchingFrame) cancelAnimationFrame(switchingFrame);
             switchingFrame = requestAnimationFrame(() => {
-                // The video settings control applies .is-open from mouseenter,
+                // Parameter settings controls apply .is-open from mouseenter,
                 // after this capture handler. Wait for that state before restoring
                 // transitions so its opacity/translate handoff is instantaneous too.
                 void dynamicParams.offsetWidth;
@@ -8202,11 +8350,11 @@ function bindDynamicParams(){
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
             ctrl.classList.remove('interacting', 'hover-armed');
-            if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+            if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
         };
         ctrl.onmouseenter = () => {
             if(ctrl.classList.contains('hover-armed')){
-                if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+                if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
                 revealCurrentPickerOption(ctrl);
             }
         };
@@ -8214,7 +8362,7 @@ function bindDynamicParams(){
             if((event.pointerType && event.pointerType !== 'mouse') || event.buttons) return;
             if(dynamicParamHoverDisarmFrame || dynamicParams.classList.contains('hover-reentry-required')) return;
             if(!ctrl.classList.contains('hover-armed')) ctrl.classList.add('hover-armed');
-            if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+            if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
             revealCurrentPickerOption(ctrl);
         };
         ctrl.onmouseover = () => {
@@ -8222,13 +8370,13 @@ function bindDynamicParams(){
         };
         ctrl.onfocusin = () => {
             revealCurrentPickerOption(ctrl);
-            if(ctrl.classList.contains('video-settings-control')){
-                requestAnimationFrame(() => syncVideoSettingsOpenState(ctrl));
+            if(ctrl.classList.contains('parameter-settings-control')){
+                requestAnimationFrame(() => syncParameterSettingsOpenState(ctrl));
             }
         };
         ctrl.onfocusout = () => {
-            if(ctrl.classList.contains('video-settings-control')){
-                requestAnimationFrame(() => syncVideoSettingsOpenState(ctrl));
+            if(ctrl.classList.contains('parameter-settings-control')){
+                requestAnimationFrame(() => syncParameterSettingsOpenState(ctrl));
             }
         };
     });
@@ -8241,9 +8389,22 @@ function bindDynamicParams(){
             closeAllSmartPopovers();
             if(!wasPinned){
                 ctrl.classList.add('pinned');
-                if(ctrl.classList.contains('video-settings-control')) syncVideoSettingsOpenState(ctrl);
+                if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
                 revealCurrentPickerOption(ctrl);
             }
+        };
+    });
+    dynamicParams.querySelectorAll('[data-image-setting-param]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            markControlInteracting(btn);
+            const ctrl = btn.closest('.image-settings-control');
+            const key = btn.dataset.imageSettingParam;
+            const value = key === 'count' ? Number(btn.dataset.imageSettingValue) : btn.dataset.imageSettingValue;
+            setDynamicSetting(key, value, {render:false});
+            syncImageSettingsSelection(ctrl);
+            syncParameterSettingsOpenState(ctrl);
         };
     });
     dynamicParams.querySelectorAll('[data-video-setting-param]').forEach(btn => {
@@ -8254,7 +8415,7 @@ function bindDynamicParams(){
             const ctrl = btn.closest('.video-settings-control');
             setDynamicSetting(btn.dataset.videoSettingParam, btn.dataset.videoSettingValue);
             syncVideoSettingsSelection(ctrl);
-            syncVideoSettingsOpenState(ctrl);
+            syncParameterSettingsOpenState(ctrl);
         };
     });
     dynamicParams.querySelectorAll('[data-video-bool-param]').forEach(btn => {
@@ -8265,7 +8426,7 @@ function bindDynamicParams(){
             const ctrl = btn.closest('.video-settings-control');
             setDynamicSetting(btn.dataset.videoBoolParam, btn.dataset.videoBoolValue === 'true');
             syncVideoSettingsSelection(ctrl);
-            syncVideoSettingsOpenState(ctrl);
+            syncParameterSettingsOpenState(ctrl);
         };
     });
     dynamicParams.querySelectorAll('[data-video-reference-mode]').forEach(btn => {
@@ -8314,7 +8475,7 @@ function bindDynamicParams(){
             setDynamicSetting('videoDuration', value);
             const ctrl = input.closest('.video-settings-control');
             syncVideoSettingsSelection(ctrl);
-            syncVideoSettingsOpenState(ctrl);
+            syncParameterSettingsOpenState(ctrl);
         };
         input.onclick = event => event.stopPropagation();
     });
@@ -18956,10 +19117,7 @@ async function handleSmartImageDropPayload(payload, targetId='', opts={}){
     }
 }
 function sizeForRun(sourceSettings=settings){
-    const fallbackResolution = sourceSettings.engine === 'api' && isGptImageAutoSizeModel(sourceSettings.model)
-        ? 'auto'
-        : '1k';
-    return apiImageSize(sourceSettings.ratio || 'square', sourceSettings.resolution || fallbackResolution, sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
+    return apiImageSize(sourceSettings.ratio || 'square', sourceSettings.resolution || '1k', sourceSettings.customRatio || '', sourceSettings.customSize || '') || '1024x1024';
 }
 function expectedOutputSize(sourceSettings=settings, options={}){
     if(isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind === 'video'){
@@ -22792,7 +22950,10 @@ function smartImageGenerationRefBatches(refs, runSettings=settings){
 }
 function smartImageGenerationJobs(refs, runSettings=settings){
     const sourceSettings = runSettings || settings;
-    const variations = Math.max(1, Math.min(8, Number(sourceSettings.count || 1)));
+    const apiImage = isApiLikeEngine(sourceSettings.engine) && sourceSettings.apiKind !== 'video';
+    const variations = apiImage
+        ? normalizeImageGenerationCount(sourceSettings.count)
+        : Math.max(1, Math.min(8, Number(sourceSettings.count || 1)));
     return smartImageGenerationRefBatches(refs, sourceSettings).flatMap(batch =>
         Array.from({length:variations}, (_, variationIndex) => ({refs:batch, variationIndex}))
     );
@@ -22830,10 +22991,11 @@ function smartGenerationPreflightError(runSettings=settings, refs=[]){
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null, runContext=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
-    const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.provider_id);
-    const jobs = smartImageGenerationJobs(refs, runSettings);
+    const requestSettings = normalizeImageSettingsForCapabilities({...runSettings});
+    const veniceCreditsToken = beginVeniceCreditsFastRefresh(requestSettings.provider_id);
+    const jobs = smartImageGenerationJobs(refs, requestSettings);
     const count = jobs.length;
-    const veniceImageProvider = isVeniceProviderId(runSettings.provider_id);
+    const veniceImageProvider = isVeniceProviderId(requestSettings.provider_id);
     if(veniceImageProvider) ensureVeniceProgress(runContext, {kind:'image', total:count, estimateMs:VENICE_IMAGE_ESTIMATE_MS});
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
@@ -22841,11 +23003,11 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
     const apiPrompt = String(providerPrompts.api_image || prompt || '').trim() || String(prompt || '');
     const basePayload = {
         prompt:apiPrompt,
-        provider_id:runSettings.provider_id,
-        model:runSettings.model,
-        size:sizeForRun(runSettings),
-        size_spec:imageSizeSpecForRun(runSettings),
-        quality:runSettings.quality || 'auto',
+        provider_id:requestSettings.provider_id,
+        model:requestSettings.model,
+        size:sizeForRun(requestSettings),
+        size_spec:imageSizeSpecForRun(requestSettings),
+        quality:imageQualityForRequest(requestSettings),
         n:1
     };
     const payloads = jobs.map(job => ({

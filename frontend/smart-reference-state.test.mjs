@@ -159,6 +159,7 @@ test('Venice image edits and single-slot RunningHub workflows fan out input imag
         mediaKindForItem:ref => ref.kind || 'image',
         isApiLikeEngine:engine => engine === 'api',
         isVeniceProviderId:providerId => providerId === 'venice',
+        normalizeImageGenerationCount:value => value >= 4 ? 4 : (value >= 2 ? 2 : 1),
         rhActiveFields:() => Array.from({length:runningHubImageFields}, (_, index) => ({fieldType:'IMAGE', index})),
         rhFieldKind:field => field.fieldType === 'IMAGE' ? 'image' : 'text'
     });
@@ -202,6 +203,7 @@ test('fan-out is scoped away from Venice video and Comfy generation', () => {
         mediaKindForItem:ref => ref.kind || 'image',
         isApiLikeEngine:engine => engine === 'api',
         isVeniceProviderId:providerId => providerId === 'venice',
+        normalizeImageGenerationCount:value => value >= 4 ? 4 : (value >= 2 ? 2 : 1),
         rhActiveFields:() => [],
         rhFieldKind:() => 'text'
     });
@@ -233,6 +235,7 @@ test('Venice fan-out submits one reference image per API task', async () => {
         mediaKindForItem:ref => ref.kind || 'image',
         isApiLikeEngine:engine => engine === 'api',
         isVeniceProviderId:providerId => providerId === 'venice',
+        normalizeImageGenerationCount:value => value >= 4 ? 4 : (value >= 2 ? 2 : 1),
         rhActiveFields:() => [],
         rhFieldKind:() => 'text',
         beginVeniceCreditsFastRefresh:() => 'credits-token',
@@ -243,6 +246,8 @@ test('Venice fan-out submits one reference image per API task', async () => {
         smartPayloadReferenceMediaCounts:() => ({total:1, images:1, videos:0, audios:0}),
         sizeForRun:() => '1024x1024',
         imageSizeSpecForRun:() => ({mode:'preset', aspect_ratio:'1:1', resolution:'1K'}),
+        normalizeImageSettingsForCapabilities:value => ({...value, quality:'medium'}),
+        imageQualityForRequest:value => value.quality || '',
         rememberSmartRunTaskId:() => {},
         runningHubProgressNodeForContext:() => null,
         tr:key => key,
@@ -519,6 +524,40 @@ test('Venice image quote totals use the expanded fan-out task count', () => {
     assert.equal(rendered.status, 'ready');
     assert.equal(rendered.text, '44');
     assert.match(rendered.title, /× 4 = 44/);
+});
+
+test('Venice image quote payload excludes aspect ratio and local task count', () => {
+    const settings = {
+        provider_id:'venice',
+        model:'gpt-image-2',
+        ratio:'1:1',
+        resolution:'2k',
+        quality:'high',
+        count:1
+    };
+    const loaded = loadProductionFunctions(['veniceImageQuoteRequestPayload'], {
+        settings,
+        veniceImageQuoteResolution:() => String(settings.resolution).toUpperCase(),
+        imageQualityForRequest:() => settings.quality,
+        veniceImageQuoteHasReferenceImage:() => false
+    });
+
+    const first = loaded.veniceImageQuoteRequestPayload({id:'subject'});
+    settings.ratio = '16:9';
+    settings.count = 4;
+    const second = loaded.veniceImageQuoteRequestPayload({id:'subject'});
+
+    assert.deepEqual({...first}, {
+        provider_id:'venice',
+        model:'gpt-image-2',
+        resolution:'2K',
+        quality:'high',
+        has_reference_image:false
+    });
+    assert.deepEqual({...second}, {...first});
+    assert.equal('size' in first, false);
+    assert.equal('size_spec' in first, false);
+    assert.equal('task_count' in first, false);
 });
 
 test('Venice credit fast refresh is scoped to Venice providers only', () => {

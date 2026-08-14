@@ -7,9 +7,20 @@ const apiSettingsSource = fs.readFileSync(new URL('../static/js/api-settings.js'
 
 test('Smart Canvas submits structured size intent beside the legacy pixel size', () => {
     assert.match(smartCanvasSource, /function imageSizeSpecForRun\(/);
-    assert.match(smartCanvasSource, /size_spec:imageSizeSpecForRun\(runSettings\)/);
-    assert.match(smartCanvasSource, /size_spec:sizeSpec/);
-    assert.match(smartCanvasSource, /quality:String\(settings\.quality \|\| 'auto'\)/);
+    assert.match(smartCanvasSource, /mode:'auto_aspect', resolution/);
+    assert.match(smartCanvasSource, /size_spec:imageSizeSpecForRun\(requestSettings\)/);
+    assert.match(smartCanvasSource, /quality:imageQualityForRequest\(requestSettings\)/);
+});
+
+test('Smart Canvas image settings use the compact image-only option set', () => {
+    assert.match(smartCanvasSource, /function renderImageSettingsControl\(/);
+    assert.match(smartCanvasSource, /\['low','medium','high'\]\.map/);
+    assert.match(smartCanvasSource, /\['1k','2k','4k'\]\.map/);
+    assert.match(smartCanvasSource, /\[1,2,4\]\.map/);
+    assert.match(smartCanvasSource, /\['auto',tr\('smart\.imageAspectAuto'\)\]/);
+    assert.match(smartCanvasSource, /renderImageSettingsControl\(\)/);
+    assert.match(smartCanvasSource, /setDynamicSetting\(key, value, \{render:false\}\)/);
+    assert.match(smartCanvasSource, /syncImageSettingsSelection\(ctrl\)/);
 });
 
 test('API settings saves and exposes editable per-model capabilities', () => {

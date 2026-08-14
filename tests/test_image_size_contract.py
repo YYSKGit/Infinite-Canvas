@@ -50,6 +50,19 @@ class ImageSizeContractTests(unittest.TestCase):
             "legacy_size": "auto",
         })
 
+    def test_auto_aspect_keeps_resolution_without_inventing_ratio_or_dimensions(self):
+        resolved = main.resolve_image_size_spec(
+            "2K", {"mode": "auto_aspect", "resolution": "2K"},
+        )
+        self.assertEqual(resolved, {
+            "mode": "auto_aspect",
+            "aspect_ratio": "",
+            "resolution": "2K",
+            "width": 0,
+            "height": 0,
+            "legacy_size": "2K",
+        })
+
     def test_invalid_custom_pixels_are_rejected(self):
         with self.assertRaises(HTTPException):
             main.resolve_image_size_spec("", {"mode": "custom_pixels", "width": 0, "height": 1200})
@@ -70,6 +83,79 @@ class ImageSizeContractTests(unittest.TestCase):
 
     def test_gemini_auto_does_not_invent_an_image_config(self):
         self.assertEqual(main.gemini_image_config("auto", {"mode": "auto"}), {})
+
+    def test_auto_aspect_adapters_keep_resolution_and_omit_ratio(self):
+        spec = {"mode": "auto_aspect", "resolution": "2K"}
+        self.assertEqual(main.gemini_image_config("2K", spec), {"imageSize": "2K"})
+        self.assertEqual(main.apimart_size_resolution("2K", spec), ("", "2k"))
+        self.assertEqual(main.runninghub_aspect_from_size("2K", size_spec=spec), "")
+        self.assertEqual(main.runninghub_resolution_from_size("2K", size_spec=spec), "2k")
+
+    def test_generic_openai_auto_aspect_omits_size_and_keeps_selected_quality(self):
+        captured = {}
+        provider = {
+            "id": "custom-openai",
+            "name": "Custom OpenAI",
+            "protocol": "openai",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "test-key",
+            "image_request_mode": "openai",
+        }
+
+        class FakeResponse:
+            status_code = 200
+            text = ""
+            headers = {}
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"data": [{"url": "https://example.invalid/image.png"}]}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+            async def post(self, _url, **kwargs):
+                captured["body"] = kwargs.get("json")
+                return FakeResponse()
+
+        with (
+            patch.object(main, "get_api_provider", return_value=provider),
+            patch.object(main, "provider_env_key_value", return_value="test-key"),
+            patch.object(main.httpx, "AsyncClient", FakeClient),
+        ):
+            asyncio.run(main.generate_ai_image(
+                "prompt", "2K", "medium", "image-model",
+                provider_id="custom-openai",
+                size_spec={"mode": "auto_aspect", "resolution": "2K"},
+            ))
+        self.assertNotIn("size", captured["body"])
+        self.assertEqual(captured["body"]["quality"], "medium")
+
+    def test_api_image_parameter_schema_matches_compact_control(self):
+        provider = {
+            "image_capabilities": {
+                "image-model": {"size_mode": "aspect_resolution", "supports_quality": True},
+                "pixel-model": {"size_mode": "pixel", "supports_quality": False},
+            },
+        }
+        fields = main.build_image_param_fields("api", provider, "image-model")
+        size_field = next(field for field in fields if field["key"] == "size")
+        quality_field = next(field for field in fields if field["key"] == "quality")
+        count_field = next(field for field in fields if field["key"] == "n")
+        self.assertEqual(size_field["ratios"][0], {"value": "auto", "label": "自动"})
+        self.assertEqual([item["value"] for item in size_field["resolutions"]], ["1k", "2k", "4k"])
+        self.assertEqual([item["value"] for item in quality_field["options"]], ["low", "medium", "high"])
+        self.assertEqual(quality_field["default"], "medium")
+        self.assertEqual(count_field["options"], [1, 2, 4])
+
+        pixel_fields = main.build_image_param_fields("api", provider, "pixel-model")
+        pixel_size = next(field for field in pixel_fields if field["key"] == "size")
+        self.assertNotIn("auto", [item["value"] for item in pixel_size["ratios"]])
+        self.assertNotIn("quality", [field["key"] for field in pixel_fields])
 
     def test_semantic_adapters_snap_only_unsupported_custom_ratios(self):
         spec = {"mode": "preset", "aspect_ratio": "7:5", "resolution": "2K"}
@@ -171,6 +257,24 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         self.assertEqual(body["aspect_ratio"], "3:2")
         self.assertEqual(body["resolution"], "2K")
         self.assertEqual(body["quality"], "high")
+
+    def test_auto_aspect_omits_ratio_but_keeps_supported_resolution(self):
+        spec = {"mode": "auto_aspect", "resolution": "2K"}
+        resolution_body = main.venice_outerface_image_body(
+            "prompt", "2K", "gpt-image-2", "user", spec, self.provider,
+        )
+        aspect_body = main.venice_outerface_image_body(
+            "prompt", "2K", "qwen-image-2", "user", spec, self.provider,
+        )
+        pixel_body = main.venice_outerface_image_body(
+            "prompt", "2K", "qwen-image", "user", spec, self.provider,
+        )
+        self.assertNotIn("aspectRatio", resolution_body)
+        self.assertEqual(resolution_body["resolution"], "2K")
+        self.assertNotIn("aspectRatio", aspect_body)
+        self.assertNotIn("resolution", aspect_body)
+        self.assertNotIn("width", pixel_body)
+        self.assertNotIn("height", pixel_body)
 
     def test_quality_is_sent_only_for_models_that_declare_the_selected_option(self):
         supported = main.venice_outerface_image_body(

@@ -5934,6 +5934,7 @@ async def jimeng_prepare_local_media(ref_url, kind="image"):
 
 async def generate_jimeng_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None):
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
+    resolved_size = resolve_image_size_spec(size, size_spec)
     temp_paths = []
     try:
         args = []
@@ -5955,10 +5956,11 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
             args = [
                 "text2image",
                 f"--prompt={prompt}",
-                f"--ratio={jimeng_ratio_from_size(size, size_spec=size_spec)}",
                 f"--resolution_type={jimeng_image_resolution(model, size, 'text2image', size_spec)}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
+            if resolved_size["mode"] != "auto_aspect":
+                args.insert(2, f"--ratio={jimeng_ratio_from_size(size, size_spec=size_spec)}")
             if model_version:
                 args.append(f"--model_version={model_version}")
         raw = await run_jimeng_cli(args, timeout=jimeng_poll_seconds() + 120)
@@ -8798,10 +8800,16 @@ def resolve_image_size_spec(size="", size_spec=None):
     explicit_width = int(data.get("width") or 0)
     explicit_height = int(data.get("height") or 0)
 
-    if data and mode not in {"auto", "preset", "custom_pixels"}:
+    if data and mode not in {"auto", "auto_aspect", "preset", "custom_pixels"}:
         raise HTTPException(status_code=400, detail=f"不支持的图片尺寸模式：{mode or '(empty)'}")
     if mode == "auto" or (not data and raw_size.lower() == "auto"):
         return {"mode": "auto", "aspect_ratio": "", "resolution": "", "width": 0, "height": 0, "legacy_size": "auto"}
+    if mode == "auto_aspect":
+        resolution = image_resolution_tier(data.get("resolution"), "1K")
+        return {
+            "mode": "auto_aspect", "aspect_ratio": "", "resolution": resolution,
+            "width": 0, "height": 0, "legacy_size": resolution,
+        }
 
     if not data:
         preset = IMAGE_SIZE_PRESET_LOOKUP.get((legacy_width, legacy_height))
@@ -8979,6 +8987,8 @@ def gpt_image_2_size_exceeds_supported(size):
 
 def apimart_size_resolution(size, size_spec=None):
     resolved = resolve_image_size_spec(size, size_spec)
+    if resolved["mode"] == "auto_aspect":
+        return "", (resolved["resolution"] or "1K").lower()
     if resolved["mode"] != "auto":
         supported = (
             "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16",
@@ -9045,6 +9055,8 @@ def venice_api_root(provider=None):
 
 def venice_size_aspect_ratio(size, size_spec=None):
     resolved = resolve_image_size_spec(size, size_spec)
+    if resolved.get("mode") == "auto_aspect":
+        return ""
     return resolved.get("aspect_ratio") or "1:1"
 
 def venice_size_resolution(size, size_spec=None):
@@ -9113,15 +9125,18 @@ def compile_venice_image_size(size, model, size_spec=None, provider=None, clamp_
     mode = venice_model_sizing_mode(model, provider)
     compiled = {"sizing_mode": mode}
     if mode == "pixel":
-        width = resolved["width"] or 1024
-        height = resolved["height"] or 1024
-        if clamp_pixels:
-            width, height = venice_outerface_clamp_size(int(width), int(height))
-        compiled.update({"width": int(width), "height": int(height)})
+        if resolved["mode"] != "auto_aspect":
+            width = resolved["width"] or 1024
+            height = resolved["height"] or 1024
+            if clamp_pixels:
+                width, height = venice_outerface_clamp_size(int(width), int(height))
+            compiled.update({"width": int(width), "height": int(height)})
     elif mode == "aspect":
-        compiled["aspect_ratio"] = resolved["aspect_ratio"] or "1:1"
+        if resolved["aspect_ratio"]:
+            compiled["aspect_ratio"] = resolved["aspect_ratio"]
     else:
-        compiled["aspect_ratio"] = resolved["aspect_ratio"] or "1:1"
+        if resolved["aspect_ratio"]:
+            compiled["aspect_ratio"] = resolved["aspect_ratio"]
         compiled["resolution"] = resolved["resolution"] or "1K"
     return compiled
 
@@ -9135,13 +9150,17 @@ def venice_image_request_body(prompt, size, quality, model, size_spec=None, prov
     compiled_size = compile_venice_image_size(size, model, size_spec, provider)
     mode = compiled_size["sizing_mode"]
     if mode == "pixel":
-        body["width"] = max(1, min(1280, compiled_size["width"]))
-        body["height"] = max(1, min(1280, compiled_size["height"]))
+        if "width" in compiled_size and "height" in compiled_size:
+            body["width"] = max(1, min(1280, compiled_size["width"]))
+            body["height"] = max(1, min(1280, compiled_size["height"]))
     elif mode == "aspect":
-        body["aspect_ratio"] = compiled_size["aspect_ratio"]
+        if compiled_size.get("aspect_ratio"):
+            body["aspect_ratio"] = compiled_size["aspect_ratio"]
     else:
-        body["aspect_ratio"] = compiled_size["aspect_ratio"]
-        body["resolution"] = compiled_size["resolution"]
+        if compiled_size.get("aspect_ratio"):
+            body["aspect_ratio"] = compiled_size["aspect_ratio"]
+        if compiled_size.get("resolution"):
+            body["resolution"] = compiled_size["resolution"]
     compiled_quality = compile_venice_image_quality(quality, model, provider)
     if compiled_quality:
         body["quality"] = compiled_quality
@@ -9879,12 +9898,16 @@ def venice_outerface_image_body(prompt, size, model, user_id, size_spec=None, pr
         "variants": 1,
     }
     if mode == "pixel":
-        body.update({"width": compiled_size["width"], "height": compiled_size["height"]})
+        if "width" in compiled_size and "height" in compiled_size:
+            body.update({"width": compiled_size["width"], "height": compiled_size["height"]})
     elif mode == "aspect":
-        body["aspectRatio"] = compiled_size["aspect_ratio"]
+        if compiled_size.get("aspect_ratio"):
+            body["aspectRatio"] = compiled_size["aspect_ratio"]
     else:
-        body["aspectRatio"] = compiled_size["aspect_ratio"]
-        body["resolution"] = compiled_size["resolution"]
+        if compiled_size.get("aspect_ratio"):
+            body["aspectRatio"] = compiled_size["aspect_ratio"]
+        if compiled_size.get("resolution"):
+            body["resolution"] = compiled_size["resolution"]
     compiled_quality = compile_venice_image_quality(quality, model, provider)
     if compiled_quality:
         body["quality"] = compiled_quality
@@ -10168,6 +10191,8 @@ def gemini_image_config(size, size_spec=None):
     resolved = resolve_image_size_spec(size, size_spec)
     if resolved["mode"] == "auto":
         return {}
+    if resolved["mode"] == "auto_aspect":
+        return {"imageSize": resolved["resolution"] or "1K"}
     supported = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9")
     return {
         "aspectRatio": closest_supported_image_aspect(resolved["aspect_ratio"], supported),
@@ -10219,13 +10244,14 @@ def volcengine_image_payload(ref):
 
 async def generate_volcengine_provider_image(prompt, size, model, reference_images=None, provider=None, size_spec=None):
     endpoint = volcengine_endpoint_url(provider)
-    size = normalize_volcengine_size(image_size_legacy_value(resolve_image_size_spec(size, size_spec)), model)
+    resolved_size = resolve_image_size_spec(size, size_spec)
     body = {
         "model": model,
         "prompt": prompt,
-        "size": size,
         "response_format": "url",
     }
+    if resolved_size["mode"] != "auto_aspect":
+        body["size"] = normalize_volcengine_size(image_size_legacy_value(resolved_size), model)
     images = [volcengine_image_payload(ref) for ref in (reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX]]
     images = [value for value in images if value]
     if images:
@@ -10699,6 +10725,8 @@ def runninghub_schema_field(params, *keys):
 
 def runninghub_aspect_from_size(size, fallback="1:1", size_spec=None):
     resolved = resolve_image_size_spec(size, size_spec)
+    if resolved.get("mode") == "auto_aspect":
+        return ""
     if resolved.get("aspect_ratio"):
         return resolved["aspect_ratio"]
     raw = str(size or "").strip().lower()
@@ -11242,13 +11270,13 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or model)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
     resolved_size = resolve_image_size_spec(size, size_spec)
-    aspect = resolved_size.get("aspect_ratio") or "1:1"
+    aspect = resolved_size.get("aspect_ratio") or ""
     resolution = (resolved_size.get("resolution") or "2K").lower()
     body = {"prompt": prompt}
-    if runninghub_schema_field(params, "aspectRatio"):
+    if aspect and runninghub_schema_field(params, "aspectRatio"):
         field = runninghub_schema_field(params, "aspectRatio")
         body["aspectRatio"] = runninghub_schema_value(field, aspect)
-    elif runninghub_schema_field(params, "ratio"):
+    elif aspect and runninghub_schema_field(params, "ratio"):
         field = runninghub_schema_field(params, "ratio")
         body["ratio"] = runninghub_schema_value(field, aspect)
     if runninghub_schema_field(params, "resolution"):
@@ -11401,6 +11429,7 @@ async def generate_venice_provider_image(prompt, size, quality, model, reference
 async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", size_spec=None):
     provider = get_api_provider(provider_id)
     resolved_size = resolve_image_size_spec(size, size_spec)
+    auto_aspect = resolved_size["mode"] == "auto_aspect"
     size = image_size_legacy_value(resolved_size)
     if provider["id"] == "modelscope":
         return await generate_modelscope_provider_image(prompt, size, model, reference_images, provider, resolved_size)
@@ -11438,7 +11467,9 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
     async with httpx.AsyncClient(timeout=request_timeout) as client:
         response = None
         async def post_openai_edits(edit_files=None):
-            data = {"model": model, "prompt": prompt, "size": size}
+            data = {"model": model, "prompt": prompt}
+            if not auto_aspect:
+                data["size"] = size
             if quality:
                 data["quality"] = quality
             return await client.post(
@@ -11452,8 +11483,9 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             body = {
                 "model": model,
                 "prompt": prompt,
-                "aspect_ratio": resolved_size.get("aspect_ratio") or "1:1",
             }
+            if not auto_aspect:
+                body["aspect_ratio"] = resolved_size.get("aspect_ratio") or "1:1"
             if image_refs:
                 body["images"] = [await openai_video_proxy_public_reference_url(ref) for ref in image_refs[:6]]
             video_url = f"{base_url}/videos" if base_url.endswith("/v1") else f"{base_url}/v1/videos"
@@ -11461,11 +11493,11 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
         elif image_request_mode == "openai-responses":
             tool = {"type": "image_generation"}
             tool["action"] = "edit" if image_refs else "generate"
-            if size and str(size).strip().lower() != "auto":
+            if not auto_aspect and size and str(size).strip().lower() != "auto":
                 tool["size"] = responses_proxy_tool_size(size)
             if quality:
                 tool["quality"] = quality
-            size_instruction = responses_image_size_instruction(size)
+            size_instruction = "" if auto_aspect else responses_image_size_instruction(size)
             input_text = f"{size_instruction}\n\n{prompt}" if size_instruction else prompt
             content = [{"type": "input_text", "text": input_text}]
             for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]:
@@ -11486,7 +11518,9 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             extra_body = {"response_format": "url"}
             if image_refs:
                 extra_body["image"] = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
-            body = {"model": model, "prompt": prompt, "size": size, "extra_body": extra_body}
+            body = {"model": model, "prompt": prompt, "extra_body": extra_body}
+            if not auto_aspect:
+                body["size"] = size
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
         elif is_apimart:
             apimart_size, resolution = apimart_size_resolution(size, resolved_size)
@@ -11496,15 +11530,18 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 "model": model,
                 "prompt": prompt,
                 "n": 1,
-                "size": apimart_size,
                 "resolution": resolution,
                 "official_fallback": False,
             }
+            if apimart_size:
+                body["size"] = apimart_size
             if image_refs:
                 body["image_urls"] = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
         elif is_gpt2 and not image_refs and not mask_refs:
-            body = {"model": model, "prompt": prompt, "size": size}
+            body = {"model": model, "prompt": prompt}
+            if not auto_aspect:
+                body["size"] = size
             if quality:
                 body["quality"] = quality
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
@@ -11554,10 +11591,12 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 print(f"/images/edits failed ({edit_failed_status}): {edit_failed_text[:200]} → 回退到 /images/generations + image:[] JSON")
                 image_payload = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
                 body = {
-                    "model": model, "prompt": prompt, "size": size,
+                    "model": model, "prompt": prompt,
                     "response_format": "url", "n": 1,
                     "image": image_payload,
                 }
+                if not auto_aspect:
+                    body["size"] = size
                 if quality:
                     body["quality"] = quality
                 response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
@@ -11567,7 +11606,9 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                         detail=f"编辑接口 /images/edits 调用失败，且该平台不支持 /images/generations：{edit_failed_text[:300] or edit_failed_status}"
                     )
         else:
-            body = {"model": model, "prompt": prompt, "size": size, "response_format": "url", "n": 1}
+            body = {"model": model, "prompt": prompt, "response_format": "url", "n": 1}
+            if not auto_aspect:
+                body["size"] = size
             if quality:
                 body["quality"] = quality
             response = await client.post(
@@ -14770,6 +14811,8 @@ IMAGE_PARAM_RATIOS = [
     {"value": "9:16", "label": "9:16"},
     {"value": "2:3", "label": "2:3"},
     {"value": "3:2", "label": "3:2"},
+    {"value": "21:9", "label": "21:9"},
+    {"value": "9:21", "label": "9:21"},
 ]
 IMAGE_PARAM_RESOLUTIONS = [
     {"value": "1k", "label": "1K"},
@@ -14780,16 +14823,18 @@ IMAGE_PARAM_RESOLUTIONS = [
 def build_image_param_fields(engine: str, provider: dict, model: str):
     """返回某平台/引擎的图像生成参数字段定义。客户端按 type 动态渲染并回填到生成请求。
     字段 key 直接对应 OnlineImageRequest 的字段名（size/quality/n/reference_images）。"""
-    gpt_auto_size = engine == "api" and is_gpt_image_2_model(model)
-    image_resolutions = ([{"value": "auto", "label": "自动"}] + IMAGE_PARAM_RESOLUTIONS) if gpt_auto_size else IMAGE_PARAM_RESOLUTIONS
+    capability = provider_model_image_capability(provider, model)
+    api_image_engine = engine in ("api", "volcengine")
+    supports_auto_aspect = api_image_engine and capability.get("size_mode") != "pixel"
+    image_ratios = ([{"value": "auto", "label": "自动"}] if supports_auto_aspect else []) + IMAGE_PARAM_RATIOS
     size_field = {
         "key": "size", "type": "size", "label": "尺寸",
-        "ratios": IMAGE_PARAM_RATIOS, "resolutions": image_resolutions,
-        "default": {"ratio": "1:1", "resolution": "auto" if gpt_auto_size else "1k"},
+        "ratios": image_ratios, "resolutions": IMAGE_PARAM_RESOLUTIONS,
+        "default": {"ratio": "1:1", "resolution": "1k"},
     }
     count_field = {
         "key": "n", "type": "int", "label": "数量", "control": "chips",
-        "options": [1, 2, 3, 4], "default": 1,
+        "options": [1, 2, 4] if api_image_engine else [1, 2, 3, 4], "default": 1,
     }
     refs_field = {"key": "reference_images", "type": "refs", "label": "参考图", "max": ONLINE_IMAGE_REFERENCE_MAX}
 
@@ -14799,16 +14844,15 @@ def build_image_param_fields(engine: str, provider: dict, model: str):
                  "label": "RunningHub 工作流参数将按所选工作流动态加载（开发中）。"}]
 
     fields = [size_field]
-    if engine in ("api", "volcengine"):
+    if api_image_engine and capability.get("supports_quality") is True:
         fields.append({
-            "key": "quality", "type": "select", "label": "质量", "control": "chips",
+            "key": "quality", "type": "select", "label": "画质", "control": "chips",
             "options": [
-                {"value": "auto", "label": "自动"},
-                {"value": "low", "label": "低"},
-                {"value": "medium", "label": "中"},
-                {"value": "high", "label": "高"},
+                {"value": "low", "label": "低画质"},
+                {"value": "medium", "label": "标准画质"},
+                {"value": "high", "label": "高画质"},
             ],
-            "default": "auto",
+            "default": "medium",
         })
     fields.append(count_field)
     fields.append(refs_field)
