@@ -4044,7 +4044,7 @@ function playVeniceCreditsChangeSound(direction='increase'){
                 osc.type = 'sine';
                 osc.frequency.setValueAtTime(tone.freq, start + tone.at);
                 gain.gain.setValueAtTime(0.0001, start + tone.at);
-                gain.gain.exponentialRampToValueAtTime(0.085, start + tone.at + 0.024);
+                gain.gain.exponentialRampToValueAtTime(0.1, start + tone.at + 0.024);
                 gain.gain.exponentialRampToValueAtTime(0.0001, start + tone.at + tone.duration);
                 osc.connect(gain).connect(ctx.destination);
                 osc.start(start + tone.at);
@@ -6085,12 +6085,13 @@ function restoreVeniceCreditsCache(){
         const raw = localStorage.getItem(VENICE_CREDITS_CACHE_KEY);
         if(!raw) return;
         const data = JSON.parse(raw);
+        const providerId = String(data?.providerId || '');
         const total = Number(data?.total);
         const remaining = Number(data?.remaining);
         if(!(Number.isFinite(total) && total > 0 && Number.isFinite(remaining))) return;
         veniceCreditsState = {
             ...veniceCreditsState,
-            providerId:String(data?.providerId || ''),
+            providerId,
             remaining,
             total,
             available:Number.isFinite(Number(data?.available)) ? Number(data.available) : null,
@@ -6103,6 +6104,13 @@ function restoreVeniceCreditsCache(){
             status:'ready',
             error:''
         };
+        // The cached value is already rendered as the current balance. Keep the
+        // change detector on the same baseline so the first post-load refresh
+        // can report a debit instead of silently treating it as initialization.
+        if(providerId){
+            veniceCreditsObservedProviderId = providerId;
+            veniceCreditsObservedRemaining = remaining;
+        }
     } catch(_) {}
 }
 function veniceCreditsCooldownRemainingMs(){

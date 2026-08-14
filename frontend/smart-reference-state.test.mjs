@@ -557,6 +557,44 @@ test('Venice credit fast refresh is scoped to Venice providers only', () => {
     assert.ok(loaded.sandbox.veniceCreditsFastRefreshUntil > Date.now());
 });
 
+test('restored Venice credits seed the change detector before the first live refresh', () => {
+    const cached = {
+        providerId:'venice',
+        remaining:1000,
+        total:2000,
+        available:1000,
+        lastRequestAt:Date.now(),
+        updatedAt:Date.now()
+    };
+    const loaded = loadProductionFunctions(['restoreVeniceCreditsCache'], {
+        localStorage:{getItem:key => key === 'credits-cache' ? JSON.stringify(cached) : null},
+        VENICE_CREDITS_CACHE_KEY:'credits-cache',
+        veniceCreditsState:{
+            providerId:'',
+            remaining:null,
+            total:null,
+            available:null,
+            nextRefillAt:null,
+            tierCap:null,
+            usedThisCycle:null,
+            userType:'',
+            lastRequestAt:0,
+            updatedAt:0,
+            status:'idle',
+            error:''
+        },
+        veniceCreditsObservedProviderId:'',
+        veniceCreditsObservedRemaining:null
+    });
+
+    loaded.restoreVeniceCreditsCache();
+
+    assert.equal(loaded.sandbox.veniceCreditsState.providerId, 'venice');
+    assert.equal(loaded.sandbox.veniceCreditsState.remaining, 1000);
+    assert.equal(loaded.sandbox.veniceCreditsObservedProviderId, 'venice');
+    assert.equal(loaded.sandbox.veniceCreditsObservedRemaining, 1000);
+});
+
 test('legacy uploaded self-reference survives while removed manual and prompt refs do not', () => {
     const target = {
         id:'target',
