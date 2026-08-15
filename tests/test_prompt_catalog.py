@@ -12,6 +12,7 @@ from prompt_catalog import (
     normalize_generation_prompt,
     normalize_prompt_catalog,
     normalize_system_instruction,
+    remove_retired_prompt_catalog_builtins,
     restore_builtin_prompt_catalog_item,
     save_prompt_catalog,
 )
@@ -25,7 +26,7 @@ class PromptCatalogTests(unittest.TestCase):
         )
         with open(path, "r", encoding="utf-8") as file:
             catalog = normalize_prompt_catalog(json.load(file))
-        self.assertEqual(len(catalog["generation_prompts"]), 9)
+        self.assertEqual(len(catalog["generation_prompts"]), 8)
         self.assertEqual(len(catalog["system_instructions"]), 7)
         for item in catalog["generation_prompts"]:
             self.assertEqual(item["prompt_template"].count("{{user_prompt}}"), 1)
@@ -183,6 +184,34 @@ class PromptCatalogTests(unittest.TestCase):
         self.assertEqual(added, 1)
         self.assertEqual(merged["generation_prompts"][0]["name"], "用户修改")
         self.assertEqual(merged["generation_prompts"][1]["id"], "missing")
+
+    def test_retired_panorama_builtin_is_removed_without_deleting_custom_content(self):
+        retired = normalize_generation_prompt({
+            "id": "equirectangular_panorama",
+            "name": "360全景图",
+            "category": "空间与机位",
+            "description": "标准 2:1 无缝全景，用于 VR 预览",
+            "icon": "gallery-horizontal-end",
+            "prompt_template": "生成一张标准 2:1 等距柱状投影的 360 度全景图，完整覆盖水平方向一周以及从顶部到底部的垂直视野，可直接用于 VR 全景查看。\n\n用户对空间、环境和视觉风格的补充要求：\n{{user_prompt}}\n\n场景的建筑结构、道路、墙面、家具、光源和地平线必须具有连续且合理的空间关系。画面最左侧与最右侧表示同一个接缝位置，两侧的几何结构、纹理、光照和物体边缘必须自然衔接，循环查看时不能出现明显断层。顶部和底部极点保持自然，避免拉伸、扭曲或重复物体。封闭空间必须具有符合逻辑的入口或出口。画面中不添加文字、标识、水印、边框或全景预览界面。",
+            "recommended_ratio": "2:1",
+            "recommended_resolution": "4K",
+        }, timestamp=100)
+        edited = {**retired, "description": "用户修改后保留"}
+        same_name_custom = {
+            **retired,
+            "id": "my_panorama",
+            "prompt_template": "我的全景提示词 {{user_prompt}}",
+        }
+        catalog, removed = remove_retired_prompt_catalog_builtins({
+            "generation_prompts": [retired, edited, same_name_custom],
+            "system_instructions": [],
+        })
+        self.assertEqual(removed, 1)
+        self.assertEqual(
+            [item["id"] for item in catalog["generation_prompts"]],
+            ["equirectangular_panorama", "my_panorama"],
+        )
+        self.assertEqual(catalog["generation_prompts"][0]["description"], "用户修改后保留")
 
 
 if __name__ == "__main__":

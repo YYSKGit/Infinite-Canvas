@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -12,6 +13,22 @@ REASONING_EFFORTS = {"", "low", "medium", "high"}
 RATIO_RE = re.compile(r"^[1-9]\d*:[1-9]\d*$")
 RESOLUTION_RE = re.compile(r"^(?:[1-9]\d*(?:\.\d+)?K|[1-9]\d{2,4}\s*[xX×]\s*[1-9]\d{2,4})$", re.I)
 IDENTIFIER_RE = re.compile(r"[^A-Za-z0-9_-]+")
+GENERATION_PROMPT_CONTENT_FIELDS = (
+    "name",
+    "category",
+    "description",
+    "icon",
+    "prompt_template",
+    "recommended_ratio",
+    "recommended_resolution",
+)
+RETIRED_PROMPT_CATALOG_BUILTIN_FINGERPRINTS = {
+    "generation_prompts": {
+        "equirectangular_panorama": {
+            "34772183c7af3bf37e84b2c53bf083ef3aa203c96317dfd8aeca1eadc1207d3d"
+        },
+    },
+}
 
 
 class PromptCatalogValidationError(ValueError):
@@ -203,6 +220,37 @@ def merge_missing_prompt_catalog_builtins(catalog, defaults, *, timestamp=None):
             added += 1
         merged[resource_key] = items
     return merged, added
+
+
+def _prompt_catalog_item_content_fingerprint(resource_key, item):
+    if resource_key != "generation_prompts" or not isinstance(item, dict):
+        return ""
+    content = {field: item.get(field) for field in GENERATION_PROMPT_CONTENT_FIELDS}
+    serialized = json.dumps(
+        content,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def remove_retired_prompt_catalog_builtins(catalog):
+    catalog = catalog if isinstance(catalog, dict) else default_prompt_catalog()
+    cleaned = {**catalog}
+    removed = 0
+    for resource_key, retired_items in RETIRED_PROMPT_CATALOG_BUILTIN_FINGERPRINTS.items():
+        kept = []
+        for item in catalog.get(resource_key, []):
+            item_id = str(item.get("id") or "") if isinstance(item, dict) else ""
+            fingerprints = retired_items.get(item_id, set())
+            fingerprint = _prompt_catalog_item_content_fingerprint(resource_key, item)
+            if fingerprints and fingerprint in fingerprints:
+                removed += 1
+                continue
+            kept.append(item)
+        cleaned[resource_key] = kept
+    return cleaned, removed
 
 
 def restore_builtin_prompt_catalog_item(catalog, defaults, resource_key, item_id, *, timestamp=None):

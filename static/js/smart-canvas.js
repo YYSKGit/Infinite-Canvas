@@ -8853,6 +8853,63 @@ function renderGenerationModeControl(){
     if(generationModePanel.classList.contains('open')) renderGenerationModePanel();
     refreshIcons();
 }
+function balanceGenerationModeGroups(groups){
+    const entries = Array.isArray(groups) ? groups : [];
+    if(entries.length < 2) return entries.length ? [entries.slice()] : [];
+    const weights = entries.map(group => Math.max(1, Number(group?.items?.length) || 0) * 10 + 4);
+    let leftIndexes = new Set([0]);
+    if(entries.length <= 14){
+        const fullMask = (1 << entries.length) - 1;
+        const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+        let bestDifference = Infinity;
+        let bestPatternPenalty = Infinity;
+        let bestMask = 1;
+        for(let mask = 1; mask < fullMask; mask += 1){
+            if(!(mask & 1)) continue;
+            let leftWeight = 0;
+            let patternPenalty = 0;
+            weights.forEach((weight, index) => {
+                const inLeft = Boolean(mask & (1 << index));
+                if(inLeft) leftWeight += weight;
+                if(inLeft !== (index % 2 === 0)) patternPenalty += 1;
+            });
+            const difference = Math.abs(totalWeight - (leftWeight * 2));
+            if(difference < bestDifference || (difference === bestDifference && patternPenalty < bestPatternPenalty)){
+                bestDifference = difference;
+                bestPatternPenalty = patternPenalty;
+                bestMask = mask;
+            }
+        }
+        leftIndexes = new Set(entries.map((_, index) => index).filter(index => bestMask & (1 << index)));
+    }else{
+        const totals = [weights[0], 0];
+        const assignments = [0];
+        entries.slice(1).map((_, offset) => offset + 1).sort((a, b) => weights[b] - weights[a]).forEach(index => {
+            const column = totals[0] === totals[1] ? index % 2 : (totals[0] < totals[1] ? 0 : 1);
+            assignments[index] = column;
+            totals[column] += weights[index];
+        });
+        leftIndexes = new Set(assignments.map((column, index) => column === 0 ? index : -1).filter(index => index >= 0));
+    }
+    return [
+        entries.filter((_, index) => leftIndexes.has(index)),
+        entries.filter((_, index) => !leftIndexes.has(index)),
+    ];
+}
+function generationModeGroupHtml(group, selected){
+    return `<section class="generation-mode-group">
+        <h4>${escapeHtml(group.name)}</h4>
+        ${group.items.map(item => {
+            const snapshot = generationPromptSnapshot(item);
+            if(!snapshot) return '';
+            const active = selected?.id === snapshot.id;
+            return `<button type="button" class="generation-mode-option ${active ? 'active' : ''}" data-generation-mode-id="${escapeAttr(snapshot.id)}">
+                <span class="generation-mode-option-icon"><i data-lucide="${generationModeIcon(snapshot.icon)}"></i></span>
+                <span class="generation-mode-option-copy"><strong>${escapeHtml(snapshot.name)}</strong><small>${escapeHtml(snapshot.description)}</small></span>
+            </button>`;
+        }).join('')}
+    </section>`;
+}
 function renderGenerationModePanel(){
     if(!generationModePanel) return;
     const subject = activeComposerNode() || selectedNode();
@@ -8871,18 +8928,9 @@ function renderGenerationModePanel(){
             ${selected ? '<button type="button" data-generation-mode-clear>清除</button>' : ''}
         </div>
         <div class="generation-mode-groups">
-            ${categories.map(group => `<section class="generation-mode-group">
-                <h4>${escapeHtml(group.name)}</h4>
-                ${group.items.map(item => {
-                    const snapshot = generationPromptSnapshot(item);
-                    if(!snapshot) return '';
-                    const active = selected?.id === snapshot.id;
-                    return `<button type="button" class="generation-mode-option ${active ? 'active' : ''}" data-generation-mode-id="${escapeAttr(snapshot.id)}">
-                        <span class="generation-mode-option-icon"><i data-lucide="${generationModeIcon(snapshot.icon)}"></i></span>
-                        <span class="generation-mode-option-copy"><strong>${escapeHtml(snapshot.name)}</strong><small>${escapeHtml(snapshot.description)}</small></span>
-                    </button>`;
-                }).join('')}
-            </section>`).join('') || '<div class="generation-mode-empty">暂无可用生成模式</div>'}
+            ${categories.length ? balanceGenerationModeGroups(categories).map(column => `<div class="generation-mode-column">
+                ${column.map(group => generationModeGroupHtml(group, selected)).join('')}
+            </div>`).join('') : '<div class="generation-mode-empty">暂无可用生成模式</div>'}
         </div>
     `;
     refreshIcons();

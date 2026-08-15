@@ -24,6 +24,7 @@ test('Smart Canvas exposes the compact generation-mode picker instead of the old
   const sharedPopoverShadow = /box-shadow:0 24px 68px var\(--shadow\),0 8px 24px rgba\(15,23,42,\.16\)/g;
   assert.equal([...css.matchAll(sharedPopoverShadow)].length, 2);
   assert.match(css, /\.generation-mode-groups\s*\{[^}]*grid-template-columns:repeat\(2/);
+  assert.match(css, /\.generation-mode-column\s*\{[^}]*display:flex[^}]*flex-direction:column[^}]*gap:15px/);
   assert.match(css, /\.generation-mode-option\s*\{[^}]*height:48px/);
   assert.match(css, /\.generation-mode-option-copy small\s*\{[^}]*white-space:nowrap[^}]*opacity:0[^}]*translateY\(7px\)/);
   assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy strong[^}]*translateY\(-6\.4px\)/);
@@ -117,6 +118,26 @@ test('inline mode capsule anchors the picker beside itself with the same complet
   assert.match(generationPosition, /anchorRect\.left - \(8 \* safeScaleX\)/);
   assert.match(generationPosition, /offsetParent[\s\S]*?safeScaleX[\s\S]*?safeScaleY/);
   assert.match(js, /smart-prompt-prefix-activate[\s\S]*?openGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)/);
+});
+
+test('generation-mode categories balance dynamically between independent columns', () => {
+  const start = js.indexOf('function balanceGenerationModeGroups(');
+  const end = js.indexOf('\nfunction generationModeGroupHtml(', start);
+  assert.ok(start >= 0 && end > start);
+  const source = js.slice(start, end);
+  const balance = Function(`${source}; return balanceGenerationModeGroups;`)();
+  const groups = [
+    {name:'空间与机位', items:[1]},
+    {name:'分镜叙事', items:[1, 2]},
+    {name:'设定图', items:[1, 2, 3]},
+    {name:'质感调节', items:[1, 2]},
+  ];
+  const columns = balance(groups);
+  assert.deepEqual(columns.map(column => column.map(group => group.name)), [
+    ['空间与机位', '设定图'],
+    ['分镜叙事', '质感调节'],
+  ]);
+  assert.deepEqual(columns.map(column => column.reduce((sum, group) => sum + group.items.length, 0)), [4, 4]);
 });
 
 test('inline mode picker hides the boundary caret and restores the exact prompt selection after switching', () => {

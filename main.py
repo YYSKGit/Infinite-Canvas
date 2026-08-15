@@ -50,6 +50,7 @@ from prompt_catalog import (
     merge_missing_prompt_catalog_builtins,
     normalize_generation_prompt,
     normalize_system_instruction,
+    remove_retired_prompt_catalog_builtins,
     restore_builtin_prompt_catalog_item,
     save_prompt_catalog as save_prompt_catalog_file,
 )
@@ -7213,11 +7214,14 @@ def builtin_prompt_catalog():
 
 def load_prompt_catalog_data():
     defaults = builtin_prompt_catalog()
+    catalog, removed = remove_retired_prompt_catalog_builtins(
+        load_prompt_catalog_file(PROMPT_CATALOG_PATH, defaults)
+    )
     catalog, added = merge_missing_prompt_catalog_builtins(
-        load_prompt_catalog_file(PROMPT_CATALOG_PATH, defaults),
+        catalog,
         defaults,
     )
-    if added:
+    if added or removed:
         catalog = save_prompt_catalog_file(PROMPT_CATALOG_PATH, catalog)
     return mark_prompt_catalog_builtins(
         catalog,

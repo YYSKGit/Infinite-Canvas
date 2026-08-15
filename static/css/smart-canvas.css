@@ -1672,6 +1672,7 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .generation-mode-panel-head span { min-width:0; flex:1; color:var(--faint); font-size:9.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .generation-mode-panel-head button { height:24px; padding:0 8px; border-radius:7px; color:var(--muted); background:var(--soft); border:1px solid var(--line); font-size:9.5px; font-weight:750; }
 .generation-mode-groups { min-height:0; overflow:auto; display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); align-items:start; gap:15px 14px; padding-right:3px; scrollbar-width:thin; }
+.generation-mode-column { min-width:0; display:flex; flex-direction:column; gap:15px; }
 .generation-mode-group { min-width:0; display:flex; flex-direction:column; gap:3px; }
 .generation-mode-group h4 { margin:0 0 3px; color:var(--faint); font-size:10px; line-height:1.2; font-weight:850; }
 .generation-mode-option { position:relative; width:100%; height:48px; min-height:48px; padding:6px 7px; border-radius:11px; display:flex; align-items:center; gap:9px; color:var(--text); background:transparent; border:1px solid transparent; text-align:left; transition:background .18s ease, border-color .18s ease; }
@@ -1691,6 +1692,7 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 @media (max-width:700px){
     .generation-mode-panel { right:-8px; width:min(420px, calc(100vw - 40px)); }
     .generation-mode-groups { grid-template-columns:1fr; }
+    .generation-mode-column { display:contents; }
 }
 .dynamic-params:has(.parameter-settings-control) { align-items:center; flex-wrap:nowrap; }
 .dynamic-params:has(.parameter-settings-control) > .parameter-settings-control { flex:0 0 auto; min-width:0; }
