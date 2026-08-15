@@ -278,6 +278,19 @@ test('Venice fan-out submits one reference image per API task', async () => {
     assert.ok(requestBodies.every(body => body.size_spec?.aspect_ratio === '1:1'));
 });
 
+test('Venice edit pending size follows input only for automatic aspect', () => {
+    const loaded = loadProductionFunctions(['veniceEditUsesSourcePendingSize'], {
+        isApiLikeEngine:engine => engine === 'api',
+        isVeniceProviderId:id => id === 'venice',
+        imageSizeSpecForRun:source => ({mode:source.ratio === 'auto' ? 'auto_aspect' : 'preset'})
+    });
+    const base = {engine:'api', apiKind:'image', provider_id:'venice'};
+
+    assert.equal(loaded.veniceEditUsesSourcePendingSize({...base, ratio:'auto'}, 'venice', true), true);
+    assert.equal(loaded.veniceEditUsesSourcePendingSize({...base, ratio:'wide'}, 'venice', true), false);
+    assert.equal(loaded.veniceEditUsesSourcePendingSize({...base, ratio:'auto'}, 'venice', false), false);
+});
+
 test('buildPromptRequest preserves upstream provenance in the refs saved for reruns', () => {
     let promptParts = [];
     const {buildPromptRequest} = loadProductionFunctions(['smartGenerationRequestRef', 'buildPromptRequest'], {

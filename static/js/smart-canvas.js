@@ -12675,10 +12675,16 @@ function runningHubProgressBorderHtml(node, layout=null){
     const rect = layout || nodeRect(node);
     const width = Math.max(24, Number(rect?.width || 260));
     const height = Math.max(24, Number(rect?.height || 180));
+    const historicalSnapshot = isHistoricalRunningSnapshotNode(node);
     // The visible media/loading frame uses a 12px outer radius. Keep the SVG
     // stroke centre one pixel inside it, so its corners follow the same curve.
-    const inset = 1;
-    const radius = Math.max(0, Math.min(11, Math.min(width, height) / 2 - inset));
+    // An undo snapshot keeps its useful captured progress UI, but its empty-node
+    // frame has a 16px outer radius. Align that historical SVG path with the
+    // centre of the existing 1px CSS border instead of drawing a second,
+    // differently rounded outline. Live generation keeps the original geometry.
+    const inset = historicalSnapshot ? .5 : 1;
+    const preferredRadius = historicalSnapshot ? 15.5 : 11;
+    const radius = Math.max(0, Math.min(preferredRadius, Math.min(width, height) / 2 - inset));
     const label = runningHubProgressLabel(node);
     const animationStyle = (task, duration) => {
         const start = Math.max(0, Number(task?.startedAt) || 0);
@@ -19281,6 +19287,13 @@ function displayBoxFromNaturalSize(size){
     );
     return {w:layout.width, h:layout.height};
 }
+function veniceEditUsesSourcePendingSize(sourceSettings, providerProtocol='', hasSourceSize=false){
+    return isApiLikeEngine(sourceSettings.engine)
+        && sourceSettings.apiKind !== 'video'
+        && (providerProtocol === 'venice' || isVeniceProviderId(sourceSettings.provider_id || ''))
+        && imageSizeSpecForRun(sourceSettings).mode === 'auto_aspect'
+        && Boolean(hasSourceSize);
+}
 function pendingBaseBoxSize(options={}){
     const sourceSettings = options.settings || settings;
     const sourceSize = pendingSourceBoxSize(options);
@@ -19288,15 +19301,12 @@ function pendingBaseBoxSize(options={}){
     const providerProtocol = String(provider?.protocol || '').trim().toLowerCase();
     const runningHubImageGeneration = sourceSettings.apiKind !== 'video'
         && (sourceSettings.engine === 'runninghub' || providerProtocol === 'runninghub');
-    const veniceImageEdit = isApiLikeEngine(sourceSettings.engine)
-        && sourceSettings.apiKind !== 'video'
-        && (providerProtocol === 'venice' || isVeniceProviderId(sourceSettings.provider_id || ''))
-        && Boolean(sourceSize);
+    const veniceAutoAspectEdit = veniceEditUsesSourcePendingSize(sourceSettings, providerProtocol, sourceSize);
     // RunningHub has no reliable generic output-size contract across apps and
     // workflows. When media is supplied, its first input is the best estimate.
-    // Venice image edits omit size/aspect entirely on the backend, so the node's
-    // text-to-image size setting must not take precedence over the input media.
-    if(sourceSize && (runningHubImageGeneration || veniceImageEdit)){
+    // Venice edits follow the input media only for automatic aspect selection.
+    // An explicit aspect is sent upstream and should shape the pending card too.
+    if(sourceSize && (runningHubImageGeneration || veniceAutoAspectEdit)){
         return sourceSize.display ? {w:sourceSize.w, h:sourceSize.h} : displayBoxFromNaturalSize(sourceSize);
     }
     const requestSize = explicitRequestOutputSizeForPending(sourceSettings, options);

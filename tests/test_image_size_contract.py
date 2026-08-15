@@ -319,9 +319,50 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
                 {"url": "data:image/png;base64,eA=="},
                 self.provider,
                 "high",
+                "2048x1360",
+                self.spec,
             ))
         self.assertEqual(captured["data"]["modelId"], "gpt-image-2-edit")
         self.assertEqual(captured["data"]["quality"], "high")
+        self.assertEqual(captured["data"]["aspectRatio"], "3:2")
+        self.assertEqual(captured["data"]["resolution"], "2K")
+
+    def test_edit_auto_aspect_omits_ratio_but_keeps_selected_resolution(self):
+        fields = main.venice_image_edit_size_fields(
+            "2K",
+            {"mode": "auto_aspect", "resolution": "2K"},
+            "gpt-image-2",
+            self.provider,
+        )
+        self.assertEqual(fields, {"resolution": "2K"})
+
+    def test_edit_aspect_only_model_never_sends_resolution(self):
+        fields = main.venice_image_edit_size_fields(
+            "2048x1360",
+            self.spec,
+            "qwen-image-2",
+            self.provider,
+        )
+        self.assertEqual(fields, {"aspectRatio": "3:2"})
+
+        automatic = main.venice_image_edit_size_fields(
+            "2K",
+            {"mode": "auto_aspect", "resolution": "2K"},
+            "qwen-image-2",
+            self.provider,
+        )
+        self.assertEqual(automatic, {})
+
+    def test_edit_full_auto_omits_all_size_fields(self):
+        self.assertEqual(
+            main.venice_image_edit_size_fields(
+                "auto",
+                {"mode": "auto"},
+                "gpt-image-2",
+                self.provider,
+            ),
+            {},
+        )
 
     def test_quote_and_generation_compile_the_same_quality(self):
         generation = main.venice_outerface_image_body(

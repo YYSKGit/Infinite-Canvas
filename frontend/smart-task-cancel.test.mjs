@@ -335,6 +335,8 @@ test('failed and cancelled empty slots expose an in-node retry using the saved r
     assert.match(jsSource, /runSmartNodeRetry\(btn\.dataset\.smartRetry \|\| id\)/);
     assert.match(cssSource, /\.smart-run-terminal\s*\{/);
     assert.match(cssSource, /\.smart-run-retry\s*\{/);
+    assert.match(cssSource, /\.empty-node:is\(\.node-run-failed,\.node-run-cancelled\) \.node-body\s*\{[^}]*padding:0;[^}]*border-radius:0 0 15px 15px;/);
+    assert.match(cssSource, /\.smart-run-terminal\s*\{[^}]*border:0;[^}]*border-radius:0;/);
     const sandbox = vm.createContext({
         nodes:[{id:'node-1', runRetrySnapshot:{prompt:'saved', settings:{engine:'api'}}}],
         smartNodeRunDisabled:() => false,
@@ -548,6 +550,7 @@ test('single-task and multi-task progress share the same border while empty surf
     const sandbox = vm.createContext({
         Date:{now:() => 5000},
         nodeRect:() => ({width:260, height:180}),
+        isHistoricalRunningSnapshotNode:node => Boolean(node?.historicalSnapshot),
         escapeHtml:value => String(value),
         escapeAttr:value => String(value),
         mediaKindForItem:item => item?.kind || 'image',
@@ -579,6 +582,10 @@ test('single-task and multi-task progress share the same border while empty surf
         globalThis.single = runningHubProgressBorderHtml({
             runningHubProgress:{tasks:[{index:0,status:'running',nodeName:'KSampler',value:15,max:30}]}
         });
+        globalThis.historical = runningHubProgressBorderHtml({
+            historicalSnapshot:true,
+            runningHubProgress:{tasks:[{index:0,status:'running',nodeName:'KSampler',value:15,max:30}]}
+        });
         globalThis.multi = runningHubProgressBorderHtml({
             runningHubProgress:{tasks:[
                 {index:0,status:'succeeded',value:1,max:1,resultItems:[{url:'/one.png',kind:'image'}]},
@@ -608,6 +615,9 @@ test('single-task and multi-task progress share the same border while empty surf
     assert.match(sandbox.single, /smart-progress-task-breathe is-indeterminate is-layer-hidden/);
     assert.match(sandbox.single, /smart-progress-task-value\s+is-determinate\s+" data-progress-percent="50"/);
     assert.match(sandbox.single, /data-progress-path-width="260" data-progress-path-height="180" data-progress-path-inset="1" data-progress-path-radius="11"/);
+    assert.match(sandbox.historical, /data-progress-path-width="260" data-progress-path-height="180" data-progress-path-inset="0\.5" data-progress-path-radius="15\.5"/);
+    assert.match(sandbox.historical, /image-resolution-badge rh-progress-node-badge/);
+    assert.equal((sandbox.historical.match(/class="rh-progress-stroke/g) || []).length, 2);
     assert.match(sandbox.single, /d="M 1 168 L 1 12 A 11 11 0 0 1 12 1 L 248 1 A 11 11 0 0 1 259 12"/);
     assert.match(sandbox.single, /image-resolution-badge rh-progress-node-badge/);
     assert.match(sandbox.single, /KSampler · 50%/);

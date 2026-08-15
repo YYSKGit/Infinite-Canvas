@@ -9952,7 +9952,19 @@ def venice_reference_image_bytes(ref) -> tuple:
         return base64.b64decode(b64), mime, f"image{ext}"
     return b"", "image/jpeg", "image.jpg"
 
-async def generate_venice_web_image_edit(client, prompt, model, ref, provider, quality="auto"):
+def venice_image_edit_size_fields(size, size_spec=None, model="", provider=None):
+    resolved = resolve_image_size_spec(size, size_spec)
+    if resolved.get("mode") == "auto":
+        return {}
+    sizing_mode = venice_model_capability(model, provider).get("size_mode")
+    fields = {}
+    if resolved.get("mode") != "auto_aspect" and resolved.get("aspect_ratio"):
+        fields["aspectRatio"] = resolved["aspect_ratio"]
+    if sizing_mode != "aspect" and resolved.get("resolution"):
+        fields["resolution"] = resolved["resolution"]
+    return fields
+
+async def generate_venice_web_image_edit(client, prompt, model, ref, provider, quality="auto", size="", size_spec=None):
     """Post to the outerface multi-edit endpoint as multipart/form-data."""
     edit_model = venice_image_edit_model(model, provider)
     if not edit_model:
@@ -9967,6 +9979,7 @@ async def generate_venice_web_image_edit(client, prompt, model, ref, provider, q
         "prompt": str(prompt or ""),
         "requestId": venice_outerface_request_id(),
     }
+    data.update(venice_image_edit_size_fields(size, size_spec, model, provider))
     compiled_quality = compile_venice_image_quality(quality, model, provider)
     if compiled_quality:
         data["quality"] = compiled_quality
@@ -11426,7 +11439,16 @@ async def generate_venice_provider_image(prompt, size, quality, model, reference
             image_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() != "mask"]
             if len(image_refs) != 1 or len(refs) != len(image_refs):
                 raise HTTPException(status_code=400, detail="Venice 图片编辑当前只支持单张参考图，不支持 mask 或多图参考。")
-            return await generate_venice_web_image_edit(client, prompt, model, image_refs[0], provider, quality)
+            return await generate_venice_web_image_edit(
+                client,
+                prompt,
+                model,
+                image_refs[0],
+                provider,
+                quality,
+                size,
+                size_spec,
+            )
         # Text-to-image: use the web (outerface) interface for free model support
         return await generate_venice_web_image(client, prompt, size, model, provider, size_spec, quality)
 
