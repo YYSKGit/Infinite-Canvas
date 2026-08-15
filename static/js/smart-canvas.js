@@ -8938,7 +8938,7 @@ function renderGenerationModePanel(){
 function closeGenerationModePanel(){
     generationModePanel?.classList.remove('open');
     generationModePanel?.classList.remove('open-upward');
-    ['left', 'right', 'top', 'bottom'].forEach(property => generationModePanel?.style.removeProperty(property));
+    ['left', 'right', 'top', 'bottom', 'width'].forEach(property => generationModePanel?.style.removeProperty(property));
     generationModeBtn?.setAttribute('aria-expanded', 'false');
     generationModePromptSelection = null;
     promptEditor?.scheduleSelectionCaretSync?.();
@@ -8946,13 +8946,12 @@ function closeGenerationModePanel(){
 }
 function positionGenerationModePanel(anchorEl = generationModeControl){
     if(!generationModeControl || !generationModePanel) return;
-    ['left', 'right', 'top', 'bottom'].forEach(property => generationModePanel.style.removeProperty(property));
+    ['left', 'right', 'top', 'bottom', 'width'].forEach(property => generationModePanel.style.removeProperty(property));
     generationModePanel.classList.remove('open-upward');
     generationModePanel.style.visibility = 'hidden';
     generationModePanel.classList.add('open');
     const anchor = anchorEl?.isConnected ? anchorEl : generationModeControl;
     const anchorRect = anchor.getBoundingClientRect();
-    const panelRect = generationModePanel.getBoundingClientRect();
     const offsetParent = generationModePanel.offsetParent || generationModeControl;
     const parentRect = offsetParent.getBoundingClientRect();
     const measuredScaleX = offsetParent.offsetWidth ? parentRect.width / offsetParent.offsetWidth : 1;
@@ -8961,13 +8960,16 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
     const safeScaleY = measuredScaleY > 0 ? measuredScaleY : safeScaleX;
     const edgeMargin = 12;
     const inlineAnchor = anchor !== generationModeControl;
+    const promptRect = inlineAnchor && promptInput?.isConnected ? promptInput.getBoundingClientRect() : null;
+    if(promptRect) generationModePanel.style.width = `${promptRect.width / safeScaleX}px`;
+    const panelRect = generationModePanel.getBoundingClientRect();
     const gap = (inlineAnchor ? 4 : 8) * safeScaleY;
     const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
     const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
     const openUpward = panelRect.height > spaceBelow && panelRect.height <= spaceAbove;
     generationModePanel.classList.toggle('open-upward', openUpward);
     if(inlineAnchor){
-        const viewportLeft = Math.max(edgeMargin, Math.min(anchorRect.left - (8 * safeScaleX), window.innerWidth - edgeMargin - panelRect.width));
+        const viewportLeft = promptRect?.left ?? Math.max(edgeMargin, Math.min(anchorRect.left - (8 * safeScaleX), window.innerWidth - edgeMargin - panelRect.width));
         const viewportTop = openUpward
             ? anchorRect.top - gap - panelRect.height
             : anchorRect.bottom + gap;

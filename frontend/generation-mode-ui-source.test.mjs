@@ -19,10 +19,10 @@ test('Smart Canvas exposes the compact generation-mode picker instead of the old
   assert.match(css, /\.generation-mode-control\s*\{[^}]*z-index:90/);
   assert.match(css, /\.generation-mode-panel\s*\{[^}]*width:min\(500px[^}]*max-height:min\(620px/);
   assert.match(css, /\.generation-mode-panel\s*\{[^}]*right:-8px/);
-  assert.match(css, /\.generation-mode-panel\s*\{[^}]*background:var\(--card\)/);
-  assert.match(css, /\.mention-picker\s*\{[^}]*background:var\(--card\)/);
-  const sharedPopoverShadow = /box-shadow:0 24px 68px var\(--shadow\),0 8px 24px rgba\(15,23,42,\.16\)/g;
-  assert.equal([...css.matchAll(sharedPopoverShadow)].length, 2);
+  assert.match(css, /\.generation-mode-panel\s*\{[^}]*background:var\(--composer-popover-surface\)[^}]*border:1px solid var\(--composer-popover-border\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
+  assert.match(css, /\.mention-picker\s*\{[^}]*background:var\(--composer-popover-surface\)[^}]*border:1px solid var\(--composer-popover-border\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
+  assert.match(css, /\.composer \.smart-popover\s*\{[^}]*background:var\(--composer-popover-surface\)[^}]*border-color:var\(--composer-popover-border\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
+  assert.match(css, /\.theme-dark\s*\{[^}]*--composer-popover-surface:#1b2331[^}]*--composer-popover-shadow:0 28px 76px rgba\(0,0,0,\.52\)/);
   assert.match(css, /\.generation-mode-groups\s*\{[^}]*grid-template-columns:repeat\(2/);
   assert.match(css, /\.generation-mode-column\s*\{[^}]*display:flex[^}]*flex-direction:column[^}]*gap:15px/);
   assert.match(css, /\.generation-mode-option\s*\{[^}]*height:48px/);
@@ -112,11 +112,15 @@ test('inline mode capsule anchors the picker beside itself with the same complet
   assert.match(generationPosition, /anchorEl = generationModeControl/);
   assert.match(generationPosition, /const anchorRect = anchor\.getBoundingClientRect\(\)/);
   assert.match(generationPosition, /const inlineAnchor = anchor !== generationModeControl/);
+  assert.match(generationPosition, /promptInput\?\.isConnected \? promptInput\.getBoundingClientRect\(\) : null/);
+  assert.match(generationPosition, /style\.width = `\$\{promptRect\.width \/ safeScaleX\}px`/);
   assert.match(generationPosition, /const gap = \(inlineAnchor \? 4 : 8\) \* safeScaleY/);
   assert.match(generationPosition, /panelRect\.height > spaceBelow && panelRect\.height <= spaceAbove/);
   assert.match(generationPosition, /anchorRect\.top - gap - panelRect\.height[\s\S]*?anchorRect\.bottom \+ gap/);
+  assert.match(generationPosition, /const viewportLeft = promptRect\?\.left \?\?/);
   assert.match(generationPosition, /anchorRect\.left - \(8 \* safeScaleX\)/);
   assert.match(generationPosition, /offsetParent[\s\S]*?safeScaleX[\s\S]*?safeScaleY/);
+  assert.match(js, /\['left', 'right', 'top', 'bottom', 'width'\][\s\S]*?removeProperty/);
   assert.match(js, /smart-prompt-prefix-activate[\s\S]*?openGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)/);
 });
 
