@@ -90,6 +90,26 @@ test('asset reorder drag previews disable badge backdrop compositing artifacts',
   assert.match(assetThumbSource, /<img[^>]*draggable="false"/);
 });
 
+test('generation prompts support safe manual ordering inside one visible category', async () => {
+  const managerCss = await readFile(new URL('../static/css/asset-manager.css', import.meta.url), 'utf8');
+  assert.match(managerSource, /function promptManualReorderEnabled\(\)[\s\S]*?activePromptResourceId === 'generation'[\s\S]*?activePromptCategory !== 'all'[\s\S]*?!promptQuery\.trim\(\)/);
+  assert.match(managerSource, /data-prompt-row[\s\S]*?draggable="true" title="拖拽调整当前分类中的显示顺序"/);
+  assert.match(managerSource, /api\/prompt-catalog\/generation-prompts\/reorder/);
+  assert.match(managerSource, /JSON\.stringify\(\{category, item_ids:orderedIds\}\)/);
+  assert.match(managerCss, /prompt-row\.reorder-before::before,\.prompt-row\.reorder-after::after/);
+  const start = managerSource.indexOf('function reorderPromptCategoryItems(');
+  const end = managerSource.indexOf('\nasync function persistPromptReorder(', start);
+  const reorder = Function(`${managerSource.slice(start, end)}; return reorderPromptCategoryItems;`)();
+  const reordered = reorder([
+    {id:'story', category:'分镜'},
+    {id:'face', category:'设定图'},
+    {id:'light', category:'质感'},
+    {id:'product', category:'设定图'},
+    {id:'character', category:'设定图'},
+  ], '设定图', ['character', 'face', 'product']);
+  assert.deepEqual(reordered.map(item => item.id), ['story', 'character', 'light', 'face', 'product']);
+});
+
 test('system built-ins cannot be selected for deletion and can be restored', () => {
   assert.match(managerSource, /readonly \|\| item\.builtin \? 'disabled'/);
   assert.match(managerSource, /currentPromptItems\(\)\.filter\(item => !item\.builtin\)/);

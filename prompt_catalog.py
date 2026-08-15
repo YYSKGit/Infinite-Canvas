@@ -170,6 +170,35 @@ def normalize_prompt_catalog(data):
     }
 
 
+def reorder_prompt_catalog_category(catalog, resource_key, category, item_ids):
+    if resource_key != "generation_prompts":
+        raise PromptCatalogValidationError("只有生成提示词支持分类排序")
+    category = normalize_text(category or "未分类", 80)
+    if not category:
+        raise PromptCatalogValidationError("提示词分类不能为空")
+    catalog = catalog if isinstance(catalog, dict) else default_prompt_catalog()
+    items = list(catalog.get(resource_key, []))
+    positions = [
+        index
+        for index, item in enumerate(items)
+        if isinstance(item, dict) and normalize_text(item.get("category") or "未分类", 80) == category
+    ]
+    current_ids = [str(items[index].get("id") or "") for index in positions]
+    ordered_ids = [str(item_id or "").strip() for item_id in item_ids if str(item_id or "").strip()]
+    if (
+        not current_ids
+        or len(ordered_ids) != len(current_ids)
+        or len(set(ordered_ids)) != len(ordered_ids)
+        or set(ordered_ids) != set(current_ids)
+    ):
+        raise PromptCatalogValidationError("提示词列表已变化，请刷新后重试")
+    by_id = {str(items[index].get("id") or ""): items[index] for index in positions}
+    reordered = list(items)
+    for index, item_id in zip(positions, ordered_ids):
+        reordered[index] = by_id[item_id]
+    return {**catalog, resource_key: reordered}
+
+
 def find_builtin_prompt_catalog_item(defaults, resource_key, item_id):
     defaults = defaults if isinstance(defaults, dict) else {}
     items = defaults.get(resource_key) if isinstance(defaults.get(resource_key), list) else []

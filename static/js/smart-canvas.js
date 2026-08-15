@@ -8902,7 +8902,7 @@ function renderGenerationModePanel(){
             ${selected ? '<button type="button" data-generation-mode-clear>清除</button>' : ''}
         </div>
         <div class="generation-mode-groups">
-            ${categories.length ? balanceGenerationModeGroups(categories).map(column => `<div class="generation-mode-column">
+            ${categories.length ? balanceGenerationModeGroups(categories).reverse().map(column => `<div class="generation-mode-column">
                 ${column.map(group => generationModeGroupHtml(group, selected)).join('')}
             </div>`).join('') : '<div class="generation-mode-empty">暂无可用生成模式</div>'}
         </div>
@@ -26320,7 +26320,10 @@ generationModeBtn?.addEventListener('click', event => {
     if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
     else openGenerationModePanel(generationModeControl);
 });
-generationModePanel?.addEventListener('pointerdown', event => event.stopPropagation());
+generationModePanel?.addEventListener('pointerdown', event => {
+    if(generationModePromptSelection && event.button === 0) event.preventDefault();
+    event.stopPropagation();
+});
 generationModePanel?.addEventListener('click', event => {
     event.stopPropagation();
     const option = event.target.closest('[data-generation-mode-id]');

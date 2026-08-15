@@ -245,6 +245,12 @@ body.theme-dark .asset-search-wrap .asset-search { background-color:transparent 
 .prompt-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; align-content:start; }
 .prompt-row { position:relative; min-width:0; border-radius:12px; border:1px solid var(--line); background:var(--card); color:var(--text); overflow:hidden; text-align:left; transition:border-color .14s ease; }
 .prompt-row:hover { border-color:color-mix(in srgb, var(--strong) 32%, var(--line)); }
+.prompt-row[draggable="true"] { cursor:grab; }
+.prompt-row[draggable="true"]:active { cursor:grabbing; }
+.prompt-row.reorder-dragging { opacity:.38; }
+.prompt-row.reorder-before::before,.prompt-row.reorder-after::after { content:""; position:absolute; z-index:8; top:7px; bottom:7px; width:3px; border-radius:999px; background:#60a5fa; box-shadow:0 0 0 2px color-mix(in srgb, #60a5fa 25%, transparent); pointer-events:none; }
+.prompt-row.reorder-before::before { left:3px; }
+.prompt-row.reorder-after::after { right:3px; }
 .asset-card.active,.prompt-row.active { border-color:rgba(15,23,42,.76); box-shadow:0 6px 14px var(--shadow); }
 body.theme-dark .asset-card.active,body.theme-dark .prompt-row.active { border-color:rgba(248,250,252,.86); box-shadow:0 6px 14px var(--shadow); }
 .prompt-row-check { position:absolute; left:8px; top:10px; z-index:3; width:16px; height:16px; margin:0; accent-color:var(--strong); }

@@ -28,6 +28,10 @@ test('Smart Canvas exposes the compact generation-mode picker instead of the old
   assert.match(css, /\.generation-mode-groups\s*\{[^}]*grid-template-columns:repeat\(2/);
   assert.match(css, /\.generation-mode-column\s*\{[^}]*display:flex[^}]*flex-direction:column[^}]*gap:15px/);
   assert.match(css, /\.generation-mode-option\s*\{[^}]*height:48px/);
+  assert.match(css, /\.generation-mode-option\s*\{[^}]*border:1px solid color-mix\(in srgb, var\(--text\) 18%, var\(--line\)\)/);
+  assert.match(css, /\.generation-mode-option:hover,\.generation-mode-option:focus-visible\s*\{[^}]*border-color:var\(--strong\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--strong\) 12%, transparent\)/);
+  assert.doesNotMatch(css, /\.generation-mode-option:hover,\.generation-mode-option:focus-visible\s*\{[^}]*background:/);
+  assert.match(css, /\.generation-mode-option\.active\s*\{[^}]*border-color:var\(--strong\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--strong\) 12%, transparent\)/);
   assert.match(css, /\.generation-mode-option-copy small\s*\{[^}]*white-space:nowrap[^}]*opacity:0[^}]*translateY\(7px\)/);
   assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy strong[^}]*translateY\(-6\.4px\)/);
   assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy small[^}]*opacity:1[^}]*translateY\(3\.6px\)/);
@@ -153,6 +157,9 @@ test('header popovers measure viewport space and flip only when they fully fit a
 
 test('inline mode capsule anchors the picker beside itself with the same complete-fit flip rule', () => {
   const generationPosition = js.match(/function positionGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
+  const panelPointerHandler = js.match(/generationModePanel\?\.addEventListener\('pointerdown',[\s\S]*?\n\}\);/)?.[0] || '';
+  assert.match(panelPointerHandler, /generationModePromptSelection[^\n]*event\.button === 0[^\n]*event\.preventDefault\(\)/);
+  assert.match(panelPointerHandler, /event\.stopPropagation\(\)/);
   assert.match(generationPosition, /anchorEl = generationModeControl/);
   assert.match(generationPosition, /const anchorRect = anchor\.getBoundingClientRect\(\)/);
   assert.match(generationPosition, /const inlineAnchor = anchor !== generationModeControl/);
@@ -186,6 +193,7 @@ test('generation-mode categories balance dynamically between independent columns
     ['分镜叙事', '质感调节'],
   ]);
   assert.deepEqual(columns.map(column => column.reduce((sum, group) => sum + group.items.length, 0)), [4, 4]);
+  assert.match(js, /balanceGenerationModeGroups\(categories\)\.reverse\(\)\.map/);
 });
 
 test('inline mode picker hides the boundary caret and restores the exact prompt selection after switching', () => {

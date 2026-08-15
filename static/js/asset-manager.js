@@ -127,6 +127,11 @@ let assetReorderDropId = '';
 let assetReorderDropAfter = false;
 let assetDragClickUntil = 0;
 let assetReorderBusy = false;
+let promptReorderDragId = '';
+let promptReorderDropId = '';
+let promptReorderDropAfter = false;
+let promptDragClickUntil = 0;
+let promptReorderBusy = false;
 let sharedFolders = [];
 let activeSharedFolderId = '';
 let activeSharedFolderName = '';
@@ -987,6 +992,14 @@ function currentPromptItems(){
         if(!query) return true;
         return [item.name, item.description, item.prompt_template, item.system_template, item.user_template, item.category].join(' ').toLowerCase().includes(query);
     });
+}
+function promptManualReorderEnabled(){
+    return activeTab === 'prompts'
+        && activePromptResourceId === 'generation'
+        && activePromptCategory !== 'all'
+        && !promptManageMode
+        && !promptReorderBusy
+        && !promptQuery.trim();
 }
 // 认证支持的平台键（与后端 AVATAR_SUPPORTED_PLATFORMS 保持一致；新增平台时同步）
 const AVATAR_SUPPORTED_PLATFORMS = ['apimart', 'volcengine'];
@@ -2604,7 +2617,8 @@ function renderPromptTreeBranch(lib){
 }
 function renderPromptRow(item, readonly){
     const assistant = item?.kind === 'system_instruction';
-    return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}">
+    const reorderable = !readonly && !assistant && promptManualReorderEnabled();
+    return `<article class="prompt-row ${item.id === selectedPromptId ? 'active' : ''}" data-prompt-row="${escapeAttr(item.id)}" ${reorderable ? 'draggable="true" title="拖拽调整当前分类中的显示顺序"' : ''}>
         <input class="prompt-row-check" type="checkbox" data-prompt-check="${escapeAttr(item.id)}" ${selectedPromptIds.has(item.id) ? 'checked' : ''} ${readonly || item.builtin ? 'disabled' : ''}>
         <div class="prompt-card-cover">
             <i data-lucide="${assistant ? 'bot' : (item.icon || 'sparkles')}"></i>
@@ -3565,6 +3579,11 @@ async function handleClick(event){
         selectedCanvasAssetId = '';
         selectedCanvasAssetIds.clear();
         renderCanvasAssetViewPreservingDetail();
+        return;
+    }
+    if(Date.now() < promptDragClickUntil && target.closest?.('[data-prompt-row]')){
+        event.preventDefault();
+        event.stopPropagation();
         return;
     }
     const canvasAssetCanvas = target.closest?.('[data-canvas-asset-canvas]');
@@ -4813,6 +4832,54 @@ function clearAssetReorderIndicators(){
         card.classList.remove('reorder-before', 'reorder-after', 'reorder-dragging');
     });
 }
+function clearPromptReorderIndicators(){
+    root.querySelectorAll('.prompt-row.reorder-before,.prompt-row.reorder-after,.prompt-row.reorder-dragging').forEach(row => {
+        row.classList.remove('reorder-before', 'reorder-after', 'reorder-dragging');
+    });
+}
+function reorderPromptCategoryItems(items, category, orderedIds){
+    const next = Array.isArray(items) ? items.slice() : [];
+    const positions = next.map((item, index) => String(item?.category || '未分类') === category ? index : -1).filter(index => index >= 0);
+    const currentIds = positions.map(index => String(next[index]?.id || ''));
+    if(orderedIds.length !== currentIds.length || new Set(orderedIds).size !== orderedIds.length || orderedIds.some(id => !currentIds.includes(id))) return null;
+    const byId = new Map(positions.map(index => [String(next[index]?.id || ''), next[index]]));
+    positions.forEach((position, index) => { next[position] = byId.get(orderedIds[index]); });
+    return next;
+}
+async function persistPromptReorder(sourceId, targetId, after){
+    if(!promptManualReorderEnabled() || !sourceId || !targetId || sourceId === targetId) return;
+    const category = activePromptCategory;
+    const previous = Array.isArray(promptCatalog.generation_prompts) ? promptCatalog.generation_prompts.slice() : [];
+    const visible = currentPromptItems().slice();
+    const sourceIndex = visible.findIndex(item => item.id === sourceId);
+    if(sourceIndex < 0) return;
+    const [moved] = visible.splice(sourceIndex, 1);
+    let targetIndex = visible.findIndex(item => item.id === targetId);
+    if(targetIndex < 0) return;
+    if(after) targetIndex += 1;
+    visible.splice(targetIndex, 0, moved);
+    const orderedIds = visible.map(item => String(item.id || ''));
+    const next = reorderPromptCategoryItems(previous, category, orderedIds);
+    if(!next || next.every((item, index) => item.id === previous[index]?.id)) return;
+    promptCatalog = {...promptCatalog, generation_prompts:next};
+    promptReorderBusy = true;
+    render();
+    try {
+        const data = await apiJson('/api/prompt-catalog/generation-prompts/reorder', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({category, item_ids:orderedIds})
+        });
+        applyPromptCatalogResponse(data);
+        setStatus('生成提示词顺序已保存');
+    } catch(err){
+        promptCatalog = {...promptCatalog, generation_prompts:previous};
+        setStatus(err.message || '保存生成提示词顺序失败');
+    } finally {
+        promptReorderBusy = false;
+        render();
+    }
+}
 async function persistAssetReorder(sourceId, targetId, after){
     const cat = activeAssetCategory();
     if(!cat || !sourceId || !targetId || sourceId === targetId) return;
@@ -4847,6 +4914,16 @@ async function persistAssetReorder(sourceId, targetId, after){
     }
 }
 root.addEventListener('dragstart', event => {
+    const promptRow = event.target.closest?.('[data-prompt-row]');
+    if(promptRow && promptManualReorderEnabled()){
+        promptReorderDragId = promptRow.dataset.promptRow || '';
+        promptReorderDropId = '';
+        promptReorderDropAfter = false;
+        promptRow.classList.add('reorder-dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', promptReorderDragId);
+        return;
+    }
     const card = event.target.closest?.('[data-asset-card]');
     if(!card || !assetManualReorderEnabled()) return;
     assetReorderDragId = card.dataset.assetCard || '';
@@ -4857,6 +4934,23 @@ root.addEventListener('dragstart', event => {
     event.dataTransfer.setData('text/plain', assetReorderDragId);
 });
 root.addEventListener('dragover', event => {
+    if(promptReorderDragId){
+        const row = event.target.closest?.('[data-prompt-row]');
+        if(row && row.dataset.promptRow !== promptReorderDragId){
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            clearPromptReorderIndicators();
+            root.querySelector(`[data-prompt-row="${CSS.escape(promptReorderDragId)}"]`)?.classList.add('reorder-dragging');
+            const rect = row.getBoundingClientRect();
+            const verticalOffset = event.clientY - (rect.top + rect.height / 2);
+            promptReorderDropId = row.dataset.promptRow || '';
+            promptReorderDropAfter = Math.abs(verticalOffset) > rect.height * .25
+                ? verticalOffset > 0
+                : event.clientX >= rect.left + rect.width / 2;
+            row.classList.add(promptReorderDropAfter ? 'reorder-after' : 'reorder-before');
+            return;
+        }
+    }
     if(assetReorderDragId){
         const card = event.target.closest?.('[data-asset-card]');
         if(card && card.dataset.assetCard !== assetReorderDragId){
@@ -4880,6 +4974,19 @@ root.addEventListener('dragleave', event => {
     event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop')?.classList.remove('drag-over');
 });
 root.addEventListener('drop', event => {
+    if(promptReorderDragId){
+        event.preventDefault();
+        const sourceId = promptReorderDragId;
+        const targetId = promptReorderDropId;
+        const after = promptReorderDropAfter;
+        promptReorderDragId = '';
+        promptReorderDropId = '';
+        promptReorderDropAfter = false;
+        promptDragClickUntil = Date.now() + 250;
+        clearPromptReorderIndicators();
+        if(targetId) persistPromptReorder(sourceId, targetId, after);
+        return;
+    }
     if(assetReorderDragId){
         event.preventDefault();
         const sourceId = assetReorderDragId;
@@ -4902,6 +5009,11 @@ root.addEventListener('drop', event => {
     else uploadFiles(event.dataTransfer.files).catch(err => setStatus(err.message || '上传失败'));
 });
 root.addEventListener('dragend', () => {
+    if(promptReorderDragId) promptDragClickUntil = Date.now() + 250;
+    promptReorderDragId = '';
+    promptReorderDropId = '';
+    promptReorderDropAfter = false;
+    clearPromptReorderIndicators();
     if(assetReorderDragId) assetDragClickUntil = Date.now() + 250;
     assetReorderDragId = '';
     assetReorderDropId = '';

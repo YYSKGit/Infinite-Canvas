@@ -51,6 +51,7 @@ from prompt_catalog import (
     normalize_generation_prompt,
     normalize_system_instruction,
     remove_retired_prompt_catalog_builtins,
+    reorder_prompt_catalog_category,
     restore_builtin_prompt_catalog_item,
     save_prompt_catalog as save_prompt_catalog_file,
 )
@@ -3061,6 +3062,10 @@ class SystemInstructionRequest(BaseModel):
 
 class PromptCatalogBatchDeleteRequest(BaseModel):
     ids: List[str] = []
+
+class PromptCatalogReorderRequest(BaseModel):
+    category: str = ""
+    item_ids: List[str] = []
 
 # --- 负载均衡 ---
 
@@ -16861,6 +16866,22 @@ async def create_generation_prompt(payload: GenerationPromptRequest):
         catalog["generation_prompts"].insert(0, item)
         catalog = save_prompt_catalog_data(catalog)
     return {"catalog": catalog, "item": item}
+
+@app.post("/api/prompt-catalog/generation-prompts/reorder")
+async def reorder_generation_prompts(payload: PromptCatalogReorderRequest):
+    with PROMPT_CATALOG_LOCK:
+        catalog = load_prompt_catalog_data()
+        try:
+            catalog = reorder_prompt_catalog_category(
+                catalog,
+                "generation_prompts",
+                payload.category,
+                payload.item_ids,
+            )
+        except PromptCatalogValidationError as error:
+            raise HTTPException(status_code=409, detail=str(error))
+        catalog = save_prompt_catalog_data(catalog)
+    return {"catalog": catalog}
 
 @app.patch("/api/prompt-catalog/generation-prompts/{item_id}")
 async def update_generation_prompt(item_id: str, payload: GenerationPromptRequest):

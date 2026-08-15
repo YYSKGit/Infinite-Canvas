@@ -13,6 +13,7 @@ from prompt_catalog import (
     normalize_prompt_catalog,
     normalize_system_instruction,
     remove_retired_prompt_catalog_builtins,
+    reorder_prompt_catalog_category,
     restore_builtin_prompt_catalog_item,
     save_prompt_catalog,
 )
@@ -28,6 +29,10 @@ class PromptCatalogTests(unittest.TestCase):
             catalog = normalize_prompt_catalog(json.load(file))
         self.assertEqual(len(catalog["generation_prompts"]), 8)
         self.assertEqual(len(catalog["system_instructions"]), 7)
+        self.assertEqual(
+            [item["id"] for item in catalog["generation_prompts"] if item["category"] == "设定图"],
+            ["character_reference_sheet", "character_face_three_views", "product_three_views"],
+        )
         for item in catalog["generation_prompts"]:
             self.assertEqual(item["prompt_template"].count("{{user_prompt}}"), 1)
             self.assertNotIn("negative", item)
@@ -89,6 +94,35 @@ class PromptCatalogTests(unittest.TestCase):
             with open(path, "r", encoding="utf-8") as file:
                 json.load(file)
             self.assertEqual(load_prompt_catalog(path), saved)
+
+    def test_generation_prompts_reorder_only_inside_the_requested_category(self):
+        catalog = normalize_prompt_catalog({
+            "generation_prompts": [
+                {"id": "story", "name": "分镜", "category": "分镜", "prompt_template": "{{user_prompt}}"},
+                {"id": "face", "name": "脸部", "category": "设定图", "prompt_template": "{{user_prompt}}"},
+                {"id": "light", "name": "光影", "category": "质感", "prompt_template": "{{user_prompt}}"},
+                {"id": "product", "name": "产品", "category": "设定图", "prompt_template": "{{user_prompt}}"},
+                {"id": "character", "name": "角色", "category": "设定图", "prompt_template": "{{user_prompt}}"},
+            ]
+        })
+        reordered = reorder_prompt_catalog_category(
+            catalog,
+            "generation_prompts",
+            "设定图",
+            ["character", "face", "product"],
+        )
+        self.assertEqual(
+            [item["id"] for item in reordered["generation_prompts"]],
+            ["story", "character", "light", "face", "product"],
+        )
+
+        with self.assertRaises(PromptCatalogValidationError):
+            reorder_prompt_catalog_category(
+                catalog,
+                "generation_prompts",
+                "设定图",
+                ["character", "face"],
+            )
 
     def test_builtin_items_are_derived_from_default_ids(self):
         defaults = {
