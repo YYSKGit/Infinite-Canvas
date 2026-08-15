@@ -12,6 +12,12 @@ const backendSource = readFileSync(fileURLToPath(new URL('../main.py', import.me
 const generationAnimationVideo = readFileSync(fileURLToPath(new URL('../static/media/load-bg-animation.mp4', import.meta.url)));
 const generationAnimationPoster = readFileSync(fileURLToPath(new URL('../static/media/load-bg-animation-poster.webp', import.meta.url)));
 
+test('image and video settings popovers make every resting unselected button easier to distinguish', () => {
+    assert.match(cssSource, /\.smart-popover\.image-settings-popover,\.smart-popover\.video-settings-popover\s*\{[^}]*--settings-option-border:color-mix\(in srgb, var\(--text\) 18%, var\(--line\)\);/);
+    assert.match(cssSource, /\.smart-popover\.image-settings-popover button:not\(\.active\):not\(:hover\):not\(:focus-visible\),\.smart-popover\.video-settings-popover button:not\(\.active\):not\(:hover\):not\(:focus-visible\)\s*\{[^}]*border-color:var\(--settings-option-border\);/);
+    assert.match(cssSource, /\.image-ratio-option:disabled:hover\s*\{[^}]*border-color:var\(--settings-option-border, var\(--line\)\);/);
+});
+
 function extractFunction(name){
     const markers = [`function ${name}(`, `async function ${name}(`];
     const starts = markers.map(marker => jsSource.indexOf(marker)).filter(index => index >= 0);

@@ -3177,7 +3177,7 @@ function recentSmartSettingsForMode(modeKey=''){
 }
 function rememberRecentSmartSettings(source=settings, node=null){
     const clean = stripOutpaintDisplaySettings(settingsForStorage(source), node);
-    sanitizeSmartApiSelection(clean);
+    sanitizeSmartApiSelection(clean, {node});
     if(clean.outpaintResolutionLocked === true && clean.resolution === 'custom'){
         clean.resolution = '1k';
         clean.ratio = clean.ratio || 'square';
@@ -5546,7 +5546,22 @@ function syncVideoSettingsPanelForRefs(){
     _lastVideoSettingsReferenceSignature = signature;
     renderDynamicParams();
 }
-function sanitizeSmartApiSelection(target=settings){
+let _lastImageSettingsReferenceSignature = '';
+function syncImageSettingsPanelForRefs(){
+    if(!isApiLikeEngine(settings.engine) || settings.apiKind === 'video'){
+        _lastImageSettingsReferenceSignature = '';
+        return;
+    }
+    const signature = [
+        settings.provider_id || '',
+        settings.model || '',
+        imageEditModeForNode() ? 'edit' : 'text'
+    ].join(':');
+    if(signature === _lastImageSettingsReferenceSignature) return;
+    _lastImageSettingsReferenceSignature = signature;
+    renderDynamicParams();
+}
+function sanitizeSmartApiSelection(target=settings, options={}){
     if(!target || typeof target !== 'object') return target;
     if(target.engine === 'volcengine'){
         if(target.apiKind === 'video'){
@@ -5571,7 +5586,7 @@ function sanitizeSmartApiSelection(target=settings){
             target.resolution = '1k';
         }
         if(!target.resolution) target.resolution = '1k';
-        normalizeImageSettingsForCapabilities(target);
+        normalizeImageSettingsForCapabilities(target, {hasReferenceImage:imageEditModeForNode(options.node)});
     }
     if(target.videoProvider){
         const models = providerVideoModels(target.videoProvider);
@@ -5712,9 +5727,13 @@ function imageCapabilitiesFor(source=settings){
         supportsQuality:descriptor.capability?.supports_quality === true
     };
 }
-function normalizeImageSettingsForCapabilities(target=settings){
+function imageEditModeForNode(node=activeComposerNode() || selectedNode()){
+    return Boolean(node && imageRefsOnly(visibleReferenceImagesFor(node)).length > 0);
+}
+function normalizeImageSettingsForCapabilities(target=settings, options=null){
     if(!target || typeof target !== 'object') return target;
     const caps = imageCapabilitiesFor(target);
+    const hasReferenceImage = options?.hasReferenceImage === true;
     if(String(target.resolution || '').toLowerCase() === 'auto'){
         target.ratio = 'auto';
         target.resolution = '1k';
@@ -5722,11 +5741,13 @@ function normalizeImageSettingsForCapabilities(target=settings){
     const validResolutions = new Set(['1k','2k','4k','custom']);
     target.resolution = String(target.resolution || '1k').toLowerCase();
     if(!validResolutions.has(target.resolution)) target.resolution = '1k';
-    const validRatios = new Set(['auto','square','portrait','landscape','portrait43','landscape43','story','wide','ultrawide','ultratall','source']);
-    if(!validRatios.has(String(target.ratio || ''))) target.ratio = 'square';
-    // Pixel-only contracts need concrete dimensions, which cannot be derived
-    // from an automatic aspect ratio without inventing a square fallback.
-    if(caps.sizeMode === 'pixel' && target.ratio === 'auto') target.ratio = 'square';
+    const validRatios = new Set(['auto','square','portrait','landscape','portrait43','landscape43','story','wide','ultrawide','ultratall']);
+    if(String(target.ratio || '') === 'source') target.ratio = 'auto';
+    else if(!validRatios.has(String(target.ratio || ''))) target.ratio = 'square';
+    // Pixel-only text-to-image contracts need concrete dimensions. Image-edit
+    // requests may retain auto because the edit adapter can derive the output
+    // shape from the submitted reference image.
+    if(caps.sizeMode === 'pixel' && target.ratio === 'auto' && !hasReferenceImage) target.ratio = 'square';
     if(!['low','medium','high'].includes(String(target.quality || '').toLowerCase())) target.quality = 'medium';
     else target.quality = String(target.quality).toLowerCase();
     target.count = normalizeImageGenerationCount(target.count);
@@ -5980,7 +6001,7 @@ function imageQualityLabel(value){
 }
 function syncImageSettingsSelection(ctrl){
     if(!ctrl) return;
-    normalizeImageSettingsForCapabilities(settings);
+    normalizeImageSettingsForCapabilities(settings, {hasReferenceImage:imageEditModeForNode()});
     ctrl.querySelectorAll('[data-image-setting-param]').forEach(button => {
         const key = button.dataset.imageSettingParam;
         button.classList.toggle('active', String(settings[key] ?? '') === button.dataset.imageSettingValue);
@@ -5990,20 +6011,19 @@ function syncImageSettingsSelection(ctrl){
     if(settings.resolution !== 'custom') ctrl.querySelector('.image-custom-size-note')?.remove();
 }
 function renderImageSettingsControl(){
-    normalizeImageSettingsForCapabilities(settings);
+    const hasReferenceImage = imageEditModeForNode();
+    normalizeImageSettingsForCapabilities(settings, {hasReferenceImage});
     const caps = imageCapabilitiesFor(settings);
     const ratio = String(settings.ratio || 'square');
     const resolution = String(settings.resolution || '1k').toLowerCase();
     const quality = String(settings.quality || 'medium').toLowerCase();
     const count = normalizeImageGenerationCount(settings.count);
-    const sourceRatio = sourceImageRatioLabel('');
     const ratioOptions = [
         ['auto',tr('smart.imageAspectAuto')],
         ['square','1:1'], ['portrait','2:3'], ['landscape','3:2'], ['portrait43','3:4'], ['landscape43','4:3'],
-        ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'], ['ultratall','9:21'],
-        ...(sourceRatio ? [['source',sourceRatio]] : [])
+        ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'], ['ultratall','9:21']
     ];
-    const autoDisabled = caps.sizeMode === 'pixel';
+    const autoDisabled = caps.sizeMode === 'pixel' && !hasReferenceImage;
     const qualityHtml = caps.supportsQuality ? `<div class="image-quality-grid">
         ${['low','medium','high'].map(value => `<button type="button" class="${value === quality ? 'active' : ''}" data-image-setting-param="quality" data-image-setting-value="${value}">${escapeHtml(imageQualityLabel(value))}</button>`).join('')}
     </div>` : '';
@@ -6752,11 +6772,13 @@ function normalizeVeniceVideoAspect(value, refs=[]){
     return '16:9';
 }
 function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSizeValue=''){
+    // Retired Smart Canvas `source` selections follow the automatic-size path.
+    if(ratioValue === 'source') ratioValue = 'auto';
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
     const resolutionKey = resolutionValue || '1k';
     if(ratioValue === 'auto') return resolutionKey;
-    if(ratioValue === 'custom' || ratioValue === 'source'){
+    if(ratioValue === 'custom'){
         const parsed = parseRatioValue(customRatioValue);
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
         if(parsed){
@@ -6790,9 +6812,10 @@ function imageSizeSpecForRun(sourceSettings=settings, prefix=''){
             height:Number(parsed?.height) || 0
         };
     }
-    const rawRatio = String(sourceSettings?.[ratioKey] || 'square');
+    const storedRatio = String(sourceSettings?.[ratioKey] || 'square');
+    const rawRatio = storedRatio === 'source' ? 'auto' : storedRatio;
     if(rawRatio === 'auto') return {mode:'auto_aspect', resolution};
-    const aspectRatio = rawRatio === 'custom' || rawRatio === 'source'
+    const aspectRatio = rawRatio === 'custom'
         ? String(sourceSettings?.[customRatioKey] || '').trim()
         : (ratioMap[rawRatio] || '1:1');
     return {mode:'preset', aspect_ratio:aspectRatio || '1:1', resolution};
@@ -6800,6 +6823,7 @@ function imageSizeSpecForRun(sourceSettings=settings, prefix=''){
 function normalizeApiSizeSettings(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
+    if(settings[ratioKey] === 'source') settings[ratioKey] = prefix ? 'square' : 'auto';
     if(!prefix && String(settings[resKey] || '').toLowerCase() === 'auto'){
         settings[ratioKey] = 'auto';
         settings[resKey] = '1k';
@@ -7053,7 +7077,7 @@ function renderApiParams(){
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
     // 图片比例、画质和数量由模型能力统一规整；旧版 resolution:auto 迁移为自动比例 + 1K。
     normalizeApiSizeSettings('');
-    normalizeImageSettingsForCapabilities(settings);
+    normalizeImageSettingsForCapabilities(settings, {hasReferenceImage:imageEditModeForNode()});
     dynamicParams.innerHTML = `
         ${renderProviderControl(providers)}
         ${renderModelControl(models)}
@@ -7079,7 +7103,7 @@ function renderVolcengineParams(){
     settings.provider_id = 'volcengine';
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
     normalizeApiSizeSettings('');
-    normalizeImageSettingsForCapabilities(settings);
+    normalizeImageSettingsForCapabilities(settings, {hasReferenceImage:imageEditModeForNode()});
     dynamicParams.innerHTML = `
         ${renderProviderControl(providers)}
         ${renderModelControl(models)}
@@ -7175,7 +7199,7 @@ function renderMsParams(){
     dynamicParams.innerHTML = `
         ${renderMsFunctionControl()}
         ${renderMsCustomModelPill()}
-        ${renderSizePickerControl('ms', false)}
+        ${renderSizePickerControl('ms')}
         ${renderCountVisualControl()}
     `;
 }
@@ -7248,12 +7272,11 @@ function renderComfyWorkflowControl(){
         </div>
     </div>`;
 }
-function renderSizeControls(prefix='', includeSource=false){
+function renderSizeControls(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
     const ratios = [
         ['square','1:1'], ['portrait','2:3'], ['landscape','3:2'], ['portrait43','3:4'], ['landscape43','4:3'], ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'], ['ultratall','9:21'],
-        ...(includeSource ? [['source', tr('canvas.adaptiveRatio') || '适配比例']] : []),
         ['custom', tr('canvas.custom') || '自定义']
     ];
     const resolutionOptions = (!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k','custom'] : ['1k','2k','4k','custom'];
@@ -7267,53 +7290,10 @@ function renderSizeControls(prefix='', includeSource=false){
 function ratioLabel(prefix='', source=settings){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const customKey = prefix ? `${prefix}CustomRatio` : 'customRatio';
-    const sourceLabel = sourceImageRatioLabel(prefix) || tr('smart.imageRatio');
-    const map = {auto:tr('smart.imageAspectAuto'), square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4', landscape43:'4:3', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21', source:sourceLabel, custom:source?.[customKey] || tr('smart.custom')};
-    return map[source?.[ratioKey] || 'square'] || '1:1';
-}
-function gcdInt(a, b){
-    a = Math.abs(Math.round(Number(a) || 0));
-    b = Math.abs(Math.round(Number(b) || 0));
-    while(b){ const t = b; b = a % b; a = t; }
-    return a || 1;
-}
-function imageSizeForRatio(img){
-    const w = Math.round(Number(img?.natural_w || img?.width || img?.w || 0));
-    const h = Math.round(Number(img?.natural_h || img?.height || img?.h || 0));
-    return w > 0 && h > 0 ? {w, h} : null;
-}
-function sourceRatioImageForNode(node){
-    const images = (node?.images || []).filter(img => img?.url && !isAudioMediaItem(img));
-    if(!images.length) return null;
-    if(selectedImage.nodeId === node?.id && selectedImage.index >= 0 && imagesForNode(node)[selectedImage.index]){
-        const selected = imagesForNode(node)[selectedImage.index];
-        if(imageSizeForRatio(selected)) return selected;
-    }
-    return images.find(img => imageSizeForRatio(img)) || images[0];
-}
-function reducedRatioForImage(img){
-    const size = imageSizeForRatio(img);
-    if(!size) return null;
-    const d = gcdInt(size.w, size.h);
-    return {w:Math.max(1, Math.round(size.w / d)), h:Math.max(1, Math.round(size.h / d))};
-}
-function sourceImageRatioLabel(prefix=''){
-    const node = activeComposerNode() || selectedNode();
-    const ratio = reducedRatioForImage(sourceRatioImageForNode(node));
-    if(!ratio) return '';
-    return `${ratio.w}:${ratio.h}`;
-}
-function applySourceRatioToSettings(prefix=''){
-    const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
-    if(settings[ratioKey] !== 'source') return;
-    const ratio = reducedRatioForImage(sourceRatioImageForNode(activeComposerNode() || selectedNode()));
-    if(!ratio) return;
-    const customKey = prefix ? `${prefix}CustomRatio` : 'customRatio';
-    const wKey = prefix ? `${prefix}CustomRatioWidth` : 'customRatioWidth';
-    const hKey = prefix ? `${prefix}CustomRatioHeight` : 'customRatioHeight';
-    settings[wKey] = ratio.w;
-    settings[hKey] = ratio.h;
-    settings[customKey] = `${ratio.w}:${ratio.h}`;
+    const storedRatio = source?.[ratioKey] || 'square';
+    const ratio = storedRatio === 'source' ? 'auto' : storedRatio;
+    const map = {auto:tr('smart.imageAspectAuto'), square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4', landscape43:'4:3', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21', custom:source?.[customKey] || tr('smart.custom')};
+    return map[ratio] || '1:1';
 }
 function resolutionLabel(prefix=''){
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
@@ -7330,7 +7310,6 @@ function ratioIconClass(value){
     if(value === 'landscape43') return 'r-landscape43';
     if(value === 'wide' || value === 'ultrawide') return 'r-wide';
     if(value === 'story' || value === 'ultratall') return 'r-story';
-    if(value === 'source') return 'r-source';
     if(value === 'custom') return 'r-custom';
     return '';
 }
@@ -7412,13 +7391,12 @@ function renderMsCustomModelPill(){
         </div>
     </div>`;
 }
-function renderRatioControl(prefix='', includeSource=false){
+function renderRatioControl(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
     const ratios = [
         ['square','1:1'], ['portrait','2:3'], ['landscape','3:2'], ['portrait43','3:4'], ['landscape43','4:3'],
         ['story','9:16'], ['wide','16:9'], ['ultrawide','21:9'], ['ultratall','9:21'],
-        ...(includeSource ? [['source', tr('smart.imageRatio')]] : []),
         ['custom', tr('smart.custom')]
     ];
     return `<div class="smart-control ratio-control">
@@ -7473,7 +7451,7 @@ function sizePickerLabel(prefix=''){
     }
     return `${ratioLabel(prefix)} · ${resolutionLabel(prefix)}`;
 }
-function renderSizePickerControl(prefix='', includeSource=false){
+function renderSizePickerControl(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
     const scope = sizePickerScope(prefix);
@@ -7483,8 +7461,7 @@ function renderSizePickerControl(prefix='', includeSource=false){
     const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
     const ratios = [
         ['square','1:1','正方形'], ['portrait','2:3','竖图'], ['landscape','3:2','横图'], ['portrait43','3:4','竖图'], ['landscape43','4:3','横图'],
-        ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽'], ['ultratall','9:21','超竖'],
-        ...(includeSource ? [['source', sourceImageRatioLabel(prefix) || '原图', '适配输入']] : [])
+        ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽'], ['ultratall','9:21','超竖']
     ];
     const wKey = prefix ? `${prefix}CustomWidth` : 'customWidth';
     const hKey = prefix ? `${prefix}CustomHeight` : 'customHeight';
@@ -7505,7 +7482,7 @@ function renderSizePickerControl(prefix='', includeSource=false){
                     ${ratios.map(([value, label, sub]) => `<button type="button" class="size-picker-option ${value === currentRatio ? 'active' : ''}" data-smart-param="${ratioKey}" data-smart-value="${escapeHtml(value)}"><span>${escapeHtml(label)}</span><small>${escapeHtml(sub)}</small></button>`).join('')}
                 </div>
                 <div class="size-picker-list">
-                    ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${escapeHtml(apiImageSize(currentRatio === 'source' ? 'square' : currentRatio, value, settings[prefix ? `${prefix}CustomRatio` : 'customRatio'] || '', '') || '')}</small></button>`).join('')}
+                    ${options.filter(v => v !== 'auto').map(value => `<button type="button" class="size-picker-option ${value === currentRes ? 'active' : ''}" data-smart-param="${resKey}" data-smart-value="${value}"><span>${value.toUpperCase()}</span><small>${escapeHtml(apiImageSize(currentRatio, value, settings[prefix ? `${prefix}CustomRatio` : 'customRatio'] || '', '') || '')}</small></button>`).join('')}
                 </div>
             </div>` : ''}
             ${scope === 'custom' ? `<div class="size-picker-pane size-picker-custom">
@@ -7519,7 +7496,6 @@ function renderSizePickerControl(prefix='', includeSource=false){
 }
 function renderInlineCustomRatioFields(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
-    if(settings[ratioKey] === 'source') return '';
     if(settings[ratioKey] !== 'custom') return '';
     const wKey = prefix ? `${prefix}CustomRatioWidth` : 'customRatioWidth';
     const hKey = prefix ? `${prefix}CustomRatioHeight` : 'customRatioHeight';
@@ -7572,12 +7548,11 @@ function renderCountControl(){
 }
 function renderCustomRatioControls(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
-    if(settings[ratioKey] !== 'custom' && settings[ratioKey] !== 'source') return '';
+    if(settings[ratioKey] !== 'custom') return '';
     const wKey = prefix ? `${prefix}CustomRatioWidth` : 'customRatioWidth';
     const hKey = prefix ? `${prefix}CustomRatioHeight` : 'customRatioHeight';
-    const disabled = settings[ratioKey] === 'source' ? 'disabled' : '';
-    return `<input type="number" data-param="${wKey}" value="${escapeHtml(settings[wKey] || '')}" placeholder="比例宽" ${disabled}>
-            <input type="number" data-param="${hKey}" value="${escapeHtml(settings[hKey] || '')}" placeholder="比例高" ${disabled}>`;
+    return `<input type="number" data-param="${wKey}" value="${escapeHtml(settings[wKey] || '')}" placeholder="比例宽">
+            <input type="number" data-param="${hKey}" value="${escapeHtml(settings[hKey] || '')}" placeholder="比例高">`;
 }
 function renderCustomSizeControls(prefix=''){
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
@@ -8165,13 +8140,11 @@ function setDynamicSetting(key, value, options={}){
     }
     if(key === 'ratio'){
         if(settings.resolution === 'custom') settings.resolution = '1k';
-        applySourceRatioToSettings('');
     }
     if(key === 'msResolution'){
         if(settings.msResolution === 'custom') settings.msRatio = '';
         else if(!settings.msRatio) settings.msRatio = 'square';
     }
-    if(key === 'msRatio') applySourceRatioToSettings('ms');
     if(key === 'customRatioWidth' || key === 'customRatioHeight'){
         settings.customRatio = settings.customRatioWidth && settings.customRatioHeight ? `${settings.customRatioWidth}:${settings.customRatioHeight}` : '';
         settings.ratio = 'custom';
@@ -18443,6 +18416,7 @@ function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
+    syncImageSettingsPanelForRefs();
     syncVideoSettingsPanelForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
     promptEditor?.setReferenceContext(dedup.map(withPromptReferencePreview));
@@ -23055,7 +23029,9 @@ function smartGenerationPreflightError(runSettings=settings, refs=[]){
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null, runContext=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
-    const requestSettings = normalizeImageSettingsForCapabilities({...runSettings});
+    const requestSettings = normalizeImageSettingsForCapabilities({...runSettings}, {
+        hasReferenceImage:imageRefsOnly(refs).length > 0
+    });
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(requestSettings.provider_id);
     const jobs = smartImageGenerationJobs(refs, requestSettings);
     const count = jobs.length;

@@ -291,6 +291,28 @@ test('Venice edit pending size follows input only for automatic aspect', () => {
     assert.equal(loaded.veniceEditUsesSourcePendingSize({...base, ratio:'auto'}, 'venice', false), false);
 });
 
+test('retired source-ratio settings migrate to automatic sizing', () => {
+    const {normalizeImageSettingsForCapabilities} = loadProductionFunctions([
+        'normalizeImageSettingsForCapabilities'
+    ], {
+        settings:{},
+        imageCapabilitiesFor:source => ({sizeMode:source.sizeMode || ''}),
+        normalizeImageGenerationCount:value => Number(value) || 1
+    });
+
+    const automatic = {ratio:'source', resolution:'2k', sizeMode:'aspect_resolution', count:1};
+    normalizeImageSettingsForCapabilities(automatic);
+    assert.equal(automatic.ratio, 'auto');
+
+    const pixelOnly = {ratio:'source', resolution:'2k', sizeMode:'pixel', count:1};
+    normalizeImageSettingsForCapabilities(pixelOnly);
+    assert.equal(pixelOnly.ratio, 'square');
+
+    const pixelEdit = {ratio:'auto', resolution:'2k', sizeMode:'pixel', count:1};
+    normalizeImageSettingsForCapabilities(pixelEdit, {hasReferenceImage:true});
+    assert.equal(pixelEdit.ratio, 'auto');
+});
+
 test('buildPromptRequest preserves upstream provenance in the refs saved for reruns', () => {
     let promptParts = [];
     const {buildPromptRequest} = loadProductionFunctions(['smartGenerationRequestRef', 'buildPromptRequest'], {
