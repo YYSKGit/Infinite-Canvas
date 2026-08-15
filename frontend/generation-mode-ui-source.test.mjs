@@ -21,6 +21,8 @@ test('Smart Canvas exposes the compact generation-mode picker instead of the old
   assert.match(css, /\.generation-mode-panel\s*\{[^}]*right:-8px/);
   assert.match(css, /\.generation-mode-panel\s*\{[^}]*background:var\(--composer-popover-surface\)[^}]*border:1px solid var\(--composer-popover-border\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
   assert.match(css, /\.mention-picker\s*\{[^}]*background:var\(--composer-popover-surface\)[^}]*border:1px solid var\(--composer-popover-border\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
+  assert.match(css, /\.mention-preview\s*\{[^}]*border:1px solid var\(--composer-popover-border\)[^}]*background:var\(--composer-popover-surface\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
+  assert.match(css, /\.mention-preview img,\.mention-preview video\s*\{[^}]*background:var\(--composer-popover-surface\)/);
   assert.match(css, /\.composer \.smart-popover\s*\{[^}]*background:var\(--composer-popover-surface\)[^}]*border-color:var\(--composer-popover-border\)[^}]*box-shadow:var\(--composer-popover-shadow\)/);
   assert.match(css, /\.theme-dark\s*\{[^}]*--composer-popover-surface:#1b2331[^}]*--composer-popover-shadow:0 28px 76px rgba\(0,0,0,\.52\)/);
   assert.match(css, /\.generation-mode-groups\s*\{[^}]*grid-template-columns:repeat\(2/);
@@ -69,6 +71,47 @@ test('selected mode is a non-document ProseMirror inline decoration compatible w
 test('mode picker closes on outside composer interactions and Escape', () => {
   assert.match(js, /document\.addEventListener\('click', event => \{[\s\S]*?#generationModeControl, \.smart-prompt-inline-prefix-chip[\s\S]*?closeGenerationModePanel\(\);[\s\S]*?\}, true\);/);
   assert.match(js, /event\.key === 'Escape'[^\n]*closeGenerationModePanel\(\)/);
+});
+
+test('mention picker stays dismissed after Escape until the caret context changes', () => {
+  const maybeOpen = js.match(/function maybeOpenMentionPicker\(\)[\s\S]*?\n\}/)?.[0] || '';
+  const keydown = js.match(/function handleMentionPickerKeydown\(event\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(js, /let mentionDismissedCaretText = null/);
+  assert.match(keydown, /event\.key === 'Escape'[\s\S]*?mentionDismissedCaretText = textBeforeCaret\(\)[\s\S]*?closeMentionPicker\(\)/);
+  assert.match(maybeOpen, /mentionDismissedCaretText !== null && before === mentionDismissedCaretText\) return/);
+  assert.match(maybeOpen, /mentionDismissedCaretText = null[\s\S]*?\/@\$\/\.test\(before\)/);
+});
+
+test('mention media focus matches the asset manager single-border selection style', () => {
+  assert.match(css, /\.mention-option\.focused\s*\{[^}]*border-color:rgba\(15,23,42,\.76\)[^}]*box-shadow:0 6px 14px var\(--shadow\)/);
+  assert.match(css, /\.theme-dark \.mention-option\.focused\s*\{[^}]*border-color:rgba\(248,250,252,\.86\)[^}]*box-shadow:0 6px 14px var\(--shadow\)/);
+  assert.doesNotMatch(css, /\.mention-option\.focused\s*\{[^}]*box-shadow:0 0 0 2px/);
+});
+
+test('mention capsule preview waits for displayable media before showing and then applies complete-fit flipping', () => {
+  const positionPreview = js.match(/function positionMentionPreview\(token\)[\s\S]*?\n\}/)?.[0] || '';
+  const showPreview = js.match(/function showMentionPreviewForToken\(token\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(positionPreview, /getBoundingClientRect\(\)/);
+  assert.match(positionPreview, /window\.innerHeight/);
+  assert.match(positionPreview, /token\.offsetHeight[\s\S]*?const gap = 4 \* safeScale/);
+  assert.match(positionPreview, /previewHeight > spaceBelow && previewHeight <= spaceAbove/);
+  assert.match(positionPreview, /anchorRect\.top - gap - previewHeight[\s\S]*?anchorRect\.bottom \+ gap/);
+  assert.match(positionPreview, /window\.innerWidth - edgeMargin - previewWidth/);
+  assert.match(positionPreview, /classList\.toggle\('open-upward', openUpward\)/);
+  assert.match(showPreview, /mentionPreview\.style\.display = 'none'[\s\S]*?mentionPreviewToken = token/);
+  assert.match(showPreview, /if\(mentionPreviewToken !== token\) return[\s\S]*?mentionPreview\.style\.display = 'block'[\s\S]*?positionMentionPreview\(token\)/);
+  assert.match(showPreview, /media\.onloadeddata = reveal/);
+  assert.match(showPreview, /media\.onload = reveal/);
+  assert.match(showPreview, /media\.onerror = fail/);
+  assert.match(showPreview, /media\.readyState >= 2/);
+  assert.match(showPreview, /media\.complete && media\.naturalWidth > 0/);
+});
+
+test('open generation-mode picker suppresses pending and new media capsule previews', () => {
+  const openMode = js.match(/async function openGenerationModePanel\([\s\S]*?\n\}/)?.[0] || '';
+  const showPreview = js.match(/function showMentionPreviewForToken\(token\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(openMode, /hideMentionPreview\(\)[\s\S]*?inlineAnchor/);
+  assert.match(showPreview, /generationModePanel\?\.classList\.contains\('open'\)[\s\S]*?hideMentionPreview\(\)/);
 });
 
 test('mode picker opens after a complete click without keyboard-selection state', () => {

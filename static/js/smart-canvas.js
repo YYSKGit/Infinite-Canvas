@@ -188,6 +188,7 @@ let activeLocalAssetFolderId = '__root__';
 let mentionSource = 'input';
 let mentionAssetCategoryId = '';
 let mentionFocusIndex = -1;
+let mentionDismissedCaretText = null;
 let mentionPreviewToken = null;
 let assetLibraryUpdatedAt = 0;
 let assetLibraryRefreshTimer = null;
@@ -8982,6 +8983,7 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
 }
 async function openGenerationModePanel(anchorEl = generationModeControl){
     if(!generationModeSupported(settings) || !generationModePanel) return;
+    hideMentionPreview();
     const inlineAnchor = Boolean(anchorEl?.closest?.('.smart-prompt-inline-prefix-chip'));
     generationModePromptSelection = inlineAnchor ? capturePromptSelection() : null;
     promptEditor?.clearSelectionCaret?.({keepNativeHidden:true});
@@ -20451,6 +20453,8 @@ function positionMentionPickerAtCaret(){
 function maybeOpenMentionPicker(){
     saveMentionRange();
     const before = textBeforeCaret();
+    if(mentionDismissedCaretText !== null && before === mentionDismissedCaretText) return;
+    mentionDismissedCaretText = null;
     if(/@$/.test(before)){
         // Picker already open: just refresh the caret position, don't re-render
         if(mentionPicker?.classList?.contains('open')){ positionMentionPickerAtCaret(); return; }
@@ -26724,7 +26728,11 @@ promptInput.addEventListener('mouseup', () => { if(promptAssistantOpen) renderPr
 promptInput.addEventListener('focusin', saveMentionRange);
 function handleMentionPickerKeydown(event){
     if(event.isComposing || event.keyCode === 229) return;
-    if(event.key === 'Escape'){ closeMentionPicker(); return; }
+    if(event.key === 'Escape'){
+        mentionDismissedCaretText = textBeforeCaret();
+        closeMentionPicker();
+        return;
+    }
     if(!mentionPicker?.classList?.contains('open')) return;
     const btns = [...mentionPicker.querySelectorAll('[data-mention-index]')];
     if(event.key === 'Tab'){
@@ -26767,16 +26775,46 @@ function hideMentionPreview(){
     mentionPreviewToken = null;
     mentionPreview.style.display = 'none';
     const media = mentionPreview.querySelector('img,video');
+    if(media){
+        media.onload = null;
+        media.onerror = null;
+        media.onloadeddata = null;
+        media.onloadedmetadata = null;
+    }
     media?.pause?.();
     media?.removeAttribute('src');
     media?.load?.();
 }
+function positionMentionPreview(token){
+    if(!token || mentionPreviewToken !== token || mentionPreview.style.display !== 'block') return;
+    const anchorRect = token.getBoundingClientRect();
+    const previewRect = mentionPreview.getBoundingClientRect();
+    const edgeMargin = 12;
+    const measuredScale = token.offsetHeight ? anchorRect.height / token.offsetHeight : 1;
+    const safeScale = measuredScale > 0 ? measuredScale : 1;
+    const gap = 4 * safeScale;
+    const previewWidth = previewRect.width || 220;
+    const previewHeight = previewRect.height > 2 ? previewRect.height : 220;
+    const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
+    const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
+    const openUpward = previewHeight > spaceBelow && previewHeight <= spaceAbove;
+    const maxLeft = Math.max(edgeMargin, window.innerWidth - edgeMargin - previewWidth);
+    const maxTop = Math.max(edgeMargin, window.innerHeight - edgeMargin - previewHeight);
+    const rawTop = openUpward
+        ? anchorRect.top - gap - previewHeight
+        : anchorRect.bottom + gap;
+    const left = Math.max(edgeMargin, Math.min(anchorRect.left, maxLeft));
+    const top = Math.max(edgeMargin, Math.min(rawTop, maxTop));
+    mentionPreview.classList.toggle('open-upward', openUpward);
+    mentionPreview.style.left = `${left}px`;
+    mentionPreview.style.top = `${top}px`;
+}
 function showMentionPreviewForToken(token){
-    if(!token || promptEditor?.referenceDragActive || token.dataset.kind === 'audio'){
+    if(!token || promptEditor?.referenceDragActive || token.dataset.kind === 'audio' || generationModePanel?.classList.contains('open')){
         hideMentionPreview();
         return;
     }
-    if(mentionPreviewToken === token && mentionPreview.style.display === 'block') return;
+    if(mentionPreviewToken === token) return;
     let media = mentionPreview.querySelector('img,video');
     const isVideo = token.dataset.kind === 'video' || isVideoMediaItem({url:token.dataset.url, kind:token.dataset.kind});
     if(isVideo && media?.tagName?.toLowerCase() !== 'video'){
@@ -26786,26 +26824,37 @@ function showMentionPreviewForToken(token){
         media?.replaceWith(document.createElement('img'));
         media = mentionPreview.querySelector('img');
     }
+    mentionPreview.style.display = 'none';
+    mentionPreviewToken = token;
+    const reveal = () => {
+        if(mentionPreviewToken !== token) return;
+        mentionPreview.style.display = 'block';
+        positionMentionPreview(token);
+    };
+    const fail = () => {
+        if(mentionPreviewToken === token) hideMentionPreview();
+    };
+    media.onerror = fail;
     if(isVideo){
+        media.onloadeddata = reveal;
         media.muted = true;
         media.loop = true;
         media.playsInline = true;
-        media.preload = 'metadata';
+        media.preload = 'auto';
         media.disablePictureInPicture = true;
         media.setAttribute('disablepictureinpicture', '');
         media.setAttribute('controlslist', 'nodownload noplaybackrate noremoteplayback');
         const nextSrc = token.dataset.url || '';
         if(media.getAttribute('src') !== nextSrc) media.src = nextSrc;
+        if(media.readyState >= 2) reveal();
+        else media.load?.();
         media.play?.().catch(() => {});
     } else {
+        media.onload = reveal;
         media.src = token.dataset.url || '';
         media.alt = 'preview';
+        if(media.complete && media.naturalWidth > 0) reveal();
     }
-    const rect = token.getBoundingClientRect();
-    mentionPreview.style.left = `${Math.min(window.innerWidth - 236, rect.left)}px`;
-    mentionPreview.style.top = `${Math.min(window.innerHeight - 236, rect.bottom + 8)}px`;
-    mentionPreview.style.display = 'block';
-    mentionPreviewToken = token;
 }
 // Only a real pointer move can arm a preview. Typing may move a token under a
 // stationary mouse, but that layout change does not run this handler.
