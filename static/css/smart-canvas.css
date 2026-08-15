@@ -1641,7 +1641,7 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .mention-option-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(70px, 1fr)); gap:4px; }
 .mention-empty { min-height:64px; display:flex; align-items:center; justify-content:center; text-align:center; color:var(--faint); font-size:10px; line-height:1.4; border:1px dashed var(--line); border-radius:10px; background:var(--soft); padding:10px; }
 .mention-option { min-width:0; padding:4px 3px 5px; border-radius:8px; border:1px solid transparent; background:transparent; color:var(--muted); display:flex; flex-direction:column; align-items:center; gap:4px; overflow:hidden; cursor:pointer; transition:background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease; }
-.mention-option:hover { background:var(--card); border-color:var(--line); color:var(--text); }
+.mention-option:hover:not(.focused) { background:var(--card); border-color:color-mix(in srgb, var(--text) 24%, var(--line)); color:var(--text); }
 .mention-option.focused { background:var(--card); border-color:rgba(15,23,42,.76); color:var(--text); outline:none; box-shadow:0 6px 14px var(--shadow); }
 .theme-dark .mention-option.focused { border-color:rgba(248,250,252,.86); box-shadow:0 6px 14px var(--shadow); }
 .mention-option img,.mention-option video { width:100%; aspect-ratio:1; max-width:54px; max-height:54px; border-radius:7px; object-fit:cover; border:1px solid var(--line); background:var(--soft); }

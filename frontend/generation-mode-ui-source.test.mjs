@@ -83,6 +83,7 @@ test('mention picker stays dismissed after Escape until the caret context change
 });
 
 test('mention media focus matches the asset manager single-border selection style', () => {
+  assert.match(css, /\.mention-option:hover:not\(\.focused\)\s*\{[^}]*border-color:color-mix\(in srgb, var\(--text\) 24%, var\(--line\)\)/);
   assert.match(css, /\.mention-option\.focused\s*\{[^}]*border-color:rgba\(15,23,42,\.76\)[^}]*box-shadow:0 6px 14px var\(--shadow\)/);
   assert.match(css, /\.theme-dark \.mention-option\.focused\s*\{[^}]*border-color:rgba\(248,250,252,\.86\)[^}]*box-shadow:0 6px 14px var\(--shadow\)/);
   assert.doesNotMatch(css, /\.mention-option\.focused\s*\{[^}]*box-shadow:0 0 0 2px/);
