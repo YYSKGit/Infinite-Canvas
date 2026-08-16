@@ -1,5 +1,5 @@
 (function(){
-    const VERSION = '2026.08.16.smart-reference-picker.4';
+    const VERSION = '2026.08.16.api-model-row-drag.1';
     const scripts = [
         '/static/js/i18n-core.js',
         '/static/js/i18n/common.js',

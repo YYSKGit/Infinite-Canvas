@@ -64,8 +64,8 @@ test('Venice model rows expose compact configurable I2I and T2V routes', () => {
   assert.match(source, /api\.currentModelId/);
   assert.match(source, /api\.veniceImageRouteLabel/);
   assert.match(source, /api\.veniceVideoRouteLabel/);
-  assert.match(source, />ID<\/span>/);
-  assert.match(source, />NM<\/span>/);
+  assert.match(source, /modelDragHandleHtml\('ID'/);
+  assert.match(source, /modelDragHandleHtml\('NM'/);
   assert.match(source, /veniceModelRouteHtml[\s\S]*venice-model-name-field/);
   assert.doesNotMatch(css, /\.venice-model-columns/);
 });
@@ -117,6 +117,67 @@ test('RunningHub image and video model rows reuse the ID and NM prefixes', () =>
   assert.match(source, /item\?\.id === 'runninghub'/);
   assert.match(source, /item\?\.protocol[\s\S]*=== 'runninghub'/);
   assert.match(source, /standardModelFieldsHtml\(kind, index, model, alias, item\)/);
+});
+
+test('prefixed model labels are drag handles that reorder only the selected model list', () => {
+  assert.match(source, /function modelDragHandleHtml/);
+  assert.match(source, /class="model-drag-handle" draggable="true"/);
+  assert.match(source, /startModelRowDrag\(event, '\$\{kind\}', \$\{index\}\)/);
+  assert.match(source, /ondragover="dragModelRowOver/);
+  assert.match(source, /ondrop="dropModelRow/);
+  assert.match(css, /\.model-drag-handle\s*\{[^}]*cursor:grab/);
+  assert.match(css, /\.model-row\.is-drop-before/);
+  assert.match(css, /\.model-row\.is-drop-after/);
+
+  const item = {image_models:['a', 'b', 'c'], video_models:['v1', 'v2']};
+  const reorder = new Function(
+    'provider',
+    'renderModels',
+    'renderMsLoras',
+    `return (${extractFunction('reorderModel')});`
+  )(() => item, () => {}, () => {});
+  assert.equal(reorder('image', 0, 3), true);
+  assert.deepEqual(item.image_models, ['b', 'c', 'a']);
+  assert.deepEqual(item.video_models, ['v1', 'v2']);
+  assert.equal(reorder('image', 1, 1), false);
+});
+
+test('model input focus is drawn by the rounded field without a clipped native outline', () => {
+  assert.match(css, /\.model-row input\s*\{[^}]*outline:none/);
+  assert.match(css, /\.venice-model-route:focus-within,\.model-prefixed-field:focus-within\s*\{[^}]*border-color:var\(--text\) !important[^}]*border-style:solid[^}]*box-shadow:none/);
+});
+
+test('new Venice rows mark every empty text field and clear markers while typing', () => {
+  const veniceFields = extractFunction('veniceModelFieldsHtml');
+  const routeUpdate = extractFunction('updateVeniceModelRoute');
+  assert.match(veniceFields, /venice-model-id-field\$\{idMissing\}/);
+  assert.match(veniceFields, /venice-model-name-field\$\{nameMissing\}/);
+  assert.match(veniceFields, /syncModelFieldMissing\(this\)/);
+  assert.match(veniceFields, /syncPendingVeniceModelFields/);
+  assert.match(css, /\.venice-model-route\.is-missing,\.venice-model-field\.is-missing\s*\{[^}]*border-style:solid[^}]*border-color:rgba\(180,83,9,\.28\)/);
+  assert.match(css, /body\.studio-theme-dark \.venice-model-route\.is-missing,body\.studio-theme-dark \.venice-model-field\.is-missing\s*\{[^}]*border-color:rgba\(251,191,36,\.32\)/);
+  assert.ok(routeUpdate.indexOf("classList.toggle('is-missing', !target)") < routeUpdate.indexOf("if(!item || String(item.protocol"));
+
+  const item = {protocol:'venice', image_models:[''], model_routes:{}};
+  let routeMissing = true;
+  const control = {classList:{toggle:(name, active) => { if(name === 'is-missing') routeMissing = active; }}, title:''};
+  const input = {value:'edit-model', closest:() => control};
+  const updateRoute = new Function(
+    'provider',
+    'veniceModelRouteName',
+    'tr',
+    `return (${routeUpdate});`
+  )(() => item, kind => kind === 'image' ? 'image_edit' : '', key => key);
+  updateRoute('image', 0, input);
+  assert.equal(routeMissing, false);
+  assert.deepEqual(item.model_routes, {});
+  item.image_models[0] = 'source-model';
+  updateRoute('image', 0, input);
+  assert.equal(item.model_routes['source-model'].image_edit, 'edit-model');
+  input.value = '';
+  updateRoute('image', 0, input);
+  assert.equal(routeMissing, true);
+  assert.deepEqual(item.model_routes, {});
 });
 
 test('RunningHub editor locks the page behind its modal', () => {

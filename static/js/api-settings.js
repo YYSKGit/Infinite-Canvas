@@ -3407,6 +3407,10 @@ function modelProtocolSelectHtml(kind, index, model, item){
 function veniceModelRouteName(kind){
     return kind === 'image' ? 'image_edit' : kind === 'video' ? 'text_to_video' : '';
 }
+function modelDragHandleHtml(label, fieldTitle, kind, index){
+    const dragTitle = tr('api.dragModelRow') || '拖拽调整模型顺序';
+    return `<span class="model-drag-handle" draggable="true" title="${escapeAttr(`${fieldTitle} · ${dragTitle}`)}" aria-label="${escapeAttr(dragTitle)}" ondragstart="startModelRowDrag(event, '${kind}', ${index})">${label}</span>`;
+}
 function veniceModelRouteHtml(kind, index, model, item){
     if(String(item?.protocol || '').toLowerCase() !== 'venice') return '';
     const routeName = veniceModelRouteName(kind);
@@ -3419,7 +3423,7 @@ function veniceModelRouteHtml(kind, index, model, item){
     const placeholder = tr(routeName === 'image_edit' ? 'api.veniceImageRoutePlaceholder' : 'api.veniceVideoRoutePlaceholder');
     const title = fieldLabel;
     return `<div class="venice-model-route${target ? '' : ' is-missing'}" title="${escapeAttr(title)}">
-        <span>${label}</span>
+        ${modelDragHandleHtml(label, fieldLabel, kind, index)}
         <input value="${escapeAttr(target)}" placeholder="${escapeAttr(placeholder)}" oninput="updateVeniceModelRoute('${kind}', ${index}, this)">
     </div>`;
 }
@@ -3453,14 +3457,16 @@ function veniceImageCapabilityHtml(kind, index, model, item){
     </div>`;
 }
 function veniceModelFieldsHtml(kind, index, model, alias, item){
-    return `<div class="model-prefixed-field venice-model-field venice-model-id-field">
-        <span title="${escapeAttr(tr('api.currentModelId'))}">ID</span>
-        <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
+    const idMissing = String(model || '').trim() ? '' : ' is-missing';
+    const nameMissing = String(alias || '').trim() ? '' : ' is-missing';
+    return `<div class="model-prefixed-field venice-model-field venice-model-id-field${idMissing}">
+        ${modelDragHandleHtml('ID', tr('api.currentModelId'), kind, index)}
+        <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value); syncModelFieldMissing(this); syncPendingVeniceModelFields('${kind}', ${index}, this)">
     </div>
     ${veniceModelRouteHtml(kind, index, model, item)}
-    <div class="model-prefixed-field venice-model-field venice-model-name-field">
-        <span title="${escapeAttr(tr('api.modelDisplayName'))}">NM</span>
-        <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
+    <div class="model-prefixed-field venice-model-field venice-model-name-field${nameMissing}">
+        ${modelDragHandleHtml('NM', tr('api.modelDisplayName'), kind, index)}
+        <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value); syncModelFieldMissing(this)">
     </div>
     ${veniceImageCapabilityHtml(kind, index, model, item)}`;
 }
@@ -3476,11 +3482,11 @@ function standardModelFieldsHtml(kind, index, model, alias, item){
     }
     return `<div class="model-inputs model-prefixed-inputs">
         <div class="model-prefixed-field model-id-field">
-            <span title="${escapeAttr(tr('api.currentModelId'))}">ID</span>
+            ${modelDragHandleHtml('ID', tr('api.currentModelId'), kind, index)}
             <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value)">
         </div>
         <div class="model-prefixed-field model-name-field">
-            <span title="${escapeAttr(tr('api.modelDisplayName'))}">NM</span>
+            ${modelDragHandleHtml('NM', tr('api.modelDisplayName'), kind, index)}
             <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value)">
         </div>
     </div>`;
@@ -3504,7 +3510,7 @@ function renderModels(kind){
             ? veniceModelFieldsHtml(kind, index, model, alias, item)
             : standardModelFieldsHtml(kind, index, model, alias, item);
         return `
-        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}${showVeniceCapabilities ? ' has-venice-capabilities' : ''}">
+        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}${showVeniceCapabilities ? ' has-venice-capabilities' : ''}" data-model-kind="${kind}" data-model-index="${index}" ondragover="dragModelRowOver(event, '${kind}', ${index})" ondrop="dropModelRow(event, '${kind}', ${index})" ondragend="finishModelRowDrag()">
             ${fieldsHtml}
             ${modelProtocolSelectHtml(kind, index, model, item)}
             <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
@@ -3723,6 +3729,57 @@ function addModel(kind){
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
 }
+let modelRowDragState = null;
+function clearModelRowDropMarkers(){
+    document.querySelectorAll('.model-row.is-drop-before,.model-row.is-drop-after').forEach(row => row.classList.remove('is-drop-before', 'is-drop-after'));
+}
+function startModelRowDrag(event, kind, index){
+    const row = event.currentTarget?.closest?.('.model-row');
+    modelRowDragState = {kind, index};
+    row?.classList.add('is-dragging');
+    if(event.dataTransfer){
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', `${kind}:${index}`);
+        if(row) event.dataTransfer.setDragImage(row, 18, Math.min(22, row.offsetHeight / 2));
+    }
+}
+function dragModelRowOver(event, kind, index){
+    if(!modelRowDragState || modelRowDragState.kind !== kind) return;
+    event.preventDefault();
+    if(event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const row = event.currentTarget;
+    const after = event.clientY >= row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+    clearModelRowDropMarkers();
+    row.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+}
+function reorderModel(kind, fromIndex, insertionIndex){
+    const item = provider();
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
+    const models = item?.[key];
+    if(!Array.isArray(models) || fromIndex < 0 || fromIndex >= models.length) return false;
+    let target = Math.max(0, Math.min(models.length, insertionIndex));
+    if(fromIndex < target) target -= 1;
+    if(target === fromIndex) return false;
+    const [model] = models.splice(fromIndex, 1);
+    models.splice(target, 0, model);
+    renderModels(kind);
+    if(kind === 'image') renderMsLoras();
+    return true;
+}
+function dropModelRow(event, kind, index){
+    if(!modelRowDragState || modelRowDragState.kind !== kind) return;
+    event.preventDefault();
+    const row = event.currentTarget;
+    const after = event.clientY >= row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+    const fromIndex = modelRowDragState.index;
+    finishModelRowDrag();
+    reorderModel(kind, fromIndex, index + (after ? 1 : 0));
+}
+function finishModelRowDrag(){
+    document.querySelectorAll('.model-row.is-dragging').forEach(row => row.classList.remove('is-dragging'));
+    clearModelRowDropMarkers();
+    modelRowDragState = null;
+}
 function modelProtocolStillUsed(item, name){
     if(!item || !name) return false;
     const lists = ['image_models', 'chat_models', 'video_models'];
@@ -3776,20 +3833,31 @@ function updateVeniceModelRoute(kind, index, input){
     const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : '';
     const routeName = veniceModelRouteName(kind);
     const source = String(item?.[key]?.[index] || '').trim();
+    const target = String(input?.value ?? input ?? '').trim();
+    const routeControl = input?.closest?.('.venice-model-route');
+    if(routeControl){
+        routeControl.classList.toggle('is-missing', !target);
+        routeControl.title = tr(routeName === 'image_edit' ? 'api.veniceImageRouteLabel' : 'api.veniceVideoRouteLabel');
+    }
     if(!item || String(item.protocol || '').toLowerCase() !== 'venice' || !source || !routeName) return;
     if(!item.model_routes || typeof item.model_routes !== 'object') item.model_routes = {};
-    const target = String(input?.value ?? input ?? '').trim();
     if(target){
         item.model_routes[source] = {...(item.model_routes[source] || {}), [routeName]:target};
     } else if(item.model_routes[source]){
         delete item.model_routes[source][routeName];
         if(!Object.keys(item.model_routes[source]).length) delete item.model_routes[source];
     }
-    const routeControl = input?.closest?.('.venice-model-route');
-    if(routeControl){
-        routeControl.classList.toggle('is-missing', !target);
-        routeControl.title = tr(routeName === 'image_edit' ? 'api.veniceImageRouteLabel' : 'api.veniceVideoRouteLabel');
-    }
+}
+function syncModelFieldMissing(input){
+    input?.closest?.('.model-prefixed-field')?.classList.toggle('is-missing', !String(input?.value || '').trim());
+}
+function syncPendingVeniceModelFields(kind, index, input){
+    const row = input?.closest?.('.model-row');
+    if(!row) return;
+    const routeInput = row.querySelector('.venice-model-route input');
+    const aliasInput = row.querySelector('.venice-model-name-field input');
+    if(routeInput) updateVeniceModelRoute(kind, index, routeInput);
+    if(aliasInput) updateModelAlias(kind, index, aliasInput.value);
 }
 function updateVeniceImageCapability(index, field, value){
     const item = provider();

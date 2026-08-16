@@ -40,6 +40,7 @@
         "api.modelAliasPlaceholder": { zh: "显示名称（可选）", en: "Display name (optional)" },
         "api.currentModelId": { zh: "当前模型唯一标识", en: "Current model identifier" },
         "api.modelDisplayName": { zh: "显示名称", en: "Display name" },
+        "api.dragModelRow": { zh: "拖拽调整模型顺序", en: "Drag to reorder models" },
         "api.veniceImageRouteLabel": { zh: "图片编辑模型", en: "Image editing model" },
         "api.veniceVideoRouteLabel": { zh: "文生视频模型", en: "Text-to-video model" },
         "api.veniceImageRoutePlaceholder": { zh: "图片编辑模型（未配置）", en: "Image editing model (not configured)" },
