@@ -167,7 +167,6 @@ let pendingGroupUploadPoint = null;
 let mentionAnchorEl = null;
 let mentionInsertMode = 'token';
 let canvasReferencePickState = null;
-let canvasReferencePickSuppressUntil = 0;
 let panState = null;
 let didPan = false;
 let portDragState = null;
@@ -13433,6 +13432,7 @@ function render(){
     bindSmartPreviewImageFallbacks(world);
     bindSmartGenerationBackdropReadiness(world);
     bindSmartGenerationAnimationVideos(world);
+    syncCanvasReferencePickMarkers();
     measureSmartNodeImages();
     refreshRunTimerPills();
     scheduleSmartVideoResetFrameRefresh();
@@ -20573,7 +20573,8 @@ function addManualReferenceToNode(node, img, options=null){
         if(options.closePicker !== false) closeMentionPicker();
         return 'duplicate';
     }
-    const visibleRefs = visibleReferenceImagesFor(node);
+    const blockedRefs = blockedInputRefKeys(node);
+    const visibleRefs = visibleReferenceImagesFor(node).filter(item => !blockedRefs.has(inputRefKey(item)));
     if(visibleRefs.length >= SMART_REFERENCE_IMAGE_MAX && !visibleRefs.some(item => item?.url === ref.url)){
         toast(trf('smart.referenceLimit', {n:SMART_REFERENCE_IMAGE_MAX}));
         return 'limit';
@@ -20605,6 +20606,99 @@ function removeManualReferenceFromSelectedNode(key){
 function canvasReferencePickTargetNode(){
     return canvasReferencePickState ? nodes.find(node => node.id === canvasReferencePickState.targetNodeId) || null : null;
 }
+function canvasReferencePickRefMatches(left, right){
+    if(!left?.url || !right?.url) return false;
+    const leftKey = inputRefKey(left);
+    const rightKey = inputRefKey(right);
+    if(leftKey && rightKey && leftKey === rightKey) return true;
+    const leftUrl = canonicalSmartMediaUrl(left);
+    const rightUrl = canonicalSmartMediaUrl(right);
+    return Boolean(leftUrl && rightUrl && leftUrl === rightUrl);
+}
+function canvasReferencePickConnectedUpstreamRefs(node){
+    if(!node) return [];
+    const refs = smartImageUsesWorkflowInput(node, smartLoopContext)
+        ? workflowInputImagesFor(node, false, smartLoopContext)
+        : inputImagesFor(node, false, smartLoopContext);
+    return refs.filter(item => item?.url);
+}
+function canvasReferencePickIsLockedUpstream(node, ref){
+    if(!node || !ref?.url) return false;
+    return canvasReferencePickConnectedUpstreamRefs(node).some(item => canvasReferencePickRefMatches(item, ref));
+}
+function restoreCanvasReferencePickLockedUpstream(node){
+    if(!node) return false;
+    const blocked = blockedInputRefKeys(node);
+    let changed = false;
+    canvasReferencePickConnectedUpstreamRefs(node).forEach(item => {
+        const key = inputRefKey(item);
+        if(key && blocked.delete(key)) changed = true;
+    });
+    if(!changed) return false;
+    node.blockedInputRefs = [...blocked];
+    if(!node.blockedInputRefs.length) delete node.blockedInputRefs;
+    scheduleSave();
+    return true;
+}
+function canvasReferencePickIsSelected(node, ref){
+    if(!node || !ref?.url) return false;
+    if(canvasReferencePickIsLockedUpstream(node, ref)) return true;
+    const blocked = blockedInputRefKeys(node);
+    return visibleReferenceImagesFor(node).some(item => !blocked.has(inputRefKey(item)) && canvasReferencePickRefMatches(item, ref));
+}
+function syncCanvasReferencePickMarkers(){
+    const target = canvasReferencePickTargetNode();
+    world?.querySelectorAll?.('.image-node [data-image-index]').forEach(itemEl => {
+        const candidate = target ? canvasReferencePickCandidateFromTarget(itemEl) : null;
+        const locked = Boolean(candidate?.ref && canvasReferencePickIsLockedUpstream(target, candidate.ref));
+        itemEl.classList.toggle('canvas-reference-locked', locked);
+        itemEl.classList.toggle('canvas-reference-picked', Boolean(candidate?.ref && canvasReferencePickIsSelected(target, candidate.ref)));
+    });
+}
+function commitCanvasReferencePickToggle(node){
+    if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
+    renderInputThumbsRow(node);
+    scheduleSave();
+    syncCanvasReferencePickMarkers();
+}
+function toggleCanvasReferenceForNode(node, ref){
+    if(!node || !ref?.url) return null;
+    if(canvasReferencePickIsLockedUpstream(node, ref)) return 'locked';
+    const selected = canvasReferencePickIsSelected(node, ref);
+    if(selected){
+        pushUndo();
+        const manualRefs = Array.isArray(node.manualInputRefs) ? node.manualInputRefs : [];
+        const remainingManual = manualRefs.filter(item => !canvasReferencePickRefMatches(item, ref));
+        if(remainingManual.length) node.manualInputRefs = remainingManual;
+        else delete node.manualInputRefs;
+        const blocked = blockedInputRefKeys(node);
+        visibleReferenceImagesFor(node)
+            .filter(item => canvasReferencePickRefMatches(item, ref))
+            .forEach(item => {
+                const key = inputRefKey(item);
+                if(key) blocked.add(key);
+            });
+        node.blockedInputRefs = [...blocked];
+        if(!node.blockedInputRefs.length) delete node.blockedInputRefs;
+        commitCanvasReferencePickToggle(node);
+        return 'removed';
+    }
+    const blocked = blockedInputRefKeys(node);
+    const matchingKeys = new Set([inputRefKey(ref)]);
+    visibleReferenceImagesFor(node)
+        .filter(item => canvasReferencePickRefMatches(item, ref))
+        .forEach(item => matchingKeys.add(inputRefKey(item)));
+    const unblockedKeys = [...matchingKeys].filter(key => key && blocked.has(key));
+    if(unblockedKeys.length){
+        pushUndo();
+        unblockedKeys.forEach(key => blocked.delete(key));
+        node.blockedInputRefs = [...blocked];
+        if(!node.blockedInputRefs.length) delete node.blockedInputRefs;
+        commitCanvasReferencePickToggle(node);
+        if(canvasReferencePickIsSelected(node, ref)) return 'selected';
+    }
+    return addManualReferenceToNode(node, ref, {closePicker:false});
+}
 function returnToCanvasReferenceTarget(node=canvasReferencePickTargetNode()){
     if(!node) return false;
     selectedId = node.id;
@@ -20623,31 +20717,37 @@ function syncCanvasReferencePickBanner(){
     canvasReferencePickBanner.hidden = !active;
     shell?.classList.toggle('canvas-reference-picking', active);
     if(canvasReferencePickTarget) canvasReferencePickTarget.textContent = active ? tr('smart.referencePickHint') : '';
+    syncCanvasReferencePickMarkers();
     if(active) refreshIcons();
 }
 function startCanvasReferencePick(node=selectedNode()){
     if(!node) return false;
     closeMentionPicker();
     closeAllSmartPopovers();
-    canvasReferencePickState = {targetNodeId:node.id};
+    restoreCanvasReferencePickLockedUpstream(node);
+    canvasReferencePickState = {targetNodeId:node.id, changed:false};
     syncCanvasReferencePickBanner();
     if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
     renderInputThumbsRow(node);
     return true;
 }
-function finishCanvasReferencePick(){
-    const wasActive = Boolean(canvasReferencePickState);
+function finishCanvasReferencePick(options=null){
+    const state = canvasReferencePickState;
+    const target = state ? nodes.find(node => node.id === state.targetNodeId) || null : null;
+    const shouldReturn = Boolean(options?.returnIfChanged && state?.changed && target);
+    const wasActive = Boolean(state);
     canvasReferencePickState = null;
     syncCanvasReferencePickBanner();
     if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
     if(wasActive && selectedNode()) renderInputThumbsRow(selectedNode());
+    if(shouldReturn) returnToCanvasReferenceTarget(target);
     return wasActive;
 }
 function toggleCanvasReferencePick(){
     const node = selectedNode();
     if(!node) return;
     if(canvasReferencePickState?.targetNodeId === node.id){
-        finishCanvasReferencePick();
+        finishCanvasReferencePick({returnIfChanged:true});
         return;
     }
     startCanvasReferencePick(node);
@@ -20706,13 +20806,13 @@ function handleCanvasReferencePickClick(event){
         toast(tr(candidate.hasMedia ? 'smart.referencePickChooseMedia' : 'smart.referencePickNoMedia'));
         return true;
     }
-    const result = addManualReferenceToNode(targetNode, candidate.ref, {closePicker:false});
-    if(result === 'duplicate') toast(tr('smart.referenceAlreadyAdded'));
-    if(result === 'added' || result === 'duplicate'){
-        canvasReferencePickSuppressUntil = Date.now() + 360;
-        finishCanvasReferencePick();
-        returnToCanvasReferenceTarget(targetNode);
+    if(canvasReferencePickIsLockedUpstream(targetNode, candidate.ref)){
+        toast(tr('smart.referencePickUpstreamLocked'));
+        return true;
     }
+    const result = toggleCanvasReferenceForNode(targetNode, candidate.ref);
+    if(['added','selected','removed'].includes(result)) canvasReferencePickState.changed = true;
+    syncCanvasReferencePickMarkers();
     return true;
 }
 function placeMentionPickerInPromptRow(){
@@ -25618,21 +25718,16 @@ shell.addEventListener('click', e => {
     closeSmartFloatingPanels();
 }, true);
 shell.addEventListener('mousedown', event => {
-    if(!canvasReferencePickState && Date.now() >= canvasReferencePickSuppressUntil) return;
+    if(!canvasReferencePickState) return;
     if(!event.target.closest?.('.image-node')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
 }, true);
 shell.addEventListener('click', event => {
-    if(Date.now() < canvasReferencePickSuppressUntil && event.target.closest?.('.image-node')){
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        return;
-    }
     handleCanvasReferencePickClick(event);
 }, true);
 shell.addEventListener('dblclick', event => {
-    if(!canvasReferencePickState && Date.now() >= canvasReferencePickSuppressUntil) return;
+    if(!canvasReferencePickState) return;
     if(!event.target.closest?.('.image-node')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -26356,7 +26451,7 @@ window.addEventListener('keydown', e => {
     if(canvasReferencePickState && e.key === 'Escape'){
         e.preventDefault();
         e.stopImmediatePropagation();
-        finishCanvasReferencePick();
+        finishCanvasReferencePick({returnIfChanged:true});
         return;
     }
     if(canvasReferencePickState && (e.key === 'Delete' || e.key === 'Backspace') && !isEditableTarget(e.target)){
@@ -27092,7 +27187,7 @@ canvasReferencePickReturn?.addEventListener('click', event => {
 canvasReferencePickClose?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-    finishCanvasReferencePick();
+    finishCanvasReferencePick({returnIfChanged:true});
 });
 promptInput.addEventListener('smart-prompt-change', () => {
     hideMentionPreview();

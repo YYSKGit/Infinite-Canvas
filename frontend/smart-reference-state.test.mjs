@@ -94,6 +94,8 @@ test('reference controls keep canvas picker first, media in the middle, and popu
     assert.match(smartCanvasCss, /\.input-reference-action\.active \{[^}]*background:var\(--card\)[^}]*border-color:var\(--text\)[^}]*color:var\(--text\)/);
     assert.match(smartCanvasCss, /\.canvas-reference-pick-banner \{[^}]*border:1px solid var\(--line\)/);
     assert.match(smartCanvasCss, /\.canvas-reference-pick-icon \{[^}]*border:1px solid var\(--line\)/);
+    assert.match(smartCanvasCss, /\.canvas-reference-picked::after \{[^}]*border-color:var\(--connection-flow\)/);
+    assert.match(smartCanvasCss, /\.canvas-reference-locked \{ cursor:not-allowed; \}/);
 });
 
 test('canvas picker resolves one stable media item and preserves smart-group ownership', () => {
@@ -126,6 +128,7 @@ test('node-picked references are copied into manual state as independent snapsho
         {
             mediaKindForItem:item => item.kind || 'image',
             inputRefKey:item => item.nodeId && item.imageIndex !== '' ? `${item.nodeId}|${item.imageIndex}` : `url|${item.url}`,
+            blockedInputRefKeys:() => new Set(),
             visibleReferenceImagesFor:node => node.manualInputRefs || [],
             pushUndo:() => { undoCount++; },
             closeMentionPicker:() => {},
@@ -151,15 +154,107 @@ test('node-picked references are copied into manual state as independent snapsho
     assert.equal(target.manualInputRefs.length, 1);
 });
 
-test('a successful canvas pick exits after exactly one media and guards native node interactions', () => {
+test('canvas picker toggles multiple media and returns only when an effective session exits', () => {
     const clickSource = extractFunction('handleCanvasReferencePickClick');
     assert.match(clickSource, /closest\?\.\('\.composer,\.canvas-reference-pick-banner,\.smart-minimap'\)/);
-    assert.match(clickSource, /addManualReferenceToNode\(targetNode, candidate\.ref, \{closePicker:false\}\)/);
-    assert.match(clickSource, /result === 'added' \|\| result === 'duplicate'[\s\S]*?canvasReferencePickSuppressUntil = Date\.now\(\) \+ 360;[\s\S]*?finishCanvasReferencePick\(\);[\s\S]*?returnToCanvasReferenceTarget\(targetNode\)/);
+    assert.match(clickSource, /toggleCanvasReferenceForNode\(targetNode, candidate\.ref\)/);
+    assert.match(clickSource, /canvasReferencePickIsLockedUpstream\(targetNode, candidate\.ref\)[\s\S]*?smart\.referencePickUpstreamLocked/);
+    assert.match(clickSource, /\['added','selected','removed'\]\.includes\(result\)[\s\S]*?canvasReferencePickState\.changed = true/);
+    assert.doesNotMatch(clickSource.slice(clickSource.indexOf('toggleCanvasReferenceForNode')), /finishCanvasReferencePick\(\)/);
+    const toggleSource = extractFunction('toggleCanvasReferenceForNode');
+    assert.match(toggleSource, /manualInputRefs[\s\S]*?blockedInputRefs[\s\S]*?return 'removed'/);
+    assert.match(toggleSource, /blocked\.delete\(key\)[\s\S]*?return 'selected'/);
+    assert.match(extractFunction('startCanvasReferencePick'), /changed:false/);
+    assert.match(extractFunction('startCanvasReferencePick'), /restoreCanvasReferencePickLockedUpstream\(node\)/);
+    assert.match(extractFunction('finishCanvasReferencePick'), /returnIfChanged[\s\S]*?state\?\.changed[\s\S]*?returnToCanvasReferenceTarget\(target\)/);
     assert.match(smartCanvasSource, /shell\.addEventListener\('mousedown',[\s\S]*?canvasReferencePickState[\s\S]*?closest\?\.\('\.image-node'\)[\s\S]*?stopImmediatePropagation\(\)/);
-    assert.match(smartCanvasSource, /canvasReferencePickState && e\.key === 'Escape'[\s\S]*?finishCanvasReferencePick\(\)/);
-    assert.match(smartCanvasSource, /canvasReferencePickClose\?\.addEventListener\('click',[\s\S]*?finishCanvasReferencePick\(\)[\s\S]*?\}\);/);
-    assert.doesNotMatch(smartCanvasSource.match(/canvasReferencePickClose\?\.addEventListener\('click',[\s\S]*?\}\);/)?.[0] || '', /returnToCanvasReferenceTarget/);
+    assert.match(smartCanvasSource, /canvasReferencePickState && e\.key === 'Escape'[\s\S]*?finishCanvasReferencePick\(\{returnIfChanged:true\}\)/);
+    assert.match(smartCanvasSource, /canvasReferencePickClose\?\.addEventListener\('click',[\s\S]*?finishCanvasReferencePick\(\{returnIfChanged:true\}\)/);
+});
+
+test('canvas picker removes manual refs and blocks or restores existing refs as one toggle', () => {
+    let undoCount = 0;
+    let commitCount = 0;
+    let addCount = 0;
+    const key = item => `${item.nodeId || ''}|${item.imageIndex ?? ''}`;
+    const matches = (left, right) => key(left) === key(right) || left.url === right.url;
+    const visible = node => [...(node.upstream || []), ...(node.manualInputRefs || [])];
+    const selected = (node, ref) => {
+        const blocked = new Set(node.blockedInputRefs || []);
+        return visible(node).some(item => matches(item, ref) && !blocked.has(key(item)));
+    };
+    const {toggleCanvasReferenceForNode} = loadProductionFunctions(
+        ['toggleCanvasReferenceForNode'],
+        {
+            canvasReferencePickIsSelected:selected,
+            canvasReferencePickIsLockedUpstream:() => false,
+            canvasReferencePickRefMatches:matches,
+            blockedInputRefKeys:node => new Set(node.blockedInputRefs || []),
+            visibleReferenceImagesFor:visible,
+            inputRefKey:key,
+            pushUndo:() => { undoCount++; },
+            commitCanvasReferencePickToggle:() => { commitCount++; },
+            addManualReferenceToNode:() => { addCount++; return 'added'; }
+        }
+    );
+    const manual = {url:'/manual.png', nodeId:'manual-source', imageIndex:0};
+    const manualTarget = {manualInputRefs:[manual]};
+    assert.equal(toggleCanvasReferenceForNode(manualTarget, manual), 'removed');
+    assert.equal(manualTarget.manualInputRefs, undefined);
+
+    const upstream = {url:'/upstream.png', nodeId:'upstream-source', imageIndex:1};
+    const upstreamTarget = {upstream:[upstream]};
+    assert.equal(toggleCanvasReferenceForNode(upstreamTarget, upstream), 'removed');
+    assert.equal([...upstreamTarget.blockedInputRefs].join(','), 'upstream-source|1');
+    assert.equal(toggleCanvasReferenceForNode(upstreamTarget, upstream), 'selected');
+    assert.equal(upstreamTarget.blockedInputRefs, undefined);
+    assert.equal(undoCount, 3);
+    assert.equal(commitCount, 3);
+    assert.equal(addCount, 0);
+});
+
+test('connected upstream references stay selected and cannot be toggled by the picker', () => {
+    const upstream = {url:'/upstream.png', nodeId:'upstream-source', imageIndex:0};
+    const loaded = loadProductionFunctions(
+        ['canvasReferencePickRefMatches', 'canvasReferencePickConnectedUpstreamRefs', 'canvasReferencePickIsLockedUpstream'],
+        {
+            inputRefKey:item => `${item.nodeId || ''}|${item.imageIndex ?? ''}`,
+            canonicalSmartMediaUrl:item => item.url,
+            smartImageUsesWorkflowInput:() => false,
+            inputImagesFor:node => node.upstream || [],
+            workflowInputImagesFor:() => [],
+            smartLoopContext:{}
+        }
+    );
+    assert.equal(loaded.canvasReferencePickIsLockedUpstream({upstream:[upstream]}, upstream), true);
+    assert.equal(loaded.canvasReferencePickIsLockedUpstream({upstream:[]}, upstream), false);
+    const guarded = loadProductionFunctions(
+        ['toggleCanvasReferenceForNode'],
+        {canvasReferencePickIsLockedUpstream:() => true}
+    );
+    assert.equal(guarded.toggleCanvasReferenceForNode({}, upstream), 'locked');
+});
+
+test('canvas picker exit returns to its target only after an effective toggle', () => {
+    let returnCount = 0;
+    const target = {id:'target'};
+    const loaded = loadProductionFunctions(
+        ['finishCanvasReferencePick'],
+        {
+            canvasReferencePickState:{targetNodeId:'target', changed:false},
+            nodes:[target],
+            syncCanvasReferencePickBanner:() => {},
+            inputThumbsRow:{dataset:{thumbsSig:'old'}},
+            selectedNode:() => target,
+            renderInputThumbsRow:() => {},
+            returnToCanvasReferenceTarget:() => { returnCount++; }
+        }
+    );
+    assert.equal(loaded.finishCanvasReferencePick({returnIfChanged:true}), true);
+    assert.equal(returnCount, 0);
+    loaded.sandbox.canvasReferencePickState = {targetNodeId:'target', changed:true};
+    assert.equal(loaded.finishCanvasReferencePick({returnIfChanged:true}), true);
+    assert.equal(returnCount, 1);
 });
 
 test('generation mode support ignores stale API video state for RunningHub', () => {
