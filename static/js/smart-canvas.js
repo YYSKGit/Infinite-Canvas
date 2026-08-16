@@ -8405,7 +8405,10 @@ function bindDynamicParams(){
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
             if(ctrl._smartPopoverCloseAwaitingLeave) releaseSmartPopoverClose(ctrl);
-            else if(!ctrl.classList.contains('pinned')) beginSmartPopoverClose(ctrl);
+            else if(
+                !ctrl.classList.contains('pinned')
+                && !(ctrl === generationModeControl && generationModeUsesInlineAnchor())
+            ) beginSmartPopoverClose(ctrl);
             ctrl.classList.remove('interacting', 'hover-armed', 'hover-dismissed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
             if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
@@ -9145,7 +9148,10 @@ function positionGenerationModePanel(anchorEl = generationModeControl, {preserve
     const safeScaleY = measuredScaleY > 0 ? measuredScaleY : safeScaleX;
     const edgeMargin = 12;
     const promptRect = inlineAnchor && promptInput?.isConnected ? promptInput.getBoundingClientRect() : null;
-    if(promptRect) generationModePanel.style.width = `${promptRect.width / safeScaleX}px`;
+    // In the compact composer the inline picker mirrors the prompt width. The
+    // expanded composer is intentionally much wider, so keep the panel at its
+    // natural readable width there while retaining the same left edge.
+    if(promptRect && !composerExpanded) generationModePanel.style.width = `${promptRect.width / safeScaleX}px`;
     const panelRect = generationModePanel.getBoundingClientRect();
     const gap = (inlineAnchor ? 4 : 8) * safeScaleY;
     const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
@@ -27496,21 +27502,22 @@ promptInput.addEventListener('dragstart', hideMentionPreview, true);
 promptInput.addEventListener('dragend', hideMentionPreview, true);
 promptInput.addEventListener('scroll', hideMentionPreview, {passive:true});
 mentionPicker.addEventListener('mousedown', event => event.stopPropagation());
-document.addEventListener('click', event => {
-    if(!event.target.closest('.smart-control')) closeAllSmartPopovers();
-    if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
-    if(!event.target.closest('#veniceCreditsBadge') && !event.target.closest('#veniceCreditsPanel')) closeVeniceCreditsPanel();
-});
-// Capture-phase listener so stopPropagation on inner elements can't block it.
-// Closes the button-triggered picker when clicking anywhere inside the composer card
-// that isn't the picker itself or the toggle button.
-document.addEventListener('click', event => {
+// Use capture-phase pointerdown so composer controls that stop bubbling cannot
+// keep the @ picker open. Only the picker itself (and the manual-reference
+// toggle while it owns the picker) counts as an inside interaction.
+document.addEventListener('pointerdown', event => {
     if(!mentionPicker?.classList?.contains('open')) return;
-    if(mentionInsertMode !== 'manual-ref') return;
-    if(event.target.closest('.mention-picker')) return;
-    if(event.target.closest('[data-input-add-reference]')) return;
+    if(event.target.closest?.('.mention-picker')) return;
+    const mentionOwnedSelectMenu = event.target.closest?.('.app-select-menu')
+        && mentionPicker.querySelector('.app-select-shell.is-open');
+    if(mentionOwnedSelectMenu) return;
+    if(mentionInsertMode === 'manual-ref' && event.target.closest?.('[data-input-add-reference]')) return;
     closeMentionPicker();
 }, true);
+document.addEventListener('click', event => {
+    if(!event.target.closest('.smart-control')) closeAllSmartPopovers();
+    if(!event.target.closest('#veniceCreditsBadge') && !event.target.closest('#veniceCreditsPanel')) closeVeniceCreditsPanel();
+});
 document.addEventListener('keydown', event => {
     // Route picker navigation keys when focus is outside promptInput (e.g. button-triggered picker)
     if(mentionPicker?.classList?.contains('open') && !event.target.closest('#promptInput')){

@@ -101,6 +101,8 @@ test('mention picker stays dismissed after Escape until the caret context change
   assert.match(keydown, /event\.key === 'Escape'[\s\S]*?mentionDismissedCaretText = textBeforeCaret\(\)[\s\S]*?closeMentionPicker\(\)/);
   assert.match(maybeOpen, /mentionDismissedCaretText !== null && before === mentionDismissedCaretText\) return/);
   assert.match(maybeOpen, /mentionDismissedCaretText = null[\s\S]*?\/@\$\/\.test\(before\)/);
+  assert.match(js, /document\.addEventListener\('pointerdown', event => \{[\s\S]*?mentionPicker\?\.classList\?\.contains\('open'\)[\s\S]*?event\.target\.closest\?\.\('\.mention-picker'\)[\s\S]*?event\.target\.closest\?\.\('\.app-select-menu'\)[\s\S]*?mentionPicker\.querySelector\('\.app-select-shell\.is-open'\)[\s\S]*?mentionInsertMode === 'manual-ref'[\s\S]*?closeMentionPicker\(\);[\s\S]*?\}, true\);/);
+  assert.doesNotMatch(js, /!event\.target\.closest\('\.mention-picker'\) && !event\.target\.closest\('#promptInput'\)/);
 });
 
 test('mention media focus matches the asset manager single-border selection style', () => {
@@ -312,6 +314,7 @@ test('bottom parameter popovers stay locked until the pointer leaves the whole r
   assert.match(css, /\.composer \.dynamic-params \.generation-mode-control > \.generation-mode-btn\s*\{[^}]*z-index:101/);
   assert.match(css, /\.composer \.dynamic-params \.provider-control:not\(\.pinned\)::before\s*\{[^}]*left:-8px[^}]*right:-6px[^}]*bottom:-4px[^}]*height:calc\(100% \+ 16px\)/);
   assert.match(css, /\.composer \.dynamic-params \.generation-mode-control:not\(\.pinned\)::before\s*\{[^}]*left:-6px[^}]*right:-22px[^}]*bottom:-4px[^}]*height:calc\(100% \+ 16px\)/);
+  assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?ctrl === generationModeControl && generationModeUsesInlineAnchor\(\)[\s\S]*?beginSmartPopoverClose\(ctrl\)/);
 });
 
 test('a pointer re-entering during popover fade-out cannot cancel the close', () => {
@@ -321,7 +324,7 @@ test('a pointer re-entering during popover fade-out cannot cancel the close', ()
   assert.match(beginClose, /setTimeout[\s\S]*?ctrl\.matches\(':hover'\)[\s\S]*?_smartPopoverCloseAwaitingLeave = true[\s\S]*?releaseSmartPopoverClose\(ctrl\)/);
   assert.match(releaseClose, /clearTimeout[\s\S]*?classList\.remove\('popover-closing'\)/);
   assert.match(js, /function dynamicParamHoverBlocked\(ctrl\)\{[\s\S]*?classList\?\.contains\('popover-closing'\)/);
-  assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?_smartPopoverCloseAwaitingLeave[\s\S]*?else if\(!ctrl\.classList\.contains\('pinned'\)\) beginSmartPopoverClose\(ctrl\)/);
+  assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?_smartPopoverCloseAwaitingLeave[\s\S]*?!ctrl\.classList\.contains\('pinned'\)[\s\S]*?generationModeUsesInlineAnchor\(\)[\s\S]*?beginSmartPopoverClose\(ctrl\)/);
   assert.match(js, /pill\.onclick = event => \{[\s\S]*?closeAllSmartPopovers\(\)[\s\S]*?if\(!wasPinned\)\{[\s\S]*?releaseSmartPopoverClose\(ctrl\)[\s\S]*?classList\.add\('pinned'\)/);
   assert.match(js, /closeAllSmartPopovers\(\);[\s\S]*?if\(!wasPinned\)\{[\s\S]*?releaseSmartPopoverClose\(engineSelect\)[\s\S]*?engineSelect\.classList\.add\('pinned'\)/);
   assert.match(js, /engineSelect\.addEventListener\('mouseleave',[\s\S]*?beginSmartPopoverClose\(engineSelect\)/);
@@ -356,6 +359,8 @@ test('prompt-anchored pickers lock bottom hover and inline mode takes ownership 
   assert.match(js, /function pinnedDynamicParamControl\(\)[\s\S]*?\.smart-control\.pinned/);
   assert.match(js, /const previousPinned = pinnedDynamicParamControl\(\)[\s\S]*?const wasPinned = previousPinned === ctrl[\s\S]*?const switchingControls = Boolean\(previousPinned && !wasPinned\)[\s\S]*?closeAllSmartPopovers\(\)[\s\S]*?if\(!wasPinned\)[\s\S]*?ctrl\.classList\.add\('pinned'\)/);
   assert.match(js, /document\.addEventListener\('click', event => \{[\s\S]*?!event\.target\.closest\('\.smart-control'\)\) closeAllSmartPopovers\(\)/);
+  assert.match(css, /\.mention-picker\s*\{[^}]*z-index:130/);
+  assert.match(css, /\.composer-card > \.mention-picker\s*\{[^}]*z-index:130/);
 });
 
 test('the open generation mode panel transfers between capsule and bottom anchors without reopening', () => {
@@ -367,6 +372,8 @@ test('the open generation mode panel transfers between capsule and bottom anchor
   assert.match(transfer, /generationModeInlineAnchorPending = true[\s\S]*?classList\.remove\('pinned', 'interacting'\)[\s\S]*?positionGenerationModePanel\(anchorEl, \{preserveOpen:true\}\)[\s\S]*?generationModeInlineAnchorPending = false/);
   assert.doesNotMatch(transfer, /closeGenerationModePanel|loadGenerationPromptCatalog|renderGenerationModePanel/);
   assert.match(position, /\{preserveOpen=false\}=\{\}[\s\S]*?if\(!preserveOpen\) generationModePanel\.classList\.remove\('open'\)[\s\S]*?if\(!preserveOpen\) generationModePanel\.classList\.add\('open'\)/);
+  assert.match(position, /if\(promptRect && !composerExpanded\) generationModePanel\.style\.width = `\$\{promptRect\.width \/ safeScaleX\}px`/);
+  assert.match(position, /const viewportLeft = promptRect\?\.left/);
   assert.match(pillBinding, /transfersInlineModePanel[\s\S]*?transferOpenGenerationModePanel\(generationModeControl\)[\s\S]*?return/);
   assert.match(prefixActivate, /classList\.contains\('open'\) && !generationModePanel\.classList\.contains\('inline-anchor'\)[\s\S]*?transferOpenGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)[\s\S]*?return/);
 });

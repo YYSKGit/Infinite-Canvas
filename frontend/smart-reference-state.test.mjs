@@ -100,8 +100,8 @@ test('reference controls keep canvas picker first, media in the middle, and popu
     assert.match(smartCanvasCss, /\.shell\.canvas-reference-picking \.composer,[\s\S]*?\.shell\.canvas-reference-picking \.composer-expand-backdrop,[\s\S]*?\.shell\.canvas-reference-picking \.smart-node-floating-menu \{ display:none !important; \}/);
     assert.match(smartCanvasCss, /\.canvas-reference-picked::after \{[^}]*border-color:var\(--connection-flow\)/);
     assert.match(smartCanvasCss, /\.canvas-reference-locked \{ cursor:not-allowed; \}/);
-    assert.match(smartCanvasCss, /\.mention-picker \{[^}]*z-index:70/);
-    assert.match(smartCanvasCss, /\.composer-card > \.mention-picker \{ z-index:110; \}/);
+    assert.match(smartCanvasCss, /\.mention-picker \{[^}]*z-index:130/);
+    assert.match(smartCanvasCss, /\.composer-card > \.mention-picker \{ z-index:130; \}/);
 });
 
 test('canvas picker resolves one stable media item and preserves smart-group ownership', () => {
