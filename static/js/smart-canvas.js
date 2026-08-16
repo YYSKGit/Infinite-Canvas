@@ -5957,7 +5957,6 @@ function renderVideoSettingsControl(){
             <i data-lucide="sliders-horizontal"></i>
             <span class="video-settings-summary">${escapeHtml(summaryParts.join(' · '))}</span>
             ${audioSummary}
-            <i data-lucide="chevron-up" class="pill-caret"></i>
         </button>
         <div class="smart-popover parameter-settings-popover video-settings-popover" role="dialog" aria-label="视频参数">
             ${renderVideoSettingSection(tr('smart.videoAspect'), aspectHtml)}
@@ -6042,7 +6041,6 @@ function renderImageSettingsControl(){
         <button class="smart-pill parameter-settings-pill image-settings-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
             <i data-lucide="sliders-horizontal"></i>
             <span class="image-settings-summary">${escapeHtml(imageSettingsSummaryParts(settings).join(' · '))}</span>
-            <i data-lucide="chevron-up" class="pill-caret"></i>
         </button>
         <div class="smart-popover parameter-settings-popover image-settings-popover" role="dialog" aria-label="${escapeHtml(tr('smart.imageParameters'))}">
             ${renderImageSettingSection(tr('smart.imageQuality'), qualityHtml)}
@@ -7055,7 +7053,9 @@ function renderDynamicParams(){
     else if(settings.engine === 'modelscope') renderMsParams();
     else if(settings.engine === 'runninghub') renderRunningHubParams();
     else renderComfyParams();
+    dynamicParams.appendChild(generationModeControl);
     const generationModeCleared = clearUnsupportedGenerationMode(activeComposerNode() || selectedNode(), settings);
+    renderGenerationModeControl();
     syncVeniceImageQuote();
     syncVeniceVideoQuote();
     bindDynamicParams();
@@ -7063,7 +7063,6 @@ function renderDynamicParams(){
     restoreDynamicParamsScroll(scrollState);
     updatePromptPlaceholder();
     persistActiveSmartSettings();
-    renderGenerationModeControl();
     if(generationModeCleared){
         closeGenerationModePanel();
         scheduleSave();
@@ -8185,18 +8184,40 @@ function setDynamicSetting(key, value, options={}){
     }
     scheduleSave();
 }
-function closeAllSmartPopovers(){
+function closeAllSmartPopovers({instantControl=null}={}){
+    const outgoingControl = instantControl?.classList?.contains('smart-control') ? instantControl : null;
+    outgoingControl?.classList.add('instant-popover-close');
     document.querySelectorAll('.smart-control.pinned, .smart-control.interacting, .parameter-settings-control.is-open').forEach(c => {
         c.classList.remove('pinned', 'interacting');
         if(c.classList.contains('parameter-settings-control')) closeParameterSettingsControl(c);
     });
+    closeGenerationModePanel({disarm:false});
     disarmDynamicParamHover();
+    if(outgoingControl){
+        // Commit the old panel's hidden state while only that panel has its
+        // transition disabled. The incoming panel keeps its normal entrance.
+        void outgoingControl.offsetWidth;
+        outgoingControl.classList.remove('instant-popover-close');
+    }
+}
+function promptAnchoredPopoverOwnsComposer(){
+    return generationModeUsesInlineAnchor()
+        || Boolean(mentionPicker?.classList.contains('open') && mentionInsertMode !== 'manual-ref');
+}
+function pinnedDynamicParamControl(){
+    return dynamicParams?.querySelector('.smart-control.pinned') || null;
+}
+function dynamicParamHoverBlocked(ctrl){
+    if(promptAnchoredPopoverOwnsComposer()) return true;
+    const pinned = pinnedDynamicParamControl();
+    return Boolean(pinned && pinned !== ctrl);
 }
 let dynamicParamHoverDisarmFrame = 0;
 function disarmDynamicParamHover(){
     dynamicParams?.querySelectorAll('.smart-control').forEach(ctrl => {
         ctrl.classList.remove('hover-armed');
         if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
+        if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
     });
     dynamicParams?.classList.toggle('hover-reentry-required', dynamicParams.matches(':hover'));
     if(dynamicParamHoverDisarmFrame) cancelAnimationFrame(dynamicParamHoverDisarmFrame);
@@ -8325,18 +8346,24 @@ function bindDynamicParams(){
         ctrl.onmouseleave = () => {
             ctrl.classList.remove('interacting', 'hover-armed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
+            if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
         };
         ctrl.onmouseenter = () => {
             if(ctrl.classList.contains('hover-armed')){
                 if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
+                if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
                 revealCurrentPickerOption(ctrl);
             }
         };
         ctrl.onpointermove = event => {
             if((event.pointerType && event.pointerType !== 'mouse') || event.buttons) return;
             if(dynamicParamHoverDisarmFrame || dynamicParams.classList.contains('hover-reentry-required')) return;
+            // A prompt-anchored picker owns the whole row. A clicked bottom pill
+            // likewise owns it until an outside click closes the pinned panel.
+            if(dynamicParamHoverBlocked(ctrl)) return;
             if(!ctrl.classList.contains('hover-armed')) ctrl.classList.add('hover-armed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
+            if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
             revealCurrentPickerOption(ctrl);
         };
         ctrl.onmouseover = () => {
@@ -8347,24 +8374,52 @@ function bindDynamicParams(){
             if(ctrl.classList.contains('parameter-settings-control')){
                 requestAnimationFrame(() => syncParameterSettingsOpenState(ctrl));
             }
+            if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
         };
         ctrl.onfocusout = () => {
             if(ctrl.classList.contains('parameter-settings-control')){
                 requestAnimationFrame(() => syncParameterSettingsOpenState(ctrl));
             }
+            if(ctrl.classList.contains('generation-mode-control')) requestAnimationFrame(() => syncGenerationModeOpenState(ctrl));
         };
     });
     dynamicParams.querySelectorAll('.smart-control > .smart-pill').forEach(pill => {
+        pill.onmousedown = event => {
+            // Mouse focus is applied before click. Letting it move to the next
+            // pill would make :focus-within reveal that panel while the old
+            // pinned panel is still waiting for mouseup/click.
+            if(event.button === 0) event.preventDefault();
+        };
         pill.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
             const ctrl = pill.parentElement;
-            const wasPinned = ctrl.classList.contains('pinned');
+            const transfersInlineModePanel = ctrl === generationModeControl
+                && generationModePanel?.classList.contains('open')
+                && generationModePanel.classList.contains('inline-anchor');
+            if(transfersInlineModePanel){
+                transferOpenGenerationModePanel(generationModeControl);
+                revealCurrentPickerOption(ctrl);
+                return;
+            }
+            const previousPinned = pinnedDynamicParamControl();
+            const wasPinned = previousPinned === ctrl;
+            const switchingControls = Boolean(previousPinned && !wasPinned);
+            const focused = document.activeElement;
+            if(previousPinned?.contains(focused) && typeof focused?.blur === 'function') focused.blur();
+            if(switchingControls) dynamicParams.classList.add('click-switching-smart-popovers');
             closeAllSmartPopovers();
             if(!wasPinned){
                 ctrl.classList.add('pinned');
                 if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
+                if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
                 revealCurrentPickerOption(ctrl);
+            }
+            if(switchingControls){
+                // Commit both the outgoing hidden state and the incoming open
+                // state before restoring transitions.
+                void dynamicParams.offsetWidth;
+                dynamicParams.classList.remove('click-switching-smart-popovers');
             }
         };
     });
@@ -8909,22 +8964,88 @@ function renderGenerationModePanel(){
     `;
     refreshIcons();
 }
-function closeGenerationModePanel(){
+let generationModeAnchorCleanupTimer = 0;
+let generationModeOpenRequestId = 0;
+let generationModeInlineAnchorPending = false;
+function cancelGenerationModeAnchorCleanup(){
+    if(!generationModeAnchorCleanupTimer) return;
+    clearTimeout(generationModeAnchorCleanupTimer);
+    generationModeAnchorCleanupTimer = 0;
+}
+function resetGenerationModePanelAnchor(){
+    if(!generationModePanel) return;
+    cancelGenerationModeAnchorCleanup();
+    generationModePanel.classList.add('positioning-inline-anchor');
+    generationModePanel.classList.remove('inline-anchor', 'open-upward');
+    ['left', 'right', 'top', 'bottom', 'width', 'transform'].forEach(property => generationModePanel.style.removeProperty(property));
+    void generationModePanel.offsetWidth;
+    generationModePanel.classList.remove('positioning-inline-anchor');
+    void generationModePanel.offsetWidth;
+}
+function scheduleGenerationModeAnchorCleanup(){
+    cancelGenerationModeAnchorCleanup();
+    generationModeAnchorCleanupTimer = setTimeout(() => {
+        generationModeAnchorCleanupTimer = 0;
+        if(!generationModePanel?.classList.contains('open')) resetGenerationModePanelAnchor();
+    }, 170);
+}
+function closeGenerationModePanel({disarm=true}={}){
+    generationModeOpenRequestId += 1;
+    generationModeInlineAnchorPending = false;
+    const inlineAnchor = generationModePanel?.classList.contains('inline-anchor');
     generationModePanel?.classList.remove('open');
     generationModePanel?.classList.remove('open-upward');
-    ['left', 'right', 'top', 'bottom', 'width'].forEach(property => generationModePanel?.style.removeProperty(property));
+    if(inlineAnchor) scheduleGenerationModeAnchorCleanup();
+    else {
+        cancelGenerationModeAnchorCleanup();
+        ['left', 'right', 'top', 'bottom', 'width', 'transform'].forEach(property => generationModePanel?.style.removeProperty(property));
+    }
     generationModeBtn?.setAttribute('aria-expanded', 'false');
     generationModePromptSelection = null;
     promptEditor?.scheduleSelectionCaretSync?.();
-    disarmDynamicParamHover();
+    if(disarm) disarmDynamicParamHover();
 }
-function positionGenerationModePanel(anchorEl = generationModeControl){
+function generationModeUsesInlineAnchor(){
+    return generationModeInlineAnchorPending
+        || Boolean(generationModePanel?.classList.contains('inline-anchor') && generationModePanel.classList.contains('open'));
+}
+function generationModeShouldBeOpen(ctrl=generationModeControl){
+    return Boolean(ctrl && !ctrl.hidden && (
+        (ctrl.matches(':hover') && ctrl.classList.contains('hover-armed'))
+        || ctrl.classList.contains('pinned')
+        || ctrl.classList.contains('interacting')
+        || ctrl.querySelector(':focus-visible')
+    ));
+}
+function syncGenerationModeOpenState(ctrl=generationModeControl){
+    // An inline capsule owns the shared panel until it is explicitly closed.
+    // Hovering that panel also hovers its bottom-control DOM parent, but must not
+    // transfer ownership back to the bottom anchor.
+    if(generationModeUsesInlineAnchor()) return;
+    if(generationModeShouldBeOpen(ctrl)){
+        hideMentionPreview();
+        generationModePromptSelection = null;
+        const inlineAnchor = generationModePanel?.classList.contains('inline-anchor');
+        if(!generationModePanel?.classList.contains('open') || inlineAnchor){
+            if(inlineAnchor) resetGenerationModePanelAnchor();
+            renderGenerationModePanel();
+            generationModePanel?.classList.add('open');
+        }
+        generationModeBtn?.setAttribute('aria-expanded', 'true');
+    }else if(generationModePromptSelection === null){
+        closeGenerationModePanel({disarm:false});
+    }
+}
+function positionGenerationModePanel(anchorEl = generationModeControl, {preserveOpen=false}={}){
     if(!generationModeControl || !generationModePanel) return;
-    ['left', 'right', 'top', 'bottom', 'width'].forEach(property => generationModePanel.style.removeProperty(property));
-    generationModePanel.classList.remove('open-upward');
-    generationModePanel.style.visibility = 'hidden';
-    generationModePanel.classList.add('open');
+    cancelGenerationModeAnchorCleanup();
     const anchor = anchorEl?.isConnected ? anchorEl : generationModeControl;
+    const inlineAnchor = anchor !== generationModeControl;
+    if(!preserveOpen) generationModePanel.classList.remove('open');
+    generationModePanel.classList.add('positioning-inline-anchor');
+    ['left', 'right', 'top', 'bottom', 'width', 'transform'].forEach(property => generationModePanel.style.removeProperty(property));
+    generationModePanel.classList.remove('open-upward');
+    generationModePanel.classList.toggle('inline-anchor', inlineAnchor);
     const anchorRect = anchor.getBoundingClientRect();
     const offsetParent = generationModePanel.offsetParent || generationModeControl;
     const parentRect = offsetParent.getBoundingClientRect();
@@ -8933,7 +9054,6 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
     const safeScaleX = measuredScaleX > 0 ? measuredScaleX : 1;
     const safeScaleY = measuredScaleY > 0 ? measuredScaleY : safeScaleX;
     const edgeMargin = 12;
-    const inlineAnchor = anchor !== generationModeControl;
     const promptRect = inlineAnchor && promptInput?.isConnected ? promptInput.getBoundingClientRect() : null;
     if(promptRect) generationModePanel.style.width = `${promptRect.width / safeScaleX}px`;
     const panelRect = generationModePanel.getBoundingClientRect();
@@ -8941,7 +9061,6 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
     const spaceBelow = Math.max(0, window.innerHeight - edgeMargin - anchorRect.bottom - gap);
     const spaceAbove = Math.max(0, anchorRect.top - edgeMargin - gap);
     const openUpward = panelRect.height > spaceBelow && panelRect.height <= spaceAbove;
-    generationModePanel.classList.toggle('open-upward', openUpward);
     if(inlineAnchor){
         const viewportLeft = promptRect?.left ?? Math.max(edgeMargin, Math.min(anchorRect.left - (8 * safeScaleX), window.innerWidth - edgeMargin - panelRect.width));
         const viewportTop = openUpward
@@ -8952,17 +9071,57 @@ function positionGenerationModePanel(anchorEl = generationModeControl){
         generationModePanel.style.top = `${(viewportTop - parentRect.top) / safeScaleY}px`;
         generationModePanel.style.bottom = 'auto';
     }
-    generationModePanel.style.removeProperty('visibility');
+    // A fresh open commits the new closed coordinate system before restoring
+    // transitions. An already-open shared panel keeps its open state throughout
+    // an anchor handoff; instant-popover-switch suppresses the coordinate move.
+    void generationModePanel.offsetWidth;
+    generationModePanel.classList.remove('positioning-inline-anchor');
+    void generationModePanel.offsetWidth;
+    if(!preserveOpen) generationModePanel.classList.add('open');
+}
+function transferOpenGenerationModePanel(anchorEl){
+    if(!generationModePanel?.classList.contains('open')) return false;
+    const inlineAnchor = Boolean(anchorEl?.closest?.('.smart-prompt-inline-prefix-chip'));
+    const promptSelection = inlineAnchor ? capturePromptSelection() : null;
+    generationModeOpenRequestId += 1;
+    // Protect the shared panel while the old bottom ownership classes are
+    // cleared. syncGenerationModeOpenState must not interpret that cleanup as
+    // a request to close the panel.
+    generationModeInlineAnchorPending = true;
+    dynamicParams?.querySelectorAll('.smart-control.pinned, .smart-control.interacting, .parameter-settings-control.is-open').forEach(ctrl => {
+        ctrl.classList.remove('pinned', 'interacting');
+        if(ctrl.classList.contains('parameter-settings-control')) closeParameterSettingsControl(ctrl);
+    });
+    disarmDynamicParamHover();
+    if(!inlineAnchor) generationModeControl?.classList.add('pinned');
+    generationModePromptSelection = promptSelection;
+    if(inlineAnchor) promptEditor?.clearSelectionCaret?.({keepNativeHidden:true});
+    else promptEditor?.scheduleSelectionCaretSync?.();
+    hideMentionPreview();
+    generationModePanel.classList.add('instant-popover-switch');
+    try {
+        positionGenerationModePanel(anchorEl, {preserveOpen:true});
+        generationModeBtn?.setAttribute('aria-expanded', 'true');
+        void generationModePanel.offsetWidth;
+    } finally {
+        generationModeInlineAnchorPending = false;
+        generationModePanel.classList.remove('instant-popover-switch');
+    }
+    return true;
 }
 async function openGenerationModePanel(anchorEl = generationModeControl){
     if(!generationModeSupported(settings) || !generationModePanel) return;
     hideMentionPreview();
     const inlineAnchor = Boolean(anchorEl?.closest?.('.smart-prompt-inline-prefix-chip'));
+    const requestId = ++generationModeOpenRequestId;
+    generationModeInlineAnchorPending = inlineAnchor;
     generationModePromptSelection = inlineAnchor ? capturePromptSelection() : null;
     promptEditor?.clearSelectionCaret?.({keepNativeHidden:true});
     try { await loadGenerationPromptCatalog(); } catch(e){}
+    if(requestId !== generationModeOpenRequestId) return;
     renderGenerationModePanel();
     positionGenerationModePanel(anchorEl);
+    generationModeInlineAnchorPending = false;
     generationModeBtn?.setAttribute('aria-expanded', 'true');
 }
 function clearGenerationMode(){
@@ -20306,6 +20465,7 @@ function setMentionFocusIndex(idx, scroll=true){
 function showMentionPicker(){
     const node = selectedNode();
     const hasInput = inputMentionCandidateImages(node).length > 0;
+    closeAllSmartPopovers();
     mentionInsertMode = 'token';
     mentionAnchorEl = null;
     placeMentionPickerInPromptRow();
@@ -26314,12 +26474,6 @@ assetPanel?.addEventListener('wheel', e => {
 assetDialogBackdrop?.addEventListener('pointerdown', e => e.stopPropagation());
 assetDialogBackdrop?.addEventListener('mousedown', e => e.stopPropagation());
 assetDialogBackdrop?.addEventListener('click', e => e.stopPropagation());
-generationModeBtn?.addEventListener('click', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
-    else openGenerationModePanel(generationModeControl);
-});
 generationModePanel?.addEventListener('pointerdown', event => {
     if(generationModePromptSelection && event.button === 0) event.preventDefault();
     event.stopPropagation();
@@ -26332,15 +26486,34 @@ generationModePanel?.addEventListener('click', event => {
 });
 promptInput?.addEventListener('smart-prompt-prefix-activate', event => {
     event.stopPropagation();
-    if(generationModePanel?.classList.contains('open')) closeGenerationModePanel();
-    else openGenerationModePanel(promptInput.querySelector('.smart-prompt-inline-prefix-chip'));
+    if(generationModeUsesInlineAnchor()){
+        closeGenerationModePanel();
+        return;
+    }
+    if(generationModePanel?.classList.contains('open') && !generationModePanel.classList.contains('inline-anchor')){
+        transferOpenGenerationModePanel(promptInput.querySelector('.smart-prompt-inline-prefix-chip'));
+        return;
+    }
+    // The shared panel may currently belong to the pinned bottom button. Release
+    // that owner first, then reopen against the inline capsule in one click.
+    const previousPinned = pinnedDynamicParamControl();
+    if(previousPinned) generationModePanel?.classList.add('instant-popover-switch');
+    closeAllSmartPopovers({instantControl:previousPinned});
+    const opening = openGenerationModePanel(promptInput.querySelector('.smart-prompt-inline-prefix-chip'));
+    if(previousPinned){
+        const finishSwitch = () => {
+            if(generationModePanel?.classList.contains('open')) void generationModePanel.offsetWidth;
+            generationModePanel?.classList.remove('instant-popover-switch');
+        };
+        opening.then(finishSwitch, finishSwitch);
+    }
 });
 promptInput?.addEventListener('smart-prompt-prefix-remove', event => {
     event.stopPropagation();
     clearGenerationMode();
 });
 document.addEventListener('click', event => {
-    if(!generationModePanel?.classList.contains('open')) return;
+    if(!generationModePanel?.classList.contains('open') && !generationModeInlineAnchorPending) return;
     if(event.target.closest?.('#generationModeControl, .smart-prompt-inline-prefix-chip')) return;
     closeGenerationModePanel();
 }, true);
