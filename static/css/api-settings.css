@@ -199,7 +199,7 @@ body.studio-theme-dark .model-protocol-select { background:var(--panel); border-
 .venice-model-capabilities { display:grid; grid-template-columns:104px 38px; align-items:center; gap:6px; min-width:0; }
 .venice-size-mode { display:grid; grid-template-columns:26px 78px; align-items:center; height:32px; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--soft); }
 .venice-size-mode > span { display:flex; align-items:center; justify-content:center; align-self:stretch; border-right:1px solid var(--line); color:var(--muted); font-size:9.5px; font-weight:900; letter-spacing:.02em; }
-.venice-size-mode select { width:78px; height:30px; padding:0 5px; border:0; background:transparent; color:var(--text); outline:none; cursor:pointer; font-size:10.5px; font-weight:850; text-align:center; }
+.venice-size-mode select { width:78px; height:30px; padding:0 5px; border:0; background:transparent; color:var(--text); outline:none; cursor:pointer; font-size:10.5px; font-weight:850; text-align:center; --app-select-menu-min-width:78px; }
 .venice-quality-toggle { display:flex; align-items:center; justify-content:center; gap:4px; width:38px; height:32px; border:1px solid var(--line); border-radius:8px; background:var(--soft); color:var(--muted); cursor:pointer; user-select:none; }
 .venice-quality-toggle input { width:12px !important; min-width:12px; height:12px !important; margin:0; padding:0 !important; accent-color:#2563eb; cursor:pointer; }
 .venice-quality-toggle span { font-size:10.5px; font-weight:900; }

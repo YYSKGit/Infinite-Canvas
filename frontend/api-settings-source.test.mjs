@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
 const source = await readFile(new URL('../static/js/api-settings.js', import.meta.url), 'utf8');
+const appSelectSource = await readFile(new URL('../static/js/app-select.js', import.meta.url), 'utf8');
 const css = await readFile(new URL('../static/css/api-settings.css', import.meta.url), 'utf8');
 const html = await readFile(new URL('../static/api-settings.html', import.meta.url), 'utf8');
 const indexHtml = await readFile(new URL('../static/index.html', import.meta.url), 'utf8');
@@ -25,6 +26,19 @@ test('model sections are ordered as chat, image, then video', () => {
   const imageIndex = html.indexOf('id="imageModelList"');
   const videoIndex = html.indexOf('id="videoModelList"');
   assert.ok(chatIndex >= 0 && chatIndex < imageIndex && imageIndex < videoIndex);
+});
+
+test('custom select positioning separates viewport and transformed-body coordinates', () => {
+  assert.match(
+    appSelectSource,
+    /const viewportWidth = matrix \? \(innerWidth - bodyRect\.left\) \/ scaleX : innerWidth;/
+  );
+  assert.match(
+    appSelectSource,
+    /const viewportHeight = matrix \? \(innerHeight - bodyRect\.top\) \/ scaleY : innerHeight;/
+  );
+  assert.match(appSelectSource, /left:\(rect\.left - bodyRect\.left\) \/ scaleX/);
+  assert.match(appSelectSource, /left:rect\.left,[\s\S]*top:rect\.top,[\s\S]*bottom:rect\.bottom/);
 });
 
 test('secret previews stay separate from writable secret fields', () => {
@@ -68,6 +82,7 @@ test('Venice image rows expose compact editable capability controls', () => {
   assert.match(source, /item\.image_capabilities\[model\] = current/);
   assert.match(source, /has-venice-capabilities/);
   assert.match(css, /\.venice-model-capabilities[^}]*grid-template-columns:104px 38px/);
+  assert.match(css, /\.venice-size-mode select[^}]*--app-select-menu-min-width:78px/);
   assert.match(css, /\.model-row\.has-venice-route\.has-venice-capabilities/);
   assert.match(css, /\.venice-quality-toggle:has\(input:checked\)/);
   const capability = new Function(`return (${extractFunction('veniceImageCapability')});`)();

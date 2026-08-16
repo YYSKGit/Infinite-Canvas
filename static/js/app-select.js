@@ -84,15 +84,27 @@
             : null;
         const scaleX = matrix ? Math.max(.01, Math.hypot(Number(matrix[1]) || 1, Number(matrix[2]) || 0)) : 1;
         const scaleY = matrix ? Math.max(.01, Math.hypot(Number(matrix[3]) || 0, Number(matrix[4]) || 1)) : 1;
-        const viewportWidth = (innerWidth - bodyRect.left) / scaleX;
-        const viewportHeight = (innerHeight - bodyRect.top) / scaleY;
-        const localRect = {
-            left:(rect.left - bodyRect.left) / scaleX,
-            right:(rect.right - bodyRect.left) / scaleX,
-            top:(rect.top - bodyRect.top) / scaleY,
-            bottom:(rect.bottom - bodyRect.top) / scaleY,
-            width:rect.width / scaleX
-        };
+        // A transformed body becomes the containing block for this fixed menu,
+        // so its coordinates must be converted to body-local space. Without a
+        // transform, fixed positioning is viewport-relative: subtracting the
+        // scrolled body's rect would incorrectly add scrollY to the menu offset.
+        const viewportWidth = matrix ? (innerWidth - bodyRect.left) / scaleX : innerWidth;
+        const viewportHeight = matrix ? (innerHeight - bodyRect.top) / scaleY : innerHeight;
+        const localRect = matrix
+            ? {
+                left:(rect.left - bodyRect.left) / scaleX,
+                right:(rect.right - bodyRect.left) / scaleX,
+                top:(rect.top - bodyRect.top) / scaleY,
+                bottom:(rect.bottom - bodyRect.top) / scaleY,
+                width:rect.width / scaleX
+            }
+            : {
+                left:rect.left,
+                right:rect.right,
+                top:rect.top,
+                bottom:rect.bottom,
+                width:rect.width
+            };
         const gap = 5;
         const below = viewportHeight - localRect.bottom - gap - 8;
         const above = localRect.top - gap - 8;
