@@ -8405,7 +8405,7 @@ function bindDynamicParams(){
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
             if(ctrl._smartPopoverCloseAwaitingLeave) releaseSmartPopoverClose(ctrl);
-            else beginSmartPopoverClose(ctrl);
+            else if(!ctrl.classList.contains('pinned')) beginSmartPopoverClose(ctrl);
             ctrl.classList.remove('interacting', 'hover-armed', 'hover-dismissed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
             if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
