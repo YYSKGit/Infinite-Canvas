@@ -5989,11 +5989,11 @@ function imageSettingsSummaryParts(source=settings){
     const resolution = String(source?.resolution || '1k').toLowerCase();
     if(resolution === 'custom'){
         const size = String(source?.customSize || '').trim() || tr('smart.custom');
-        return [size, ...(caps.supportsQuality ? [imageQualityLabel(source?.quality)] : []), `${count}${tr('smart.countUnit') ? ' ' + tr('smart.countUnit') : ''}`];
+        return [size, ...(caps.supportsQuality ? [imageQualitySummaryLabel(source?.quality)] : []), `${count}${tr('smart.countUnit') ? ' ' + tr('smart.countUnit') : ''}`];
     }
     const ratio = String(source?.ratio || 'square');
     const parts = [ratio === 'auto' ? tr('smart.imageAspectAuto') : ratioLabel('', source)];
-    if(caps.supportsQuality) parts.push(imageQualityLabel(source?.quality));
+    if(caps.supportsQuality) parts.push(imageQualitySummaryLabel(source?.quality));
     if(caps.sizeMode !== 'aspect') parts.push(resolution.toUpperCase());
     parts.push(`${count}${tr('smart.countUnit') ? ' ' + tr('smart.countUnit') : ''}`);
     return parts;
@@ -6005,6 +6005,9 @@ function imageQualityLabel(value){
         high:tr('smart.qualityHighFull')
     };
     return labels[String(value || '').toLowerCase()] || labels.medium;
+}
+function imageQualitySummaryLabel(value){
+    return Array.from(imageQualityLabel(value))[0] || '';
 }
 function syncImageSettingsSelection(ctrl){
     if(!ctrl) return;
