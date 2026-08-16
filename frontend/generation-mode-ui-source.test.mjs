@@ -20,6 +20,11 @@ test('Smart Canvas exposes generation mode as a bottom parameter control', () =>
   assert.doesNotMatch(html, /id="generationModeBtn"[^>]*title="生成模式"/);
   assert.match(html, /class="smart-popover generation-mode-panel"/);
   assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*width:auto[^}]*height:var\(--ctrl-height\)[^}]*color:var\(--muted\)[^}]*font-weight:500/);
+  assert.match(css, /\.generation-mode-btn:hover,\.generation-mode-btn:focus-visible\s*\{[^}]*color:var\(--text\)[^}]*background:var\(--card\)[^}]*border-color:var\(--line\)/);
+  assert.match(css, /\.parameter-settings-pill > i,\.parameter-settings-pill > svg,\.generation-mode-btn:not\(\.active\) > i,\.generation-mode-btn:not\(\.active\) > svg\s*\{[^}]*color:var\(--text\)/);
+  assert.match(css, /\.composer \.dynamic-params :is\(\.provider-control,\.model-control\):is\(:hover,:focus-within\) > \.smart-pill \.sub,[\s\S]*?\.parameter-settings-control:is\(:hover,:focus-within\) > \.smart-pill\s*\{ color:var\(--text\); \}/);
+  assert.match(css, /\.composer \.dynamic-params :is\(\.provider-control,\.model-control\)\.pinned > \.smart-pill \.sub,[\s\S]*?\.generation-mode-control\.pinned > \.generation-mode-btn:not\(\.active\)\s*\{ color:var\(--text\); \}/);
+  assert.doesNotMatch(css, /\.dynamic-params[^}]*\.pinned[^}]*font-weight:700/);
   assert.match(css, /\.generation-mode-control\s*\{[^}]*z-index:90/);
   assert.match(css, /\.smart-popover\.generation-mode-panel\s*\{[^}]*width:min\(500px[^}]*max-height:min\(620px/);
   assert.match(css, /\.smart-popover\.generation-mode-panel\s*\{[^}]*max-width:calc\(100vw - 40px\)/);
@@ -303,15 +308,33 @@ test('bottom parameter popovers stay locked until the pointer leaves the whole r
   assert.match(css, /generation-mode-panel\.positioning-inline-anchor\s*\{[^}]*transition:none !important/);
   assert.match(css, /smart-popover:not\(\.inline-anchor\)[^}]*visibility:hidden/);
   assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*position:relative[^}]*z-index:1/);
+  assert.match(css, /\.composer \.dynamic-params \.provider-control > \.smart-pill\s*\{[^}]*position:relative[^}]*z-index:1/);
   assert.match(css, /\.composer \.dynamic-params \.provider-control:not\(\.pinned\)::before\s*\{[^}]*left:-8px[^}]*right:-6px[^}]*bottom:-4px[^}]*height:calc\(100% \+ 16px\)/);
   assert.match(css, /\.composer \.dynamic-params \.generation-mode-control:not\(\.pinned\)::before\s*\{[^}]*left:-6px[^}]*right:-22px[^}]*bottom:-4px[^}]*height:calc\(100% \+ 16px\)/);
 });
 
+test('a pointer re-entering during popover fade-out cannot cancel the close', () => {
+  const beginClose = js.match(/function beginSmartPopoverClose\(ctrl\)[\s\S]*?\n\}/)?.[0] || '';
+  const releaseClose = js.match(/function releaseSmartPopoverClose\(ctrl\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(beginClose, /getComputedStyle\(popover\)\.opacity[\s\S]*?classList\.add\('popover-closing'\)[\s\S]*?classList\.remove\('hover-armed'\)/);
+  assert.match(beginClose, /setTimeout[\s\S]*?ctrl\.matches\(':hover'\)[\s\S]*?_smartPopoverCloseAwaitingLeave = true[\s\S]*?releaseSmartPopoverClose\(ctrl\)/);
+  assert.match(releaseClose, /clearTimeout[\s\S]*?classList\.remove\('popover-closing'\)/);
+  assert.match(js, /function dynamicParamHoverBlocked\(ctrl\)\{[\s\S]*?classList\?\.contains\('popover-closing'\)/);
+  assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?_smartPopoverCloseAwaitingLeave[\s\S]*?beginSmartPopoverClose\(ctrl\)/);
+  assert.match(js, /pill\.onclick = event => \{[\s\S]*?closeAllSmartPopovers\(\)[\s\S]*?if\(!wasPinned\)\{[\s\S]*?releaseSmartPopoverClose\(ctrl\)[\s\S]*?classList\.add\('pinned'\)/);
+  assert.match(js, /closeAllSmartPopovers\(\);[\s\S]*?if\(!wasPinned\)\{[\s\S]*?releaseSmartPopoverClose\(engineSelect\)[\s\S]*?engineSelect\.classList\.add\('pinned'\)/);
+  assert.match(js, /engineSelect\.addEventListener\('mouseleave',[\s\S]*?beginSmartPopoverClose\(engineSelect\)/);
+  assert.match(css, /\.smart-control\.popover-closing \.smart-popover\s*\{[^}]*opacity:0 !important[^}]*visibility:hidden !important[^}]*pointer-events:none !important/);
+});
+
 test('image and video settings measure the same resting position on fresh hover and in-row return', () => {
   const capture = js.match(/function captureParameterSettingsPopoverPosition\(ctrl\)[\s\S]*?\n\}/)?.[0] || '';
+  const restore = js.match(/function restoreOpenParameterSettingsControl\(ctrl, position=null\)[\s\S]*?\n\}/)?.[0] || '';
   assert.match(capture, /querySelector\?\.\('\.parameter-settings-popover'\)/);
   assert.match(capture, /const inlineTransition = popover\.style\.transition[\s\S]*?popover\.style\.transition = 'none'[\s\S]*?popover\.style\.translate = 'none'[\s\S]*?getBoundingClientRect\(\)/);
   assert.match(capture, /removeProperty\('translate'\)[\s\S]*?void popover\.offsetWidth[\s\S]*?inlineTransition[\s\S]*?removeProperty\('transition'\)/);
+  assert.match(restore, /popover\.style\.transition = 'none'[\s\S]*?openParameterSettingsControl\(ctrl, position\)[\s\S]*?void popover\.offsetWidth[\s\S]*?removeProperty\('transition'\)/);
+  assert.match(js, /if\(state\.isOpen && match\.classList\.contains\('parameter-settings-control'\)\)\{[\s\S]*?restoreOpenParameterSettingsControl\(match, state\.popoverPosition\)/);
   assert.match(css, /\.smart-popover\.image-settings-popover\s*\{[^}]*bottom:calc\(100% \+ 8px\)[^}]*translate:0 4px[^}]*transition:opacity \.14s ease, translate \.14s ease/);
   assert.match(css, /\.smart-popover\.video-settings-popover\s*\{[^}]*bottom:calc\(100% \+ 8px\)[^}]*translate:0 4px[^}]*transition:opacity \.14s ease, translate \.14s ease/);
 });

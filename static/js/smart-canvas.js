@@ -6929,6 +6929,20 @@ function openParameterSettingsControl(ctrl, position=null){
     ctrl.classList.add('is-open');
     ctrl.querySelector('.parameter-settings-pill')?.setAttribute('aria-expanded', 'true');
 }
+function restoreOpenParameterSettingsControl(ctrl, position=null){
+    const popover = ctrl?.querySelector?.('.parameter-settings-popover');
+    if(!popover) return;
+    // Config refreshes can rebuild dynamicParams several times while this
+    // control remains open. Restore each replacement at its already-visible
+    // resting state instead of replaying the entrance transition on every
+    // render, which otherwise looks like a focus-return flicker.
+    const inlineTransition = popover.style.transition;
+    popover.style.transition = 'none';
+    openParameterSettingsControl(ctrl, position);
+    void popover.offsetWidth;
+    if(inlineTransition) popover.style.transition = inlineTransition;
+    else popover.style.removeProperty('transition');
+}
 function closeParameterSettingsControl(ctrl){
     if(!ctrl?.classList?.contains('parameter-settings-control')) return;
     ctrl.classList.remove('is-open');
@@ -6970,7 +6984,7 @@ function restoreOpenControl(state){
     if(state.pinned) match.classList.add('pinned');
     if(state.interacting) match.classList.add('interacting');
     if(state.isOpen && match.classList.contains('parameter-settings-control')){
-        openParameterSettingsControl(match, state.popoverPosition);
+        restoreOpenParameterSettingsControl(match, state.popoverPosition);
         requestAnimationFrame(() => {
             if(match.isConnected) syncParameterSettingsOpenState(match);
         });
@@ -8203,6 +8217,7 @@ function setDynamicSetting(key, value, options={}){
 function closeAllSmartPopovers({instantControl=null}={}){
     const outgoingControl = instantControl?.classList?.contains('smart-control') ? instantControl : null;
     outgoingControl?.classList.add('instant-popover-close');
+    document.querySelectorAll('.smart-control').forEach(beginSmartPopoverClose);
     document.querySelectorAll('.smart-control.pinned, .smart-control.interacting, .parameter-settings-control.is-open').forEach(c => {
         c.classList.remove('pinned', 'interacting');
         if(c.classList.contains('parameter-settings-control')) closeParameterSettingsControl(c);
@@ -8223,7 +8238,36 @@ function promptAnchoredPopoverOwnsComposer(){
 function pinnedDynamicParamControl(){
     return dynamicParams?.querySelector('.smart-control.pinned') || null;
 }
+function releaseSmartPopoverClose(ctrl){
+    if(!ctrl) return;
+    if(ctrl._smartPopoverCloseTimer) window.clearTimeout(ctrl._smartPopoverCloseTimer);
+    ctrl._smartPopoverCloseTimer = 0;
+    ctrl._smartPopoverCloseAwaitingLeave = false;
+    ctrl.classList.remove('popover-closing');
+}
+function beginSmartPopoverClose(ctrl){
+    const popover = ctrl?.querySelector?.(':scope > .smart-popover');
+    if(!popover || ctrl.classList.contains('popover-closing')) return;
+    const opacity = Number.parseFloat(getComputedStyle(popover).opacity);
+    if(!(opacity > 0)) return;
+    ctrl.classList.add('popover-closing');
+    ctrl.classList.remove('hover-armed');
+    ctrl._smartPopoverCloseAwaitingLeave = false;
+    if(ctrl._smartPopoverCloseTimer) window.clearTimeout(ctrl._smartPopoverCloseTimer);
+    ctrl._smartPopoverCloseTimer = window.setTimeout(() => {
+        ctrl._smartPopoverCloseTimer = 0;
+        if(ctrl.matches(':hover')){
+            // A pointer that returned during the fade must leave once before
+            // hover can arm this control again; otherwise the completed close
+            // would immediately bounce back open.
+            ctrl._smartPopoverCloseAwaitingLeave = true;
+            return;
+        }
+        releaseSmartPopoverClose(ctrl);
+    }, 180);
+}
 function dynamicParamHoverBlocked(ctrl){
+    if(ctrl?.classList?.contains('popover-closing')) return true;
     if(promptAnchoredPopoverOwnsComposer()) return true;
     const pinned = pinnedDynamicParamControl();
     return Boolean(pinned && pinned !== ctrl);
@@ -8360,6 +8404,8 @@ function bindDynamicParams(){
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
+            if(ctrl._smartPopoverCloseAwaitingLeave) releaseSmartPopoverClose(ctrl);
+            else beginSmartPopoverClose(ctrl);
             ctrl.classList.remove('interacting', 'hover-armed', 'hover-dismissed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
             if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
@@ -8387,6 +8433,7 @@ function bindDynamicParams(){
             if(ctrl.classList.contains('hover-armed')) revealCurrentPickerOption(ctrl);
         };
         ctrl.onfocusin = () => {
+            releaseSmartPopoverClose(ctrl);
             revealCurrentPickerOption(ctrl);
             if(ctrl.classList.contains('parameter-settings-control')){
                 requestAnimationFrame(() => syncParameterSettingsOpenState(ctrl));
@@ -8411,6 +8458,7 @@ function bindDynamicParams(){
             event.preventDefault();
             event.stopPropagation();
             const ctrl = pill.parentElement;
+            releaseSmartPopoverClose(ctrl);
             const transfersInlineModePanel = ctrl === generationModeControl
                 && generationModePanel?.classList.contains('open')
                 && generationModePanel.classList.contains('inline-anchor');
@@ -8427,6 +8475,9 @@ function bindDynamicParams(){
             if(switchingControls) dynamicParams.classList.add('click-switching-smart-popovers');
             closeAllSmartPopovers();
             if(!wasPinned){
+                // This click is an explicit reopen, so it may override the
+                // hover-only close guard installed by closeAllSmartPopovers.
+                releaseSmartPopoverClose(ctrl);
                 ctrl.classList.add('pinned');
                 if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
                 if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
@@ -26621,12 +26672,20 @@ if(engineSelect){
         pill.onclick = event => {
             event.preventDefault();
             event.stopPropagation();
+            releaseSmartPopoverClose(engineSelect);
             const wasPinned = engineSelect.classList.contains('pinned');
             closeAllSmartPopovers();
-            if(!wasPinned) engineSelect.classList.add('pinned');
+            if(!wasPinned){
+                releaseSmartPopoverClose(engineSelect);
+                engineSelect.classList.add('pinned');
+            }
         };
     }
-    engineSelect.addEventListener('mouseleave', () => engineSelect.classList.remove('interacting', 'pinned', 'closing'));
+    engineSelect.addEventListener('mouseleave', () => {
+        if(engineSelect._smartPopoverCloseAwaitingLeave) releaseSmartPopoverClose(engineSelect);
+        else beginSmartPopoverClose(engineSelect);
+        engineSelect.classList.remove('interacting', 'pinned', 'closing');
+    });
     engineSelect.querySelectorAll('[data-engine-value]').forEach(btn => {
         btn.onclick = event => {
             event.preventDefault();
