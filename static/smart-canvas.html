@@ -19,8 +19,8 @@
     <script src="/static/vendor/js/lucide.js?v=2027.01.1.1.1783154657"></script>
     <script src="/static/js/theme.js?v=2027.01.1.1.1784115476"></script>
     <script src="/static/js/touch-mouse.js?v=2027.01.1.1.1783154648"></script>
-    <script src="/static/js/i18n.js?v=2027.01.1.1.1784194894"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1786861882">
+    <script src="/static/js/i18n.js?v=2027.01.1.1.1786866709"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2027.01.1.1.1786867478">
     <link rel="stylesheet" href="/static/css/app-select.css?v=2027.01.1.1.1784562205">
     <script defer src="/static/js/app-select.js?v=2027.01.1.1.1786844049"></script>
 </head>
@@ -54,7 +54,6 @@
                             </div>
                         </div>
                         <div class="composer-head-actions">
-                            <div id="composerHeadQuickActions" class="composer-head-quick-actions"></div>
                             <button id="promptAssistantBtn" class="composer-template-btn prompt-assistant-entry" type="button" title="提示词助手" aria-label="提示词助手" aria-pressed="false">
                                 <i data-lucide="wand-sparkles"></i><span>提示词助手</span>
                             </button>
@@ -134,6 +133,15 @@
                     </div>
                 </div>
             </div>
+        </div>
+        <div id="canvasReferencePickBanner" class="canvas-reference-pick-banner" role="status" aria-live="polite" hidden>
+            <span class="canvas-reference-pick-icon" aria-hidden="true"><i data-lucide="mouse-pointer-2"></i></span>
+            <span class="canvas-reference-pick-copy">
+                <strong data-i18n="smart.referencePickTitle">元素选择模式</strong>
+                <small id="canvasReferencePickTarget" data-i18n="smart.referencePickHint">点击媒体添加到参考</small>
+            </span>
+            <button id="canvasReferencePickReturn" class="canvas-reference-pick-return" type="button" data-i18n-title="smart.referencePickReturn" title="返回节点" aria-label="返回节点"><span data-i18n="smart.referencePickReturn">返回节点</span></button>
+            <button id="canvasReferencePickClose" class="canvas-reference-pick-close" type="button" data-i18n-title="smart.referencePickClose" title="退出选择模式" aria-label="退出选择模式"><span data-i18n="smart.referencePickExit">退出</span></button>
         </div>
         <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="smart.back">返回</span></button>
         <div id="smartCanvasSwitcher" class="smart-canvas-switcher">
@@ -516,6 +524,6 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/js/smart-prompt-editor.js?v=2027.01.1.1.1785780500"></script>
     <script src="/static/js/generation-prompt-model.js?v=2027.01.1.1.1785687241"></script>
-    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1786885001"></script>
+    <script src="/static/js/smart-canvas.js?v=2027.01.1.1.1786866671"></script>
 </body>
 </html>

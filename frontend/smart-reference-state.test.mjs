@@ -6,6 +6,8 @@ import {fileURLToPath} from 'node:url';
 
 const smartCanvasPath = fileURLToPath(new URL('../static/js/smart-canvas.js', import.meta.url));
 const smartCanvasSource = readFileSync(smartCanvasPath, 'utf8');
+const smartCanvasHtml = readFileSync(new URL('../static/smart-canvas.html', import.meta.url), 'utf8');
+const smartCanvasCss = readFileSync(new URL('../static/css/smart-canvas.css', import.meta.url), 'utf8');
 
 function extractFunction(name){
     const markers = [`function ${name}(`, `async function ${name}(`];
@@ -76,6 +78,87 @@ function loadProductionFunctions(names, context={}){
     vm.runInContext(`${names.map(extractFunction).join('\n')}\nglobalThis.__functions = {${exports}};`, sandbox);
     return {sandbox, ...sandbox.__functions};
 }
+
+test('reference controls keep canvas picker first, media in the middle, and popup picker last', () => {
+    assert.doesNotMatch(smartCanvasHtml, /composerHeadQuickActions/);
+    assert.match(smartCanvasHtml, /id="inputThumbsRow"/);
+    assert.match(smartCanvasHtml, /id="canvasReferencePickBanner"[\s\S]*?data-lucide="mouse-pointer-2"[\s\S]*?id="canvasReferencePickReturn"[\s\S]*?id="canvasReferencePickClose"/);
+    const renderSource = extractFunction('renderInputThumbsRow');
+    assert.match(renderSource, /inputThumbsRow\.innerHTML = `\$\{nodePickButton\}\$\{listHtml\}\$\{addButton\}`/);
+    assert.doesNotMatch(renderSource, /input-thumb-count/);
+    assert.match(renderSource, /classList\.add\('has-actions'\)/);
+    assert.match(smartCanvasCss, /\.canvas-reference-pick-banner \{[^}]*position:absolute[^}]*left:50%/);
+    assert.match(smartCanvasCss, /\.input-thumb-list \{[^}]*max-width:calc\(100% - 108px\)[^}]*scrollbar-width:none/);
+    assert.match(smartCanvasCss, /\.input-reference-action \{[^}]*width:46px[^}]*height:46px[^}]*margin-top:1px/);
+    assert.match(smartCanvasCss, /\.input-reference-action:hover,\.input-reference-action:focus-visible \{[^}]*background:color-mix\(in srgb, var\(--card\) 56%, var\(--soft\)\)[^}]*border-color:color-mix\(in srgb, var\(--text\) 28%, var\(--line\)\)/);
+    assert.match(smartCanvasCss, /\.input-reference-action\.active \{[^}]*background:var\(--card\)[^}]*border-color:var\(--text\)[^}]*color:var\(--text\)/);
+    assert.match(smartCanvasCss, /\.canvas-reference-pick-banner \{[^}]*border:1px solid var\(--line\)/);
+    assert.match(smartCanvasCss, /\.canvas-reference-pick-icon \{[^}]*border:1px solid var\(--line\)/);
+});
+
+test('canvas picker resolves one stable media item and preserves smart-group ownership', () => {
+    const {canvasReferencePickCandidateForNode} = loadProductionFunctions(
+        ['canvasReferencePickCandidateForNode'],
+        {
+            imagesForNode:node => node.refs || [],
+            mediaKindForItem:item => item.kind || 'image',
+            isSmartGroupNode:node => node.type === 'smart-group'
+        }
+    );
+    const single = {id:'single', refs:[{url:'/single.png', nodeId:'single', imageIndex:0, kind:'image'}]};
+    assert.equal(canvasReferencePickCandidateForNode(single).url, '/single.png');
+    const group = {id:'group', type:'smart-group', refs:[
+        {url:'/owned.png', nodeId:'group', imageIndex:0, kind:'image'},
+        {url:'/child.mp4', nodeId:'child', imageIndex:0, kind:'video'}
+    ]};
+    assert.equal(canvasReferencePickCandidateForNode(group), null);
+    assert.equal(canvasReferencePickCandidateForNode(group, 0).url, '/owned.png');
+    assert.equal(canvasReferencePickCandidateForNode(group, 1), null);
+    const targetSource = extractFunction('canvasReferencePickCandidateFromTarget');
+    assert.match(targetSource, /smart-progress-task-content[\s\S]*?runningHubProgressTasks\(clickedNode\)\.flatMap\(smartProgressTaskResultItems\)/);
+});
+
+test('node-picked references are copied into manual state as independent snapshots', () => {
+    let undoCount = 0;
+    let saveCount = 0;
+    const {addManualReferenceToNode} = loadProductionFunctions(
+        ['addManualReferenceToNode'],
+        {
+            mediaKindForItem:item => item.kind || 'image',
+            inputRefKey:item => item.nodeId && item.imageIndex !== '' ? `${item.nodeId}|${item.imageIndex}` : `url|${item.url}`,
+            visibleReferenceImagesFor:node => node.manualInputRefs || [],
+            pushUndo:() => { undoCount++; },
+            closeMentionPicker:() => {},
+            renderInputThumbsRow:() => {},
+            scheduleSave:() => { saveCount++; },
+            toast:() => {},
+            trf:key => key,
+            SMART_REFERENCE_IMAGE_MAX:20
+        }
+    );
+    const target = {id:'target'};
+    const source = {url:'/picked.png', name:'Picked', nodeId:'source', imageIndex:2, kind:'image', asset_uris:{runninghub:'asset://picked'}};
+    assert.equal(addManualReferenceToNode(target, source, {closePicker:false}), 'added');
+    source.url = '/changed.png';
+    source.asset_uris.runninghub = 'asset://changed';
+    assert.equal(target.manualInputRefs.length, 1);
+    assert.equal(target.manualInputRefs[0].url, '/picked.png');
+    assert.equal(target.manualInputRefs[0].asset_uris.runninghub, 'asset://picked');
+    assert.equal(target.manualInputRefs[0].manualAdded, true);
+    assert.equal(undoCount, 1);
+    assert.equal(saveCount, 1);
+    assert.equal(addManualReferenceToNode(target, {...source, url:'/picked.png'}, {closePicker:false}), 'duplicate');
+    assert.equal(target.manualInputRefs.length, 1);
+});
+
+test('a successful canvas pick exits after exactly one media and guards native node interactions', () => {
+    const clickSource = extractFunction('handleCanvasReferencePickClick');
+    assert.match(clickSource, /closest\?\.\('\.composer,\.canvas-reference-pick-banner,\.smart-minimap'\)/);
+    assert.match(clickSource, /addManualReferenceToNode\(targetNode, candidate\.ref, \{closePicker:false\}\)/);
+    assert.match(clickSource, /result === 'added' \|\| result === 'duplicate'[\s\S]*?canvasReferencePickSuppressUntil = Date\.now\(\) \+ 360;[\s\S]*?finishCanvasReferencePick\(\)/);
+    assert.match(smartCanvasSource, /shell\.addEventListener\('mousedown',[\s\S]*?canvasReferencePickState[\s\S]*?closest\?\.\('\.image-node'\)[\s\S]*?stopImmediatePropagation\(\)/);
+    assert.match(smartCanvasSource, /canvasReferencePickState && e\.key === 'Escape'[\s\S]*?finishCanvasReferencePick\(\)/);
+});
 
 test('generation mode support ignores stale API video state for RunningHub', () => {
     const {generationModeSupported} = loadProductionFunctions(['generationModeSupported'], {

@@ -1,5 +1,5 @@
 (function(){
-    const VERSION = '2026.07.16.smart-alt-shift-copy.1';
+    const VERSION = '2026.08.16.smart-reference-picker.2';
     const scripts = [
         '/static/js/i18n-core.js',
         '/static/js/i18n/common.js',

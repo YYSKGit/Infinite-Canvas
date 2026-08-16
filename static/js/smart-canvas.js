@@ -40,7 +40,6 @@ const promptInput = document.getElementById('promptInput');
 const promptEditor = window.SmartPromptEditor ? new window.SmartPromptEditor(promptInput) : null;
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
-const composerHeadQuickActions = document.getElementById('composerHeadQuickActions');
 const engineSelect = document.getElementById('engineSelect');
 const dynamicParams = document.getElementById('dynamicParams');
 const runBtn = document.getElementById('runBtn');
@@ -51,6 +50,10 @@ const inputThumbsRow = document.getElementById('inputThumbsRow');
 const SMART_UPLOAD_MAX = 20;
 const SMART_REFERENCE_IMAGE_MAX = 20;
 const inputPromptPreview = document.getElementById('inputPromptPreview');
+const canvasReferencePickBanner = document.getElementById('canvasReferencePickBanner');
+const canvasReferencePickTarget = document.getElementById('canvasReferencePickTarget');
+const canvasReferencePickReturn = document.getElementById('canvasReferencePickReturn');
+const canvasReferencePickClose = document.getElementById('canvasReferencePickClose');
 const minimap = document.getElementById('minimap');
 const minimapContent = document.getElementById('minimapContent');
 const smartArrangeBtn = document.getElementById('smartArrangeBtn');
@@ -163,6 +166,8 @@ let uploadTargetId = '';
 let pendingGroupUploadPoint = null;
 let mentionAnchorEl = null;
 let mentionInsertMode = 'token';
+let canvasReferencePickState = null;
+let canvasReferencePickSuppressUntil = 0;
 let panState = null;
 let didPan = false;
 let portDragState = null;
@@ -3425,6 +3430,7 @@ function canvasListUrlForProject(projectId){
     return `/static/canvas-list.html?project=${encodeURIComponent(pid)}`;
 }
 async function backToCanvasList(){
+    finishCanvasReferencePick();
     savePromptDraftForCurrent();
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -3495,6 +3501,7 @@ function resetSmartCanvasTransientStateForSwitch(){
     canvasDefaultSmartSettings = cloneSmartSettings(settings);
 }
 async function switchToSmartCanvas(nextCanvasId, options={}){
+    finishCanvasReferencePick();
     if(!nextCanvasId){
         setSmartCanvasSwitcherOpen(false);
         return false;
@@ -13296,6 +13303,7 @@ function refreshSmartGenerationSurfaceVisibility(root=world){
     surfaces.forEach(surface => smartGenerationSurfaceObserver.observe(surface));
 }
 function render(){
+    if(canvasReferencePickState && !nodes.some(node => node.id === canvasReferencePickState.targetNodeId)) finishCanvasReferencePick();
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
     rememberInlineVideoActivations();
     world.classList.toggle('smart-multi-selected', selectedNodeIds().length > 1);
@@ -18637,6 +18645,7 @@ function renderInputThumbsRow(node){
     syncVeniceVideoQuote();
     const manualRefKeys = new Set(manualReferenceImagesFor(node).map(img => inputRefKey(img)));
     const addActive = mentionInsertMode === 'manual-ref';
+    const nodePickActive = Boolean(node?.id && canvasReferencePickState?.targetNodeId === node.id);
     // 仅当参考图集合/状态真正变化时才重建缩略图 DOM。否则每敲一个字都重建并重新解码所有图片，
     // 参考图多时会让输入框打字明显卡顿。
     const thumbsSignature = JSON.stringify({
@@ -18644,6 +18653,7 @@ function renderInputThumbsRow(node){
         items: dedup.map((img, index) => `${inputRefKey(img)}@${img.url || ''}@${inputThumbHoverTitle(node, img, index)}`),
         manual: [...manualRefKeys],
         add: addActive,
+        nodePick:nodePickActive,
         mode: node ? smartImageMode(node) : ''
     });
     if(inputThumbsRow.dataset.thumbsSig === thumbsSignature){
@@ -18651,24 +18661,17 @@ function renderInputThumbsRow(node){
         return;
     }
     inputThumbsRow.dataset.thumbsSig = thumbsSignature;
-    if(composerHeadQuickActions) composerHeadQuickActions.innerHTML = '';
     if(!node){
-        inputThumbsRow.classList.remove('has-items');
+        inputThumbsRow.classList.remove('has-items', 'has-actions');
         inputThumbsRow.innerHTML = '';
         refreshPromptReferenceContext();
         return;
     }
-    const addButton = `<button class="input-thumb-add ${addActive ? 'active' : ''}" type="button" data-input-add-reference title="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}" aria-label="${escapeHtml(addActive ? '收起参考图' : '添加参考图')}"><i data-lucide="image-plus"></i></button>`;
-    if(composerHeadQuickActions) composerHeadQuickActions.innerHTML = addButton;
-    if(!dedup.length){
-        inputThumbsRow.classList.remove('has-items');
-        inputThumbsRow.innerHTML = '';
-        bindInputThumbReferenceActions();
-        refreshIcons();
-        refreshPromptReferenceContext();
-        return;
-    }
-    inputThumbsRow.classList.add('has-items');
+    const nodePickTitle = tr(nodePickActive ? 'smart.referencePickClose' : 'smart.referencePickFromCanvas');
+    const addTitle = tr(addActive ? 'smart.referencePickerClose' : 'smart.referencePickerOpen');
+    const nodePickButton = `<button class="input-reference-action input-reference-node-pick ${nodePickActive ? 'active' : ''}" type="button" data-input-pick-reference title="${escapeHtml(nodePickTitle)}" aria-label="${escapeHtml(nodePickTitle)}" aria-pressed="${nodePickActive ? 'true' : 'false'}"><i data-lucide="scan-line"></i></button>`;
+    inputThumbsRow.classList.toggle('has-items', dedup.length > 0);
+    inputThumbsRow.classList.add('has-actions');
     const mediaCounters = {image:0, video:0, audio:0, text:0, file:0};
     const thumbsHtml = dedup.map((img, i) => {
         const isVid = isVideoMediaItem(img);
@@ -18688,7 +18691,9 @@ function renderInputThumbsRow(node){
         const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
         return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(hoverTitle)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
     }).join('');
-    inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div>`;
+    const listHtml = dedup.length ? `<div class="input-thumb-list">${thumbsHtml}</div>` : '';
+    const addButton = `<button class="input-reference-action input-thumb-add ${addActive ? 'active' : ''}" type="button" data-input-add-reference title="${escapeHtml(addTitle)}" aria-label="${escapeHtml(addTitle)}" aria-pressed="${addActive ? 'true' : 'false'}"><i data-lucide="plus"></i></button>`;
+    inputThumbsRow.innerHTML = `${nodePickButton}${listHtml}${addButton}`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
     bindInputThumbsDrag(node, dedup, manualRefKeys);
     bindInputThumbReferenceActions();
@@ -18696,12 +18701,18 @@ function renderInputThumbsRow(node){
     refreshPromptReferenceContext();
 }
 function currentInputAddReferenceButton(){
-    return composerHeadQuickActions?.querySelector('[data-input-add-reference]')
-        || inputThumbsRow?.querySelector('[data-input-add-reference]')
+    return inputThumbsRow?.querySelector('[data-input-add-reference]')
         || null;
 }
 function bindInputThumbReferenceActions(){
-    [composerHeadQuickActions, inputThumbsRow].filter(Boolean).forEach(root => {
+    [inputThumbsRow].filter(Boolean).forEach(root => {
+        root.querySelectorAll('[data-input-pick-reference]').forEach(btn => {
+            btn.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleCanvasReferencePick();
+            });
+        });
         root.querySelectorAll('[data-input-add-reference]').forEach(btn => {
             btn.addEventListener('click', event => {
                 event.preventDefault();
@@ -20445,7 +20456,7 @@ function renderMentionPicker(source){
     if(mentionInsertMode === 'manual-ref'){
         placeMentionPickerInComposerCard();
         renderInputThumbsRow(selectedNode());
-        mentionAnchorEl = currentInputAddReferenceButton() || composerHeadQuickActions || inputThumbsRow;
+        mentionAnchorEl = currentInputAddReferenceButton() || inputThumbsRow;
     } else {
         placeMentionPickerInPromptRow();
     }
@@ -20531,17 +20542,18 @@ function setPromptCaretToEnd(){
 }
 function toggleAssetMentionPickerFromThumbs(){
     if(!selectedNode()) return;
+    finishCanvasReferencePick();
     if(mentionInsertMode === 'manual-ref'){
         closeMentionPicker();
         return;
     }
     mentionInsertMode = 'manual-ref';
     renderInputThumbsRow(selectedNode());
-    mentionAnchorEl = currentInputAddReferenceButton() || composerHeadQuickActions || inputThumbsRow;
+    mentionAnchorEl = currentInputAddReferenceButton() || inputThumbsRow;
     renderMentionPicker('asset');
 }
-function addManualReferenceToSelectedNode(img){
-    const node = selectedNode();
+function addManualReferenceToNode(node, img, options=null){
+    options = options || {};
     if(!node || !img?.url) return;
     const kind = img.kind || mediaKindForItem(img);
     const ref = {
@@ -20550,7 +20562,7 @@ function addManualReferenceToSelectedNode(img){
         kind,
         nodeId:img.nodeId || '',
         imageIndex:Number.isFinite(Number(img.imageIndex)) ? Number(img.imageIndex) : '',
-        asset_uris:img.asset_uris || {},
+        asset_uris:img.asset_uris && typeof img.asset_uris === 'object' ? {...img.asset_uris} : {},
         manualAdded:true
     };
     if(img.originalLocalUrl) ref.originalLocalUrl = img.originalLocalUrl;
@@ -20558,15 +20570,24 @@ function addManualReferenceToSelectedNode(img){
     const key = inputRefKey(ref);
     const exists = refs.some(item => inputRefKey(item) === key || item.url === ref.url);
     if(exists){
-        closeMentionPicker();
-        return;
+        if(options.closePicker !== false) closeMentionPicker();
+        return 'duplicate';
+    }
+    const visibleRefs = visibleReferenceImagesFor(node);
+    if(visibleRefs.length >= SMART_REFERENCE_IMAGE_MAX && !visibleRefs.some(item => item?.url === ref.url)){
+        toast(trf('smart.referenceLimit', {n:SMART_REFERENCE_IMAGE_MAX}));
+        return 'limit';
     }
     pushUndo();
     refs.push(ref);
     node.manualInputRefs = refs;
-    closeMentionPicker();
+    if(options.closePicker !== false) closeMentionPicker();
     renderInputThumbsRow(node);
     scheduleSave();
+    return 'added';
+}
+function addManualReferenceToSelectedNode(img){
+    return addManualReferenceToNode(selectedNode(), img);
 }
 function removeManualReferenceFromSelectedNode(key){
     const node = selectedNode();
@@ -20580,6 +20601,107 @@ function removeManualReferenceFromSelectedNode(key){
     if(!refs.length) delete node.manualInputRefs;
     renderInputThumbsRow(node);
     scheduleSave();
+}
+function canvasReferencePickTargetNode(){
+    return canvasReferencePickState ? nodes.find(node => node.id === canvasReferencePickState.targetNodeId) || null : null;
+}
+function syncCanvasReferencePickBanner(){
+    if(!canvasReferencePickBanner) return;
+    const target = canvasReferencePickTargetNode();
+    const active = Boolean(target);
+    canvasReferencePickBanner.hidden = !active;
+    shell?.classList.toggle('canvas-reference-picking', active);
+    if(canvasReferencePickTarget) canvasReferencePickTarget.textContent = active ? tr('smart.referencePickHint') : '';
+    if(active) refreshIcons();
+}
+function startCanvasReferencePick(node=selectedNode()){
+    if(!node) return false;
+    closeMentionPicker();
+    closeAllSmartPopovers();
+    canvasReferencePickState = {targetNodeId:node.id};
+    syncCanvasReferencePickBanner();
+    if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
+    renderInputThumbsRow(node);
+    return true;
+}
+function finishCanvasReferencePick(){
+    const wasActive = Boolean(canvasReferencePickState);
+    canvasReferencePickState = null;
+    syncCanvasReferencePickBanner();
+    if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
+    if(wasActive && selectedNode()) renderInputThumbsRow(selectedNode());
+    return wasActive;
+}
+function toggleCanvasReferencePick(){
+    const node = selectedNode();
+    if(!node) return;
+    if(canvasReferencePickState?.targetNodeId === node.id){
+        finishCanvasReferencePick();
+        return;
+    }
+    startCanvasReferencePick(node);
+}
+function canvasReferencePickCandidateForNode(node, imageIndex=null){
+    if(!node) return null;
+    const refs = imagesForNode(node).filter(item => item?.url && ['image','video','audio'].includes(mediaKindForItem(item)));
+    if(Number.isInteger(imageIndex)){
+        return refs.find(item => item.nodeId === node.id && Number(item.imageIndex) === imageIndex) || null;
+    }
+    return refs.length === 1 ? refs[0] : null;
+}
+function canvasReferencePickCandidateFromTarget(target){
+    const nodeEl = target?.closest?.('.image-node');
+    if(!nodeEl?.dataset?.id) return {node:null, ref:null, hasMedia:false};
+    const clickedNode = nodes.find(node => node.id === nodeEl.dataset.id) || null;
+    const itemEl = target.closest?.('[data-image-index]');
+    if(itemEl){
+        if(itemEl.classList?.contains('smart-progress-task-content')){
+            const index = Number(itemEl.dataset.imageIndex);
+            const item = runningHubProgressTasks(clickedNode).flatMap(smartProgressTaskResultItems)[index];
+            const ref = item?.url && ['image','video','audio'].includes(mediaKindForItem(item))
+                ? {...imageForDisplay(item), nodeId:clickedNode.id, imageIndex:index}
+                : null;
+            return {node:clickedNode, ref, hasMedia:Boolean(item?.url)};
+        }
+        const ownerId = itemEl.dataset.refNodeId || clickedNode?.id || '';
+        const owner = nodes.find(node => node.id === ownerId) || clickedNode;
+        const index = Number(itemEl.dataset.refImageIndex ?? itemEl.dataset.imageIndex);
+        const ref = canvasReferencePickCandidateForNode(owner, Number.isInteger(index) ? index : null);
+        return {node:clickedNode, ref, hasMedia:imagesForNode(clickedNode).some(item => item?.url)};
+    }
+    const refs = clickedNode ? imagesForNode(clickedNode).filter(item => item?.url) : [];
+    return {node:clickedNode, ref:canvasReferencePickCandidateForNode(clickedNode), hasMedia:refs.length > 0};
+}
+function handleCanvasReferencePickClick(event){
+    if(!canvasReferencePickState) return false;
+    if(event.target.closest?.('.composer,.canvas-reference-pick-banner,.smart-minimap')) return false;
+    const targetNode = canvasReferencePickTargetNode();
+    if(!targetNode){
+        finishCanvasReferencePick();
+        return false;
+    }
+    const candidate = canvasReferencePickCandidateFromTarget(event.target);
+    if(!candidate.node){
+        if(event.target.closest?.('.world') || event.target === shell){
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return true;
+        }
+        return false;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if(!candidate.ref){
+        toast(tr(candidate.hasMedia ? 'smart.referencePickChooseMedia' : 'smart.referencePickNoMedia'));
+        return true;
+    }
+    const result = addManualReferenceToNode(targetNode, candidate.ref, {closePicker:false});
+    if(result === 'duplicate') toast(tr('smart.referenceAlreadyAdded'));
+    if(result === 'added' || result === 'duplicate'){
+        canvasReferencePickSuppressUntil = Date.now() + 360;
+        finishCanvasReferencePick();
+    }
+    return true;
 }
 function placeMentionPickerInPromptRow(){
     const row = promptInput?.closest?.('.prompt-row');
@@ -25483,6 +25605,26 @@ shell.addEventListener('click', e => {
     if(didPan || selectionJustFinished || Date.now() < suppressNodeClickUntil) return;
     closeSmartFloatingPanels();
 }, true);
+shell.addEventListener('mousedown', event => {
+    if(!canvasReferencePickState && Date.now() >= canvasReferencePickSuppressUntil) return;
+    if(!event.target.closest?.('.image-node')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+}, true);
+shell.addEventListener('click', event => {
+    if(Date.now() < canvasReferencePickSuppressUntil && event.target.closest?.('.image-node')){
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+    }
+    handleCanvasReferencePickClick(event);
+}, true);
+shell.addEventListener('dblclick', event => {
+    if(!canvasReferencePickState && Date.now() >= canvasReferencePickSuppressUntil) return;
+    if(!event.target.closest?.('.image-node')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+}, true);
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
@@ -26199,6 +26341,16 @@ window.addEventListener('paste', e => {
 });
 window.addEventListener('keydown', e => {
     const key = String(e.key || '').toLowerCase();
+    if(canvasReferencePickState && e.key === 'Escape'){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        finishCanvasReferencePick();
+        return;
+    }
+    if(canvasReferencePickState && (e.key === 'Delete' || e.key === 'Backspace') && !isEditableTarget(e.target)){
+        e.preventDefault();
+        return;
+    }
     if(key === 'r' && !isEditableTarget(e.target)) isRKeyDown = true;
     if(imageEditModal.classList.contains('open') && imageEditMode === 'preview' && !isEditableTarget(e.target)){
         if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
@@ -26917,6 +27069,26 @@ composer.addEventListener('click', event => {
     // 参数控件(.smart-control)内部点击本就不关;运行按钮也排除,让参数栏熬过生成与重渲染。
     if(!event.target.closest('.smart-control') && !event.target.closest('#runBtn') && !event.target.closest('#cascadeRunBtn')) closeAllSmartPopovers();
     event.stopPropagation();
+});
+canvasReferencePickBanner?.addEventListener('pointerdown', event => event.stopPropagation());
+canvasReferencePickBanner?.addEventListener('click', event => event.stopPropagation());
+canvasReferencePickReturn?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = canvasReferencePickTargetNode();
+    if(!target){ finishCanvasReferencePick(); return; }
+    selectedId = target.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    const rect = nodeRect(target);
+    centerViewportOnWorldPoint({x:rect.x + rect.width / 2, y:rect.y + rect.height / 2});
+    syncSelectionUi();
+    updateComposer();
+});
+canvasReferencePickClose?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    finishCanvasReferencePick();
 });
 promptInput.addEventListener('smart-prompt-change', () => {
     hideMentionPreview();
