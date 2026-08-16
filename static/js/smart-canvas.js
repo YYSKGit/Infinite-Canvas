@@ -167,6 +167,8 @@ let pendingGroupUploadPoint = null;
 let mentionAnchorEl = null;
 let mentionInsertMode = 'token';
 let canvasReferencePickState = null;
+let canvasReferencePickReturnFrame = 0;
+let composerWheelScaleSyncTimer = null;
 let panState = null;
 let didPan = false;
 let portDragState = null;
@@ -20699,13 +20701,77 @@ function toggleCanvasReferenceForNode(node, ref){
     }
     return addManualReferenceToNode(node, ref, {closePicker:false});
 }
-function returnToCanvasReferenceTarget(node=canvasReferencePickTargetNode()){
-    if(!node) return false;
+function stopCanvasReferenceViewportAnimation(){
+    if(canvasReferencePickReturnFrame) cancelAnimationFrame(canvasReferencePickReturnFrame);
+    canvasReferencePickReturnFrame = 0;
+    composer?.classList.remove('canvas-reference-viewport-animating');
+    world?.classList.remove('canvas-reference-viewport-animating');
+}
+function beginComposerWheelScaleSync(){
+    if(composerWheelScaleSyncTimer) clearTimeout(composerWheelScaleSyncTimer);
+    composer?.classList.add('canvas-wheel-viewport-scaling');
+    world?.classList.add('canvas-wheel-viewport-scaling');
+    composerWheelScaleSyncTimer = setTimeout(() => {
+        composerWheelScaleSyncTimer = null;
+        composer?.classList.remove('canvas-wheel-viewport-scaling');
+        world?.classList.remove('canvas-wheel-viewport-scaling');
+    }, 140);
+}
+function canvasReferenceViewportEase(progress){
+    const value = Math.max(0, Math.min(1, Number(progress) || 0));
+    return value < .5
+        ? 4 * value * value * value
+        : 1 - Math.pow(-2 * value + 2, 3) / 2;
+}
+function animateCanvasReferenceViewport(savedViewport, duration=440){
+    stopCanvasReferenceViewportAnimation();
+    const from = {x:viewport.x, y:viewport.y, scale:viewport.scale};
+    const to = {x:Number(savedViewport.x), y:Number(savedViewport.y), scale:Number(savedViewport.scale)};
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const unchanged = from.x === to.x && from.y === to.y && from.scale === to.scale;
+    if(reduceMotion || unchanged || duration <= 0){
+        viewport.x = to.x;
+        viewport.y = to.y;
+        viewport.scale = to.scale;
+        applyViewport();
+        return true;
+    }
+    composer?.classList.add('canvas-reference-viewport-animating');
+    world?.classList.add('canvas-reference-viewport-animating');
+    let startedAt = null;
+    const tick = timestamp => {
+        if(startedAt === null) startedAt = timestamp;
+        const progress = Math.min(1, Math.max(0, (timestamp - startedAt) / duration));
+        const eased = canvasReferenceViewportEase(progress);
+        viewport.x = from.x + (to.x - from.x) * eased;
+        viewport.y = from.y + (to.y - from.y) * eased;
+        viewport.scale = from.scale + (to.scale - from.scale) * eased;
+        if(progress < 1){
+            applyViewport();
+            canvasReferencePickReturnFrame = requestAnimationFrame(tick);
+            return;
+        }
+        viewport.x = to.x;
+        viewport.y = to.y;
+        viewport.scale = to.scale;
+        canvasReferencePickReturnFrame = 0;
+        applyViewport();
+        composer?.classList.remove('canvas-reference-viewport-animating');
+        world?.classList.remove('canvas-reference-viewport-animating');
+    };
+    canvasReferencePickReturnFrame = requestAnimationFrame(tick);
+    return true;
+}
+function returnToCanvasReferenceTarget(node=canvasReferencePickTargetNode(), savedViewport=canvasReferencePickState?.viewport){
+    if(!node || !savedViewport) return false;
+    const x = Number(savedViewport.x);
+    const y = Number(savedViewport.y);
+    const scale = Number(savedViewport.scale);
+    if(!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(scale) || scale <= 0) return false;
     selectedId = node.id;
     selectedIds = [];
     selectedImage = {nodeId:'', index:-1};
-    const rect = nodeRect(node);
-    centerViewportOnWorldPoint({x:rect.x + rect.width / 2, y:rect.y + rect.height / 2});
+    animateCanvasReferenceViewport({x, y, scale});
     syncSelectionUi();
     updateComposer();
     return true;
@@ -20722,10 +20788,15 @@ function syncCanvasReferencePickBanner(){
 }
 function startCanvasReferencePick(node=selectedNode()){
     if(!node) return false;
+    stopCanvasReferenceViewportAnimation();
     closeMentionPicker();
     closeAllSmartPopovers();
     restoreCanvasReferencePickLockedUpstream(node);
-    canvasReferencePickState = {targetNodeId:node.id, changed:false};
+    canvasReferencePickState = {
+        targetNodeId:node.id,
+        changed:false,
+        viewport:{x:viewport.x, y:viewport.y, scale:viewport.scale}
+    };
     syncCanvasReferencePickBanner();
     if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
     renderInputThumbsRow(node);
@@ -20740,7 +20811,7 @@ function finishCanvasReferencePick(options=null){
     syncCanvasReferencePickBanner();
     if(inputThumbsRow) delete inputThumbsRow.dataset.thumbsSig;
     if(wasActive && selectedNode()) renderInputThumbsRow(selectedNode());
-    if(shouldReturn) returnToCanvasReferenceTarget(target);
+    if(shouldReturn) returnToCanvasReferenceTarget(target, state.viewport);
     return wasActive;
 }
 function toggleCanvasReferencePick(){
@@ -25784,6 +25855,7 @@ shell.onmousedown = e => {
     }
     if(e.button !== 0 && e.button !== 1) return;
     e.preventDefault();
+    stopCanvasReferenceViewportAnimation();
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
     shell.classList.add('panning');
@@ -26382,6 +26454,8 @@ window.onmouseup = e => {
 shell.addEventListener('wheel', e => {
     if(e.target.closest('.composer,.smart-back,.smart-canvas-switcher,.image-edit-modal,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-top-actions-cursor-bridge,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
+    stopCanvasReferenceViewportAnimation();
+    beginComposerWheelScaleSync();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;

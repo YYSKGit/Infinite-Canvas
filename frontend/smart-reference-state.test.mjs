@@ -90,6 +90,9 @@ test('reference controls keep canvas picker first, media in the middle, and popu
     assert.match(smartCanvasCss, /\.canvas-reference-pick-banner \{[^}]*position:absolute[^}]*left:50%/);
     assert.match(smartCanvasCss, /\.input-thumb-list \{[^}]*max-width:calc\(100% - 108px\)[^}]*scrollbar-width:none/);
     assert.match(smartCanvasCss, /\.input-reference-action \{[^}]*width:46px[^}]*height:46px[^}]*margin-top:1px/);
+    assert.match(smartCanvasCss, /\.input-thumbs-row \{[^}]*padding:0 2px/);
+    assert.match(smartCanvasCss, /\.composer:not\(\.expanded\) \.input-thumbs-row \{[^}]*margin-top:-3px[^}]*margin-bottom:-4px/);
+    assert.match(smartCanvasCss, /\.composer:not\(\.expanded\) \.input-prompt-preview\.has-text \{[^}]*margin-top:2px[^}]*margin-bottom:-2px/);
     assert.match(smartCanvasCss, /\.input-reference-action:hover,\.input-reference-action:focus-visible \{[^}]*background:color-mix\(in srgb, var\(--card\) 56%, var\(--soft\)\)[^}]*border-color:color-mix\(in srgb, var\(--text\) 28%, var\(--line\)\)/);
     assert.match(smartCanvasCss, /\.input-reference-action\.active \{[^}]*background:var\(--card\)[^}]*border-color:var\(--text\)[^}]*color:var\(--text\)/);
     assert.match(smartCanvasCss, /\.canvas-reference-pick-banner \{[^}]*border:1px solid var\(--line\)/);
@@ -166,7 +169,7 @@ test('canvas picker toggles multiple media and returns only when an effective se
     assert.match(toggleSource, /blocked\.delete\(key\)[\s\S]*?return 'selected'/);
     assert.match(extractFunction('startCanvasReferencePick'), /changed:false/);
     assert.match(extractFunction('startCanvasReferencePick'), /restoreCanvasReferencePickLockedUpstream\(node\)/);
-    assert.match(extractFunction('finishCanvasReferencePick'), /returnIfChanged[\s\S]*?state\?\.changed[\s\S]*?returnToCanvasReferenceTarget\(target\)/);
+    assert.match(extractFunction('finishCanvasReferencePick'), /returnIfChanged[\s\S]*?state\?\.changed[\s\S]*?returnToCanvasReferenceTarget\(target, state\.viewport\)/);
     assert.match(smartCanvasSource, /shell\.addEventListener\('mousedown',[\s\S]*?canvasReferencePickState[\s\S]*?closest\?\.\('\.image-node'\)[\s\S]*?stopImmediatePropagation\(\)/);
     assert.match(smartCanvasSource, /canvasReferencePickState && e\.key === 'Escape'[\s\S]*?finishCanvasReferencePick\(\{returnIfChanged:true\}\)/);
     assert.match(smartCanvasSource, /canvasReferencePickClose\?\.addEventListener\('click',[\s\S]*?finishCanvasReferencePick\(\{returnIfChanged:true\}\)/);
@@ -255,6 +258,116 @@ test('canvas picker exit returns to its target only after an effective toggle', 
     loaded.sandbox.canvasReferencePickState = {targetNodeId:'target', changed:true};
     assert.equal(loaded.finishCanvasReferencePick({returnIfChanged:true}), true);
     assert.equal(returnCount, 1);
+});
+
+test('canvas picker restores the exact viewport captured when selection started', () => {
+    const target = {id:'target'};
+    const viewport = {x:120.25, y:-86.5, scale:0.72};
+    const frames = [];
+    const composerClasses = new Set();
+    const worldClasses = new Set();
+    let applyCount = 0;
+    const loaded = loadProductionFunctions(
+        [
+            'stopCanvasReferenceViewportAnimation',
+            'canvasReferenceViewportEase',
+            'animateCanvasReferenceViewport',
+            'startCanvasReferencePick',
+            'returnToCanvasReferenceTarget'
+        ],
+        {
+            canvasReferencePickState:null,
+            canvasReferencePickReturnFrame:0,
+            viewport,
+            composer:{classList:{
+                add:name => composerClasses.add(name),
+                remove:name => composerClasses.delete(name)
+            }},
+            world:{classList:{
+                add:name => worldClasses.add(name),
+                remove:name => worldClasses.delete(name)
+            }},
+            window:{matchMedia:() => ({matches:false})},
+            requestAnimationFrame:callback => { frames.push(callback); return frames.length; },
+            cancelAnimationFrame:() => {},
+            closeMentionPicker:() => {},
+            closeAllSmartPopovers:() => {},
+            restoreCanvasReferencePickLockedUpstream:() => {},
+            syncCanvasReferencePickBanner:() => {},
+            inputThumbsRow:null,
+            renderInputThumbsRow:() => {},
+            canvasReferencePickTargetNode:() => target,
+            selectedId:'',
+            selectedIds:['other'],
+            selectedImage:{nodeId:'other', index:2},
+            applyViewport:() => { applyCount++; },
+            syncSelectionUi:() => {},
+            updateComposer:() => {}
+        }
+    );
+    assert.equal(loaded.startCanvasReferencePick(target), true);
+    assert.equal(loaded.sandbox.canvasReferencePickState.viewport.x, 120.25);
+    assert.equal(loaded.sandbox.canvasReferencePickState.viewport.y, -86.5);
+    assert.equal(loaded.sandbox.canvasReferencePickState.viewport.scale, 0.72);
+
+    viewport.x = 640;
+    viewport.y = 360;
+    viewport.scale = 1.8;
+    assert.equal(loaded.returnToCanvasReferenceTarget(target), true);
+    assert.equal(composerClasses.has('canvas-reference-viewport-animating'), true);
+    assert.equal(worldClasses.has('canvas-reference-viewport-animating'), true);
+    assert.equal(frames.length, 1);
+    frames.shift()(0);
+    frames.shift()(110);
+    assert.equal(viewport.x, 607.515625);
+    assert.equal(viewport.y, 332.09375);
+    assert.equal(viewport.scale, 1.7325);
+    frames.shift()(440);
+    assert.equal(viewport.x, 120.25);
+    assert.equal(viewport.y, -86.5);
+    assert.equal(viewport.scale, 0.72);
+    assert.equal(applyCount, 3);
+    assert.equal(loaded.sandbox.canvasReferencePickReturnFrame, 0);
+    assert.equal(composerClasses.has('canvas-reference-viewport-animating'), false);
+    assert.equal(worldClasses.has('canvas-reference-viewport-animating'), false);
+    assert.doesNotMatch(extractFunction('returnToCanvasReferenceTarget'), /nodeRect|centerViewportOnWorldPoint/);
+    assert.match(extractFunction('finishCanvasReferencePick'), /returnToCanvasReferenceTarget\(target, state\.viewport\)/);
+    assert.match(extractFunction('animateCanvasReferenceViewport'), /canvasReferenceViewportEase\(progress\)/);
+    assert.match(extractFunction('stopCanvasReferenceViewportAnimation'), /classList\.remove\('canvas-reference-viewport-animating'\)/);
+    assert.match(smartCanvasCss, /\.composer\.canvas-reference-viewport-animating,\.composer\.canvas-wheel-viewport-scaling \{[^}]*transition:opacity[^}]*visibility[^}]*\}/);
+    assert.match(smartCanvasCss, /\.world\.canvas-reference-viewport-animating \.smart-node-floating-menu,\.world\.canvas-wheel-viewport-scaling \.smart-node-floating-menu \{[^}]*transition:opacity[^}]*\}/);
+    assert.match(smartCanvasSource, /shell\.onmousedown[\s\S]*?stopCanvasReferenceViewportAnimation\(\)/);
+    assert.match(smartCanvasSource, /shell\.addEventListener\('wheel'[\s\S]*?stopCanvasReferenceViewportAnimation\(\)/);
+});
+
+test('wheel zoom temporarily synchronizes the composer counter-scale without changing other viewport paths', () => {
+    const composerClasses = new Set();
+    const worldClasses = new Set();
+    const scheduled = [];
+    let clearCount = 0;
+    const loaded = loadProductionFunctions(['beginComposerWheelScaleSync'], {
+        composerWheelScaleSyncTimer:null,
+        composer:{classList:{
+            add:name => composerClasses.add(name),
+            remove:name => composerClasses.delete(name)
+        }},
+        world:{classList:{
+            add:name => worldClasses.add(name),
+            remove:name => worldClasses.delete(name)
+        }},
+        setTimeout:callback => { scheduled.push(callback); return scheduled.length; },
+        clearTimeout:() => { clearCount++; }
+    });
+    loaded.beginComposerWheelScaleSync();
+    assert.equal(composerClasses.has('canvas-wheel-viewport-scaling'), true);
+    assert.equal(worldClasses.has('canvas-wheel-viewport-scaling'), true);
+    loaded.beginComposerWheelScaleSync();
+    assert.equal(clearCount, 1);
+    scheduled.at(-1)();
+    assert.equal(composerClasses.has('canvas-wheel-viewport-scaling'), false);
+    assert.equal(worldClasses.has('canvas-wheel-viewport-scaling'), false);
+    assert.equal(loaded.sandbox.composerWheelScaleSyncTimer, null);
+    assert.match(smartCanvasSource, /shell\.addEventListener\('wheel'[\s\S]*?stopCanvasReferenceViewportAnimation\(\)[\s\S]*?beginComposerWheelScaleSync\(\)[\s\S]*?applyViewport\(\)/);
 });
 
 test('generation mode support ignores stale API video state for RunningHub', () => {
