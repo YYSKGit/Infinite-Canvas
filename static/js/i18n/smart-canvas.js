@@ -153,7 +153,7 @@
         "smart.referencePickerOpen": { zh: "从媒体选择器添加参考", en: "Add reference from media picker" },
         "smart.referencePickerClose": { zh: "收起媒体选择器", en: "Close media picker" },
         "smart.referencePickFromCanvas": { zh: "从画布节点选择参考", en: "Pick reference from canvas node" },
-        "smart.referencePickTitle": { zh: "元素选择模式", en: "Element selection mode" },
+        "smart.referencePickTitle": { zh: "媒体选择模式", en: "Element selection mode" },
         "smart.referencePickHint": { zh: "点击媒体添加到参考", en: "Click media to add it as a reference" },
         "smart.referencePickReturn": { zh: "返回节点", en: "Return to node" },
         "smart.referencePickClose": { zh: "退出选择模式", en: "Exit selection mode" },

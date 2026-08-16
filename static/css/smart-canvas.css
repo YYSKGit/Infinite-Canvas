@@ -1617,12 +1617,12 @@ body.smart-prompt-resize, body.smart-prompt-resize * { cursor:ns-resize !importa
 .canvas-reference-pick-banner[hidden] { display:none; }
 .canvas-reference-pick-icon { width:48px; height:48px; flex:0 0 auto; border:1px solid var(--line); border-radius:13px; display:inline-flex; align-items:center; justify-content:center; color:var(--text); background:color-mix(in srgb, var(--soft) 90%, var(--card)); }
 .canvas-reference-pick-icon i,.canvas-reference-pick-icon svg { width:20px; height:20px; fill:currentColor; stroke-width:1.7; }
-.canvas-reference-pick-copy { min-width:0; display:flex; flex-direction:column; gap:2px; }
+.canvas-reference-pick-copy { min-width:0; display:flex; flex-direction:column; gap:2px; transform:translateY(1px); }
 .canvas-reference-pick-copy strong { font-size:14px; line-height:1.15; font-weight:850; white-space:nowrap; }
 .canvas-reference-pick-copy small { max-width:210px; color:var(--muted); font-size:10.5px; line-height:1.2; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .canvas-reference-pick-return,.canvas-reference-pick-close { height:44px; padding:0 18px; border:1px solid var(--line); border-radius:12px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; white-space:nowrap; transition:background .14s ease,color .14s ease,border-color .14s ease,transform .14s ease; }
 .canvas-reference-pick-return { margin-left:4px; background:color-mix(in srgb, var(--soft) 90%, var(--card)); color:var(--text); }
-.canvas-reference-pick-close { background:var(--strong); border-color:var(--strong); color:var(--strong-text); }
+.canvas-reference-pick-close { background:var(--strong); border-color:var(--strong); color:var(--strong-text); font-size:14px; }
 .canvas-reference-pick-return:hover,.canvas-reference-pick-return:focus-visible { background:var(--card); border-color:var(--text); transform:translateY(-1px); }
 .canvas-reference-pick-close:hover,.canvas-reference-pick-close:focus-visible { filter:brightness(.94); transform:translateY(-1px); }
 .shell.canvas-reference-picking .image-node { cursor:not-allowed; }

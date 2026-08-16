@@ -155,9 +155,11 @@ test('a successful canvas pick exits after exactly one media and guards native n
     const clickSource = extractFunction('handleCanvasReferencePickClick');
     assert.match(clickSource, /closest\?\.\('\.composer,\.canvas-reference-pick-banner,\.smart-minimap'\)/);
     assert.match(clickSource, /addManualReferenceToNode\(targetNode, candidate\.ref, \{closePicker:false\}\)/);
-    assert.match(clickSource, /result === 'added' \|\| result === 'duplicate'[\s\S]*?canvasReferencePickSuppressUntil = Date\.now\(\) \+ 360;[\s\S]*?finishCanvasReferencePick\(\)/);
+    assert.match(clickSource, /result === 'added' \|\| result === 'duplicate'[\s\S]*?canvasReferencePickSuppressUntil = Date\.now\(\) \+ 360;[\s\S]*?finishCanvasReferencePick\(\);[\s\S]*?returnToCanvasReferenceTarget\(targetNode\)/);
     assert.match(smartCanvasSource, /shell\.addEventListener\('mousedown',[\s\S]*?canvasReferencePickState[\s\S]*?closest\?\.\('\.image-node'\)[\s\S]*?stopImmediatePropagation\(\)/);
     assert.match(smartCanvasSource, /canvasReferencePickState && e\.key === 'Escape'[\s\S]*?finishCanvasReferencePick\(\)/);
+    assert.match(smartCanvasSource, /canvasReferencePickClose\?\.addEventListener\('click',[\s\S]*?finishCanvasReferencePick\(\)[\s\S]*?\}\);/);
+    assert.doesNotMatch(smartCanvasSource.match(/canvasReferencePickClose\?\.addEventListener\('click',[\s\S]*?\}\);/)?.[0] || '', /returnToCanvasReferenceTarget/);
 });
 
 test('generation mode support ignores stale API video state for RunningHub', () => {

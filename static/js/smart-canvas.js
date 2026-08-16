@@ -20605,6 +20605,17 @@ function removeManualReferenceFromSelectedNode(key){
 function canvasReferencePickTargetNode(){
     return canvasReferencePickState ? nodes.find(node => node.id === canvasReferencePickState.targetNodeId) || null : null;
 }
+function returnToCanvasReferenceTarget(node=canvasReferencePickTargetNode()){
+    if(!node) return false;
+    selectedId = node.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    const rect = nodeRect(node);
+    centerViewportOnWorldPoint({x:rect.x + rect.width / 2, y:rect.y + rect.height / 2});
+    syncSelectionUi();
+    updateComposer();
+    return true;
+}
 function syncCanvasReferencePickBanner(){
     if(!canvasReferencePickBanner) return;
     const target = canvasReferencePickTargetNode();
@@ -20700,6 +20711,7 @@ function handleCanvasReferencePickClick(event){
     if(result === 'added' || result === 'duplicate'){
         canvasReferencePickSuppressUntil = Date.now() + 360;
         finishCanvasReferencePick();
+        returnToCanvasReferenceTarget(targetNode);
     }
     return true;
 }
@@ -27075,15 +27087,7 @@ canvasReferencePickBanner?.addEventListener('click', event => event.stopPropagat
 canvasReferencePickReturn?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-    const target = canvasReferencePickTargetNode();
-    if(!target){ finishCanvasReferencePick(); return; }
-    selectedId = target.id;
-    selectedIds = [];
-    selectedImage = {nodeId:'', index:-1};
-    const rect = nodeRect(target);
-    centerViewportOnWorldPoint({x:rect.x + rect.width / 2, y:rect.y + rect.height / 2});
-    syncSelectionUi();
-    updateComposer();
+    if(!returnToCanvasReferenceTarget()) finishCanvasReferencePick();
 });
 canvasReferencePickClose?.addEventListener('click', event => {
     event.preventDefault();
