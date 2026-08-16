@@ -17,8 +17,9 @@ test('Smart Canvas exposes generation mode as a bottom parameter control', () =>
   assert.match(html, /id="dynamicParams"[\s\S]*id="generationModeControl"[\s\S]*data-lucide="blocks"[\s\S]*<span>模式<\/span>/);
   assert.match(html, /class="smart-control generation-mode-control"/);
   assert.match(html, /class="smart-pill generation-mode-btn"/);
+  assert.doesNotMatch(html, /id="generationModeBtn"[^>]*title="生成模式"/);
   assert.match(html, /class="smart-popover generation-mode-panel"/);
-  assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*width:auto[^}]*height:var\(--ctrl-height\)/);
+  assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*width:auto[^}]*height:var\(--ctrl-height\)[^}]*color:var\(--muted\)[^}]*font-weight:500/);
   assert.match(css, /\.generation-mode-control\s*\{[^}]*z-index:90/);
   assert.match(css, /\.smart-popover\.generation-mode-panel\s*\{[^}]*width:min\(500px[^}]*max-height:min\(620px/);
   assert.match(css, /\.smart-popover\.generation-mode-panel\s*\{[^}]*max-width:calc\(100vw - 40px\)/);
@@ -35,14 +36,20 @@ test('Smart Canvas exposes generation mode as a bottom parameter control', () =>
   assert.match(css, /\.generation-mode-option\s*\{[^}]*border:1px solid color-mix\(in srgb, var\(--text\) 18%, var\(--line\)\)/);
   assert.match(css, /\.generation-mode-option:hover,\.generation-mode-option:focus-visible\s*\{[^}]*border-color:var\(--strong\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--strong\) 12%, transparent\)/);
   assert.doesNotMatch(css, /\.generation-mode-option:hover,\.generation-mode-option:focus-visible\s*\{[^}]*background:/);
-  assert.match(css, /\.generation-mode-option\.active\s*\{[^}]*border-color:var\(--strong\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--strong\) 12%, transparent\)/);
-  assert.match(css, /\.generation-mode-option-copy small\s*\{[^}]*white-space:nowrap[^}]*opacity:0[^}]*translateY\(7px\)/);
-  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy strong[^}]*translateY\(-6\.4px\)/);
-  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy small[^}]*opacity:1[^}]*translateY\(3\.6px\)/);
+  assert.match(css, /\.generation-mode-option\.active,\.generation-mode-option\.active:hover,\.generation-mode-option\.active:focus-visible,\.generation-mode-option\.active:active\s*\{[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 76%, var\(--strong\)\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--connection-flow\) 42%, transparent\)/);
+  assert.match(css, /\.generation-mode-option-copy-track\s*\{[^}]*display:flex[^}]*flex-direction:column[^}]*gap:3px[^}]*translate3d\(0,-7px,0\)[^}]*transition:transform \.22s cubic-bezier\(\.22,1,\.36,1\)[^}]*will-change:transform/);
+  assert.match(css, /\.generation-mode-option-title\s*\{[^}]*line-height:14px[^}]*font-weight:400/);
+  assert.doesNotMatch(css, /\.generation-mode-option-title\s*\{[^}]*transition:/);
+  assert.match(css, /\.generation-mode-option-copy small\s*\{[^}]*line-height:12px[^}]*opacity:0[^}]*transition:opacity \.22s cubic-bezier\(\.22,1,\.36,1\)/);
+  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy-track[^}]*translate3d\(0,-13px,0\)/);
+  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-title[^}]*font-weight:700/);
+  assert.match(css, /\.generation-mode-option:hover \.generation-mode-option-copy small[^}]*opacity:1/);
   assert.match(css, /\.generation-mode-option\.active \.generation-mode-option-copy small[^}]*opacity:1/);
   assert.match(css, /\.generation-mode-option\s*\{[^}]*padding:6px 7px/);
+  assert.match(css, /\.smart-popover \.generation-mode-option-icon i,\.smart-popover \.generation-mode-option-icon svg\s*\{[^}]*width:17px !important[^}]*height:17px !important/);
   assert.doesNotMatch(css, /generation-mode-check/);
   assert.doesNotMatch(js, /generation-mode-check/);
+  assert.match(js, /generation-mode-option-copy-track/);
 });
 
 test('built-in generation-mode descriptions stay short enough for the single-line reveal', () => {
@@ -180,9 +187,10 @@ test('inline mode capsule anchors the picker beside itself with the same complet
   assert.match(generationPosition, /offsetParent[\s\S]*?safeScaleX[\s\S]*?safeScaleY/);
   assert.match(js, /\['left', 'right', 'top', 'bottom', 'width', 'transform'\][\s\S]*?removeProperty/);
   assert.match(js, /smart-prompt-prefix-activate[\s\S]*?openGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)/);
-  assert.match(generationClose, /const inlineAnchor[\s\S]*?classList\.remove\('open'\)[\s\S]*?if\(inlineAnchor\) scheduleGenerationModeAnchorCleanup\(\)/);
-  assert.match(generationReset, /classList\.add\('positioning-inline-anchor'\)[\s\S]*?classList\.remove\('inline-anchor', 'open-upward'\)[\s\S]*?removeProperty[\s\S]*?void generationModePanel\.offsetWidth;[\s\S]*?classList\.remove\('positioning-inline-anchor'\)[\s\S]*?void generationModePanel\.offsetWidth/);
-  assert.match(js, /function scheduleGenerationModeAnchorCleanup\([\s\S]*?setTimeout[\s\S]*?!generationModePanel\?\.classList\.contains\('open'\)[\s\S]*?resetGenerationModePanelAnchor\(\)[\s\S]*?170/);
+  assert.match(generationClose, /classList\.remove\('open'\)/);
+  assert.doesNotMatch(generationClose, /removeProperty|resetGenerationModePanelAnchor|scheduleGenerationModeAnchorCleanup/);
+  assert.match(generationReset, /classList\.add\('positioning-inline-anchor'\)[\s\S]*?classList\.remove\('inline-anchor', 'open-upward', 'viewport-position-locked'\)[\s\S]*?removeProperty[\s\S]*?void generationModePanel\.offsetWidth;[\s\S]*?classList\.remove\('positioning-inline-anchor'\)[\s\S]*?void generationModePanel\.offsetWidth/);
+  assert.doesNotMatch(js, /generationModeAnchorCleanupTimer|scheduleGenerationModeAnchorCleanup/);
 });
 
 test('generation-mode categories balance dynamically between independent columns', () => {
@@ -258,8 +266,17 @@ test('composer fade-out keeps the saved prompt mounted instead of flashing an em
 test('generation-mode accents reuse the canvas blue theme token', () => {
   assert.doesNotMatch(css, /#a855f7/i);
   assert.match(css, /smart-prompt-inline-prefix-chip[^}]*var\(--connection-flow\)/);
-  assert.match(css, /generation-mode-btn\.active[^}]*var\(--connection-flow\)/);
+  assert.match(css, /generation-mode-btn\.active\s*\{[^}]*color:color-mix\(in srgb, var\(--connection-flow\) 76%, var\(--text\)\)[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 36%, var\(--line\)\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--connection-flow\) 24%, transparent\)/);
+  assert.match(css, /smart-control\.generation-mode-control:hover \.generation-mode-btn\.active,\.smart-control\.generation-mode-control:focus-within \.generation-mode-btn\.active\s*\{[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 36%, var\(--line\)\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--connection-flow\) 24%, transparent\)/);
+  assert.match(css, /smart-control\.generation-mode-control\.pinned \.generation-mode-btn\.active\s*\{[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 62%, var\(--line\)\)[^}]*box-shadow:0 0 0 2px color-mix\(in srgb, var\(--connection-flow\) 34%, transparent\)/);
   assert.match(css, /generation-mode-option\.active[^}]*var\(--connection-flow\)/);
+});
+
+test('generation-mode clear label is optically raised without moving its button', () => {
+  assert.match(js, /data-generation-mode-clear><span class="generation-mode-clear-label">清除<\/span><\/button>/);
+  assert.match(css, /\.generation-mode-panel-head > span\s*\{/);
+  assert.match(css, /\.generation-mode-clear-label\s*\{[^}]*display:inline-block[^}]*translateY\(-1px\)/);
+  assert.doesNotMatch(css, /\.generation-mode-panel-head button\s*\{[^}]*transform:/);
 });
 
 test('bottom parameter popovers stay locked until the pointer leaves the whole row', () => {
@@ -277,7 +294,7 @@ test('bottom parameter popovers stay locked until the pointer leaves the whole r
   const bottomModeSync = js.match(/function syncGenerationModeOpenState\([\s\S]*?\n\}/)?.[0] || '';
   assert.match(bottomModeSync, /if\(generationModeUsesInlineAnchor\(\)\) return/);
   assert.match(bottomModeSync, /generationModeShouldBeOpen[\s\S]*?if\(!generationModePanel\?\.classList\.contains\('open'\) \|\| inlineAnchor\)[\s\S]*?renderGenerationModePanel\(\)[\s\S]*?classList\.add\('open'\)/);
-  assert.match(bottomModeSync, /if\(inlineAnchor\) resetGenerationModePanelAnchor\(\)/);
+  assert.match(bottomModeSync, /const lockedBottomAnchor[\s\S]*?getComputedStyle\(generationModePanel\)\.opacity[\s\S]*?!\(opacity > 0\) && \(inlineAnchor \|\| lockedBottomAnchor\)[\s\S]*?resetGenerationModePanelAnchor\(\)/);
   assert.doesNotMatch(bottomModeSync, /if\(inlineAnchor\) closeGenerationModePanel/);
   assert.doesNotMatch(bottomModeSync, /positionGenerationModePanel/);
   assert.match(css, /\.smart-popover\s*\{[^}]*left:50%[^}]*bottom:calc\(100% \+ 8px\)[^}]*translate\(-50%, 4px\)/);
@@ -285,6 +302,18 @@ test('bottom parameter popovers stay locked until the pointer leaves the whole r
   assert.match(css, /generation-mode-panel\.inline-anchor\.open\s*\{[^}]*opacity:1[^}]*visibility:visible[^}]*pointer-events:auto[^}]*transform:translateY\(0\)/);
   assert.match(css, /generation-mode-panel\.positioning-inline-anchor\s*\{[^}]*transition:none !important/);
   assert.match(css, /smart-popover:not\(\.inline-anchor\)[^}]*visibility:hidden/);
+  assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*position:relative[^}]*z-index:1/);
+  assert.match(css, /\.composer \.dynamic-params \.provider-control:not\(\.pinned\)::before\s*\{[^}]*left:-8px[^}]*right:-6px[^}]*bottom:-4px[^}]*height:calc\(100% \+ 16px\)/);
+  assert.match(css, /\.composer \.dynamic-params \.generation-mode-control:not\(\.pinned\)::before\s*\{[^}]*left:-6px[^}]*right:-22px[^}]*bottom:-4px[^}]*height:calc\(100% \+ 16px\)/);
+});
+
+test('image and video settings measure the same resting position on fresh hover and in-row return', () => {
+  const capture = js.match(/function captureParameterSettingsPopoverPosition\(ctrl\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(capture, /querySelector\?\.\('\.parameter-settings-popover'\)/);
+  assert.match(capture, /const inlineTransition = popover\.style\.transition[\s\S]*?popover\.style\.transition = 'none'[\s\S]*?popover\.style\.translate = 'none'[\s\S]*?getBoundingClientRect\(\)/);
+  assert.match(capture, /removeProperty\('translate'\)[\s\S]*?void popover\.offsetWidth[\s\S]*?inlineTransition[\s\S]*?removeProperty\('transition'\)/);
+  assert.match(css, /\.smart-popover\.image-settings-popover\s*\{[^}]*bottom:calc\(100% \+ 8px\)[^}]*translate:0 4px[^}]*transition:opacity \.14s ease, translate \.14s ease/);
+  assert.match(css, /\.smart-popover\.video-settings-popover\s*\{[^}]*bottom:calc\(100% \+ 8px\)[^}]*translate:0 4px[^}]*transition:opacity \.14s ease, translate \.14s ease/);
 });
 
 test('prompt-anchored pickers lock bottom hover and inline mode takes ownership from a pinned button', () => {
@@ -315,6 +344,56 @@ test('the open generation mode panel transfers between capsule and bottom anchor
   assert.match(prefixActivate, /classList\.contains\('open'\) && !generationModePanel\.classList\.contains\('inline-anchor'\)[\s\S]*?transferOpenGenerationModePanel\(promptInput\.querySelector\('\.smart-prompt-inline-prefix-chip'\)\)[\s\S]*?return/);
 });
 
+test('a clicked generation mode panel keeps its viewport position while recommendations relayout the parameter row', () => {
+  const capture = js.match(/function captureGenerationModePanelViewportPosition\(\)[\s\S]*?\n\}/)?.[0] || '';
+  const restore = js.match(/function restoreGenerationModePanelViewportPosition\(position\)[\s\S]*?\n\}/)?.[0] || '';
+  const selection = js.match(/function selectGenerationMode\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(capture, /!generationModePanel\?\.classList\.contains\('open'\)[\s\S]*?generationModePanel\.classList\.contains\('inline-anchor'\)[\s\S]*?getBoundingClientRect\(\)[\s\S]*?left:rect\.left, top:rect\.top/);
+  assert.match(restore, /offsetParent[\s\S]*?safeScaleX[\s\S]*?safeScaleY[\s\S]*?instant-popover-switch[\s\S]*?style\.left[\s\S]*?style\.top[\s\S]*?style\.transform = 'none'/);
+  assert.match(restore, /const restoredRect = generationModePanel\.getBoundingClientRect\(\)[\s\S]*?position\.left - restoredRect\.left[\s\S]*?position\.top - restoredRect\.top/);
+  assert.match(restore, /style\.transform = 'none'[\s\S]*?classList\.add\('viewport-position-locked'\)/);
+  assert.match(selection, /const keepPinnedPanelOpen = Boolean\([\s\S]*?classList\.contains\('pinned'\)[\s\S]*?classList\.contains\('open'\)[\s\S]*?!generationModePanel\.classList\.contains\('inline-anchor'\)/);
+  assert.match(selection, /captureGenerationModePanelViewportPosition\(\)[\s\S]*?if\(!keepPinnedPanelOpen\) closeGenerationModePanel\(\)[\s\S]*?renderDynamicParams\(\)[\s\S]*?restoreGenerationModePanelViewportPosition\(panelViewportPosition\)/);
+
+  const parentState = {left:410, top:700, scale:1.25};
+  const offsetParent = {
+    offsetWidth:80,
+    offsetHeight:24,
+    getBoundingClientRect:() => ({left:parentState.left, top:parentState.top, width:100, height:30}),
+  };
+  const classNames = new Set();
+  const panel = {
+    offsetParent,
+    offsetWidth:500,
+    style:{},
+    classList:{
+      contains:name => classNames.has(name),
+      add:name => classNames.add(name),
+      remove:name => classNames.delete(name),
+    },
+    getBoundingClientRect(){
+      const left = Number.parseFloat(this.style.left) || 0;
+      const top = Number.parseFloat(this.style.top) || 0;
+      // Simulate a one-CSS-pixel offset-parent origin bias. Reusing an
+      // uncorrected result as the next snapshot would drift right each time.
+      return {
+        left:parentState.left + ((left + 1) * parentState.scale),
+        top:parentState.top + ((top + 1) * parentState.scale),
+      };
+    },
+  };
+  const restorePosition = Function('generationModePanel', 'generationModeControl', `${restore}; return restoreGenerationModePanelViewportPosition;`)(panel, offsetParent);
+  let snapshot = {left:250, top:180};
+  for(const left of [410, 388, 437, 401, 452]){
+    parentState.left = left;
+    restorePosition(snapshot);
+    const rect = panel.getBoundingClientRect();
+    assert.ok(Math.abs(rect.left - 250) < 1e-9);
+    assert.ok(Math.abs(rect.top - 180) < 1e-9);
+    snapshot = {left:rect.left, top:rect.top};
+  }
+});
+
 test('click switching skips both animations while first open and final close stay animated', () => {
   const closeAll = js.match(/function closeAllSmartPopovers\([\s\S]*?\n\}/)?.[0] || '';
   const pillBinding = js.match(/dynamicParams\.querySelectorAll\('\.smart-control > \.smart-pill'\)[\s\S]*?\n    \}\);/)?.[0] || '';
@@ -333,6 +412,20 @@ test('image and video parameter summary pills omit redundant carets', () => {
   const videoControl = js.match(/function renderVideoSettingsControl\(\)[\s\S]*?\n\}/)?.[0] || '';
   assert.doesNotMatch(imageControl, /pill-caret/);
   assert.doesNotMatch(videoControl, /pill-caret/);
+  assert.match(css, /\.smart-pill\.parameter-settings-pill\s*\{[^}]*color:var\(--muted\)/);
+  assert.match(css, /\.image-settings-pill \.image-settings-summary\s*\{[^}]*color:inherit[^}]*font-weight:500/);
+  assert.match(css, /\.video-settings-pill \.video-settings-summary\s*\{[^}]*color:inherit[^}]*font-weight:500/);
+});
+
+test('clearing a generation mode only closes hover-opened or inline panels', () => {
+  const clearMode = js.match(/function clearGenerationMode\(\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(clearMode, /keepPinnedPanelOpen[\s\S]*?classList\.contains\('pinned'\)[\s\S]*?!generationModePanel\?\.classList\.contains\('inline-anchor'\)/);
+  assert.match(clearMode, /if\(!keepPinnedPanelOpen\)\{[\s\S]*?generationModePanel\?\.contains\(focused\)[\s\S]*?focused\?\.blur/);
+  assert.match(clearMode, /if\(!keepPinnedPanelOpen\)\{[\s\S]*?classList\.remove\('pinned', 'interacting', 'hover-armed'\)[\s\S]*?classList\.add\('hover-dismissed'\)[\s\S]*?closeGenerationModePanel\(\)/);
+  assert.match(clearMode, /closeGenerationModePanel\(\)[\s\S]*?renderDynamicParams\(\);[\s\S]*?renderGenerationModeControl\(\)/);
+  assert.match(js, /function generationModeShouldBeOpen\([\s\S]*?!ctrl\.classList\.contains\('hover-dismissed'\)/);
+  assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?classList\.remove\('interacting', 'hover-armed', 'hover-dismissed'\)/);
+  assert.match(css, /\.smart-control\.generation-mode-control\.hover-dismissed \.generation-mode-btn:not\(\.active\)\s*\{[^}]*background:transparent[^}]*border-color:transparent[^}]*box-shadow:none/);
 });
 
 test('generation catalog reads the API response wrapper used by the backend', () => {

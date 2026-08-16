@@ -6865,10 +6865,18 @@ function captureParameterSettingsPopoverPosition(ctrl){
     if(!popover) return null;
     clearParameterSettingsPopoverPosition(ctrl);
     // Measure the final resting position, not the hidden 4px entrance offset.
+    // Temporarily suppress the translate transition as well: otherwise a fresh
+    // external hover samples its first frame, while an in-row handoff (whose
+    // transitions are already disabled) samples the final frame.
+    const inlineTransition = popover.style.transition;
+    popover.style.transition = 'none';
     popover.style.translate = 'none';
     const popoverRect = popover.getBoundingClientRect();
     const ctrlRect = ctrl.getBoundingClientRect();
     popover.style.removeProperty('translate');
+    void popover.offsetWidth;
+    if(inlineTransition) popover.style.transition = inlineTransition;
+    else popover.style.removeProperty('transition');
     const scaleX = ctrl.offsetWidth > 0 ? ctrlRect.width / ctrl.offsetWidth : 1;
     const scaleY = ctrl.offsetHeight > 0 ? ctrlRect.height / ctrl.offsetHeight : 1;
     ctrl._parameterPopoverPosition = {
@@ -8344,11 +8352,12 @@ function bindDynamicParams(){
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
-            ctrl.classList.remove('interacting', 'hover-armed');
+            ctrl.classList.remove('interacting', 'hover-armed', 'hover-dismissed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
             if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
         };
         ctrl.onmouseenter = () => {
+            ctrl.classList.remove('hover-dismissed');
             if(ctrl.classList.contains('hover-armed')){
                 if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
                 if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
@@ -8934,7 +8943,7 @@ function generationModeGroupHtml(group, selected){
             const active = selected?.id === snapshot.id;
             return `<button type="button" class="generation-mode-option ${active ? 'active' : ''}" data-generation-mode-id="${escapeAttr(snapshot.id)}">
                 <span class="generation-mode-option-icon"><i data-lucide="${generationModeIcon(snapshot.icon)}"></i></span>
-                <span class="generation-mode-option-copy"><strong>${escapeHtml(snapshot.name)}</strong><small>${escapeHtml(snapshot.description)}</small></span>
+                <span class="generation-mode-option-copy"><span class="generation-mode-option-copy-track"><span class="generation-mode-option-title">${escapeHtml(snapshot.name)}</span><small>${escapeHtml(snapshot.description)}</small></span></span>
             </button>`;
         }).join('')}
     </section>`;
@@ -8954,7 +8963,7 @@ function renderGenerationModePanel(){
         <div class="generation-mode-panel-head">
             <strong>生成模式</strong>
             <span>只应用隐藏模板、推荐比例和分辨率</span>
-            ${selected ? '<button type="button" data-generation-mode-clear>清除</button>' : ''}
+            ${selected ? '<button type="button" data-generation-mode-clear><span class="generation-mode-clear-label">清除</span></button>' : ''}
         </div>
         <div class="generation-mode-groups">
             ${categories.length ? balanceGenerationModeGroups(categories).reverse().map(column => `<div class="generation-mode-column">
@@ -8964,42 +8973,58 @@ function renderGenerationModePanel(){
     `;
     refreshIcons();
 }
-let generationModeAnchorCleanupTimer = 0;
 let generationModeOpenRequestId = 0;
 let generationModeInlineAnchorPending = false;
-function cancelGenerationModeAnchorCleanup(){
-    if(!generationModeAnchorCleanupTimer) return;
-    clearTimeout(generationModeAnchorCleanupTimer);
-    generationModeAnchorCleanupTimer = 0;
-}
 function resetGenerationModePanelAnchor(){
     if(!generationModePanel) return;
-    cancelGenerationModeAnchorCleanup();
     generationModePanel.classList.add('positioning-inline-anchor');
-    generationModePanel.classList.remove('inline-anchor', 'open-upward');
+    generationModePanel.classList.remove('inline-anchor', 'open-upward', 'viewport-position-locked');
     ['left', 'right', 'top', 'bottom', 'width', 'transform'].forEach(property => generationModePanel.style.removeProperty(property));
     void generationModePanel.offsetWidth;
     generationModePanel.classList.remove('positioning-inline-anchor');
     void generationModePanel.offsetWidth;
 }
-function scheduleGenerationModeAnchorCleanup(){
-    cancelGenerationModeAnchorCleanup();
-    generationModeAnchorCleanupTimer = setTimeout(() => {
-        generationModeAnchorCleanupTimer = 0;
-        if(!generationModePanel?.classList.contains('open')) resetGenerationModePanelAnchor();
-    }, 170);
+function captureGenerationModePanelViewportPosition(){
+    if(!generationModePanel?.classList.contains('open') || generationModePanel.classList.contains('inline-anchor')) return null;
+    const rect = generationModePanel.getBoundingClientRect();
+    return {left:rect.left, top:rect.top};
+}
+function restoreGenerationModePanelViewportPosition(position){
+    if(!position || !generationModePanel || generationModePanel.classList.contains('inline-anchor')) return;
+    const offsetParent = generationModePanel.offsetParent || generationModeControl;
+    if(!offsetParent) return;
+    const parentRect = offsetParent.getBoundingClientRect();
+    const measuredScaleX = offsetParent.offsetWidth ? parentRect.width / offsetParent.offsetWidth : 1;
+    const measuredScaleY = offsetParent.offsetHeight ? parentRect.height / offsetParent.offsetHeight : measuredScaleX;
+    const safeScaleX = measuredScaleX > 0 ? measuredScaleX : 1;
+    const safeScaleY = measuredScaleY > 0 ? measuredScaleY : safeScaleX;
+    generationModePanel.classList.add('instant-popover-switch');
+    generationModePanel.style.left = `${(position.left - parentRect.left) / safeScaleX}px`;
+    generationModePanel.style.right = 'auto';
+    generationModePanel.style.top = `${(position.top - parentRect.top) / safeScaleY}px`;
+    generationModePanel.style.bottom = 'auto';
+    generationModePanel.style.transform = 'none';
+    generationModePanel.classList.add('viewport-position-locked');
+    // Correct from the rendered rectangle instead of trusting the offset-parent
+    // conversion alone. Border origins, UI scale and fractional layout can add
+    // a small constant error which otherwise gets captured again on every mode
+    // switch and accumulates into a visible horizontal drift.
+    const restoredRect = generationModePanel.getBoundingClientRect();
+    const currentLeft = Number.parseFloat(generationModePanel.style.left) || 0;
+    const currentTop = Number.parseFloat(generationModePanel.style.top) || 0;
+    generationModePanel.style.left = `${currentLeft + ((position.left - restoredRect.left) / safeScaleX)}px`;
+    generationModePanel.style.top = `${currentTop + ((position.top - restoredRect.top) / safeScaleY)}px`;
+    void generationModePanel.offsetWidth;
+    generationModePanel.classList.remove('instant-popover-switch');
 }
 function closeGenerationModePanel({disarm=true}={}){
     generationModeOpenRequestId += 1;
     generationModeInlineAnchorPending = false;
-    const inlineAnchor = generationModePanel?.classList.contains('inline-anchor');
     generationModePanel?.classList.remove('open');
     generationModePanel?.classList.remove('open-upward');
-    if(inlineAnchor) scheduleGenerationModeAnchorCleanup();
-    else {
-        cancelGenerationModeAnchorCleanup();
-        ['left', 'right', 'top', 'bottom', 'width', 'transform'].forEach(property => generationModePanel?.style.removeProperty(property));
-    }
+    // Match image/video settings popovers: keep the last measured coordinates
+    // throughout the fade. A later fresh open resets them invisibly before it
+    // measures its new anchor, so closing can never jump back to the live pill.
     generationModeBtn?.setAttribute('aria-expanded', 'false');
     generationModePromptSelection = null;
     promptEditor?.scheduleSelectionCaretSync?.();
@@ -9010,7 +9035,7 @@ function generationModeUsesInlineAnchor(){
         || Boolean(generationModePanel?.classList.contains('inline-anchor') && generationModePanel.classList.contains('open'));
 }
 function generationModeShouldBeOpen(ctrl=generationModeControl){
-    return Boolean(ctrl && !ctrl.hidden && (
+    return Boolean(ctrl && !ctrl.hidden && !ctrl.classList.contains('hover-dismissed') && (
         (ctrl.matches(':hover') && ctrl.classList.contains('hover-armed'))
         || ctrl.classList.contains('pinned')
         || ctrl.classList.contains('interacting')
@@ -9027,7 +9052,13 @@ function syncGenerationModeOpenState(ctrl=generationModeControl){
         generationModePromptSelection = null;
         const inlineAnchor = generationModePanel?.classList.contains('inline-anchor');
         if(!generationModePanel?.classList.contains('open') || inlineAnchor){
-            if(inlineAnchor) resetGenerationModePanelAnchor();
+            const lockedBottomAnchor = generationModePanel?.classList.contains('viewport-position-locked');
+            // Match image/video settings popovers: an outside pointer sequence
+            // can momentarily remove `open` while pinned/hover state still says
+            // the control should be visible. Keep the measured coordinates for
+            // that closing frame; reset only after the old panel is fully hidden.
+            const opacity = Number.parseFloat(getComputedStyle(generationModePanel).opacity);
+            if(!(opacity > 0) && (inlineAnchor || lockedBottomAnchor)) resetGenerationModePanelAnchor();
             renderGenerationModePanel();
             generationModePanel?.classList.add('open');
         }
@@ -9038,13 +9069,13 @@ function syncGenerationModeOpenState(ctrl=generationModeControl){
 }
 function positionGenerationModePanel(anchorEl = generationModeControl, {preserveOpen=false}={}){
     if(!generationModeControl || !generationModePanel) return;
-    cancelGenerationModeAnchorCleanup();
     const anchor = anchorEl?.isConnected ? anchorEl : generationModeControl;
     const inlineAnchor = anchor !== generationModeControl;
     if(!preserveOpen) generationModePanel.classList.remove('open');
     generationModePanel.classList.add('positioning-inline-anchor');
     ['left', 'right', 'top', 'bottom', 'width', 'transform'].forEach(property => generationModePanel.style.removeProperty(property));
     generationModePanel.classList.remove('open-upward');
+    generationModePanel.classList.remove('viewport-position-locked');
     generationModePanel.classList.toggle('inline-anchor', inlineAnchor);
     const anchorRect = anchor.getBoundingClientRect();
     const offsetParent = generationModePanel.offsetParent || generationModeControl;
@@ -9128,11 +9159,22 @@ function clearGenerationMode(){
     const subject = activeComposerNode() || selectedNode();
     if(!subject) return;
     const promptSelection = generationModePromptSelection;
+    const keepPinnedPanelOpen = Boolean(
+        generationModeControl?.classList.contains('pinned')
+        && !generationModePanel?.classList.contains('inline-anchor')
+    );
     capturePendingUndo();
     delete subject.generationPromptId;
     delete subject.generationPromptSnapshot;
     commitPendingUndo();
-    closeGenerationModePanel();
+    if(!keepPinnedPanelOpen){
+        const focused = document.activeElement;
+        if(generationModePanel?.contains(focused) && typeof focused?.blur === 'function') focused.blur();
+        generationModeControl?.classList.remove('pinned', 'interacting', 'hover-armed');
+        generationModeControl?.classList.add('hover-dismissed');
+        closeGenerationModePanel();
+    }
+    renderDynamicParams();
     renderGenerationModeControl();
     if(promptSelection) restorePromptSelection(promptSelection);
     scheduleSave();
@@ -9142,6 +9184,12 @@ function selectGenerationMode(id){
     const snapshot = generationPromptSnapshot(generationPromptCatalog.find(item => String(item?.id || '') === String(id || '')));
     if(!subject || !snapshot || !generationModeSupported(settings)) return;
     const promptSelection = generationModePromptSelection;
+    const keepPinnedPanelOpen = Boolean(
+        generationModeControl?.classList.contains('pinned')
+        && generationModePanel?.classList.contains('open')
+        && !generationModePanel.classList.contains('inline-anchor')
+    );
+    const panelViewportPosition = keepPinnedPanelOpen ? captureGenerationModePanelViewportPosition() : null;
     capturePendingUndo();
     subject.generationPromptId = snapshot.id;
     subject.generationPromptSnapshot = snapshot;
@@ -9150,9 +9198,15 @@ function selectGenerationMode(id){
     Object.assign(settings, nextSettings);
     subject.runSettings = settingsForStorage(settings);
     commitPendingUndo();
-    closeGenerationModePanel();
+    if(!keepPinnedPanelOpen) closeGenerationModePanel();
     renderDynamicParams();
     renderGenerationModeControl();
+    if(keepPinnedPanelOpen){
+        generationModeControl?.classList.add('pinned');
+        generationModePanel?.classList.add('open');
+        generationModeBtn?.setAttribute('aria-expanded', 'true');
+        restoreGenerationModePanelViewportPosition(panelViewportPosition);
+    }
     if(promptSelection) restorePromptSelection(promptSelection);
     scheduleSave();
 }
