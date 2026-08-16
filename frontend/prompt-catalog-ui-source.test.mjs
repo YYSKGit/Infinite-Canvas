@@ -33,10 +33,45 @@ test('standalone prompt manager uses the compact navigation and expanded templat
   assert.doesNotMatch(managerSource, /全部生成提示词/);
   assert.match(managerCss, /prompt-row-scene[^}]*text-overflow:ellipsis[^}]*white-space:nowrap/);
   assert.match(managerCss, /prompt-row-main[^}]*height:52px/);
-  assert.match(managerCss, /prompt-generation-template[^}]*min-height:330px/);
-  assert.match(managerCss, /prompt-description-input[^}]*min-height:60px/);
-  assert.match(managerCss, /prompt-generation-template-body[^}]*height:408px/);
+  assert.match(managerCss, /inline-edit-field textarea[^}]*min-height:48px[^}]*height:120px/);
+  assert.match(managerCss, /prompt-recipe-template[^}]*min-height:64px/);
+  assert.match(managerCss, /prompt-generation-template[^}]*min-height:96px[^}]*height:330px/);
+  assert.match(managerCss, /prompt-description-input[^}]*min-height:44px[^}]*height:60px/);
+  assert.match(managerCss, /prompt-block-body[^}]*min-height:64px[^}]*height:146px/);
+  assert.match(managerCss, /prompt-generation-template-body[^}]*min-height:96px[^}]*height:408px/);
   assert.match(managerCss, /generation-params-list[^}]*grid-template-columns:repeat\(2/);
+});
+
+test('prompt textarea height memory is isolated by mode, resource, and field', () => {
+  assert.match(managerSource, /PROMPT_TEXTAREA_HEIGHT_KEY_PREFIX = 'asset_manager_prompt_textarea_height_v2:'/);
+  assert.match(managerSource, /new ResizeObserver\(entries =>/);
+  assert.match(managerSource, /localStorage\.setItem\(`\$\{PROMPT_TEXTAREA_HEIGHT_KEY_PREFIX\}\$\{state\.key\}`/);
+  const heightMemorySource = managerSource.slice(
+    managerSource.indexOf('const PROMPT_TEXTAREA_HEIGHT_KEY_PREFIX'),
+    managerSource.indexOf('const ACTIVE_TAB_VALUES')
+  );
+  assert.match(heightMemorySource, /getComputedStyle\(textarea\)\.height/);
+  assert.doesNotMatch(heightMemorySource, /getBoundingClientRect|Math\.round/);
+  const cssHeightFunctionSource = heightMemorySource.match(/function promptTextareaCssHeight\(textarea\)\{[\s\S]*?\n\}/)?.[0] || '';
+  const readCssHeight = Function('getComputedStyle', `${cssHeightFunctionSource}; return promptTextareaCssHeight;`)(
+    () => ({height:'408.375px'})
+  );
+  assert.equal(readCssHeight({}), '408.375px');
+  assert.match(managerSource, /disconnectPromptTextareaHeights\(panel\);[\s\S]*panel\.innerHTML = renderPromptDetail/);
+  assert.match(managerSource, /renderPromptEditFields\(\{\}, assistant, 'create'\)/);
+  assert.match(managerSource, /renderPromptEditFields\(item, assistant, 'edit'\)/);
+  for(const heightKeyCall of [
+    "promptTextareaHeightAttr(mode, 'generation', 'description')",
+    "promptTextareaHeightAttr(mode, 'generation', 'prompt-template')",
+    "promptTextareaHeightAttr(mode, 'system', 'description')",
+    "promptTextareaHeightAttr(mode, 'system', 'system-template')",
+    "promptTextareaHeightAttr(mode, 'system', 'user-template')",
+    "promptTextareaHeightAttr('view', 'generation', 'prompt-template')",
+    "promptTextareaHeightAttr('view', 'system', 'system-template')",
+    "promptTextareaHeightAttr('view', 'system', 'user-template')"
+  ]){
+    assert.ok(managerSource.includes(heightKeyCall), `missing isolated height key: ${heightKeyCall}`);
+  }
 });
 
 test('built-in badges occupy the prompt cover top-left opposite the category', async () => {

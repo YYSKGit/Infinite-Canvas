@@ -8,6 +8,51 @@ const PREVIEW_SETTINGS_KEY = 'asset_manager_preview_settings_v1';
 const CANVAS_ASSET_SORT_KEY = 'asset_manager_canvas_asset_sort_v1';
 const CANVAS_ASSET_KIND_FILTER_KEY = 'asset_manager_canvas_asset_kind_filter_v1';
 const ACTIVE_TAB_KEY = 'asset_manager_active_tab_v1';
+const PROMPT_TEXTAREA_HEIGHT_KEY_PREFIX = 'asset_manager_prompt_textarea_height_v2:';
+const promptTextareaHeightState = new WeakMap();
+function promptTextareaCssHeight(textarea){
+    const height = getComputedStyle(textarea).height;
+    const numericHeight = Number.parseFloat(height);
+    return Number.isFinite(numericHeight) && numericHeight > 0 ? height : '';
+}
+function persistPromptTextareaHeight(textarea, state=promptTextareaHeightState.get(textarea)){
+    if(!state) return;
+    const height = promptTextareaCssHeight(textarea);
+    if(!height || height === state.height) return;
+    state.height = height;
+    try { localStorage.setItem(`${PROMPT_TEXTAREA_HEIGHT_KEY_PREFIX}${state.key}`, height); } catch(_) {}
+}
+const promptTextareaHeightObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(entries => {
+        entries.forEach(entry => persistPromptTextareaHeight(entry.target));
+    })
+    : null;
+function promptTextareaHeightAttr(mode, resource, field){
+    return `data-prompt-textarea-height="${escapeAttr(`${mode}:${resource}:${field}`)}"`;
+}
+function initializePromptTextareaHeights(scope=root){
+    scope?.querySelectorAll?.('[data-prompt-textarea-height]').forEach(textarea => {
+        if(promptTextareaHeightState.has(textarea)) return;
+        const key = textarea.dataset.promptTextareaHeight || '';
+        if(!key) return;
+        try {
+            const saved = localStorage.getItem(`${PROMPT_TEXTAREA_HEIGHT_KEY_PREFIX}${key}`) || '';
+            if(/^\d+(?:\.\d+)?px$/.test(saved) && Number.parseFloat(saved) > 0) textarea.style.height = saved;
+        } catch(_) {}
+        promptTextareaHeightState.set(textarea, {
+            key,
+            height:promptTextareaCssHeight(textarea)
+        });
+        promptTextareaHeightObserver?.observe(textarea);
+    });
+}
+function disconnectPromptTextareaHeights(scope){
+    scope?.querySelectorAll?.('[data-prompt-textarea-height]').forEach(textarea => {
+        persistPromptTextareaHeight(textarea);
+        promptTextareaHeightObserver?.unobserve(textarea);
+        promptTextareaHeightState.delete(textarea);
+    });
+}
 const ACTIVE_TAB_VALUES = new Set(['assets', 'workflows', 'prompts', 'canvas-assets', 'local']);
 function readActiveTab(){
     try {
@@ -2507,7 +2552,9 @@ function promptManagerMarkup(){
     `;
 }
 function renderPromptManager(){
+    disconnectPromptTextareaHeights(root);
     root.innerHTML = promptManagerMarkup();
+    initializePromptTextareaHeights(root);
 }
 function replacePromptSections(selectors, options={}){
     if(activeTab !== 'prompts' || !root) return;
@@ -2521,6 +2568,7 @@ function replacePromptSections(selectors, options={}){
         const currentScroll = current.querySelector('.nav-scroll,.content-scroll,.detail-scroll');
         const scrollTop = currentScroll?.scrollTop || 0;
         const scrollLeft = currentScroll?.scrollLeft || 0;
+        disconnectPromptTextareaHeights(current);
         current.replaceWith(next);
         if(options.preserveScroll !== false){
             const nextScroll = next.querySelector('.nav-scroll,.content-scroll,.detail-scroll');
@@ -2532,6 +2580,7 @@ function replacePromptSections(selectors, options={}){
     });
     refreshIcons();
     initializeDetailPreviewMedia(root);
+    initializePromptTextareaHeights(root);
 }
 function renderPromptNavigationOnly(){
     replacePromptSections(['.asset-nav']);
@@ -2547,6 +2596,7 @@ function renderPromptDetailOnly(options={}){
     const scrollTop = scroll?.scrollTop || 0;
     const scrollLeft = scroll?.scrollLeft || 0;
     const detail = promptCreateMode ? null : selectedPrompt();
+    disconnectPromptTextareaHeights(panel);
     panel.innerHTML = renderPromptDetail(detail, false);
     if(options.preserveScroll !== false){
         const nextScroll = panel.querySelector('.detail-scroll');
@@ -2556,6 +2606,7 @@ function renderPromptDetailOnly(options={}){
         }
     }
     refreshIcons();
+    initializePromptTextareaHeights(panel);
 }
 function renderPromptRowAndDetail(id){
     const item = findPromptItem(id);
@@ -2631,13 +2682,13 @@ function renderPromptRow(item, readonly){
         </div>
     </article>`;
 }
-function renderPromptEditFields(item={}, assistant=false){
+function renderPromptEditFields(item={}, assistant=false, mode='edit'){
     const effort = String(item.recommended_reasoning_effort || '');
     if(assistant) return `
         <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="系统指令名称"></label>
-        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditDescription" placeholder="说明这个指令适合处理什么任务">${escapeHtml(item.description || '')}</textarea></label>
-        <label class="inline-edit-field"><span>系统提示词</span><textarea id="promptEditSystemTemplate" class="prompt-recipe-template" placeholder="定义模型角色、任务和输出约束">${escapeHtml(item.system_template || '')}</textarea></label>
-        <label class="inline-edit-field"><span>用户提示词模板</span><textarea id="promptEditUserTemplate" class="prompt-recipe-template" placeholder="必须包含 {{prompt}}，也可使用 {{selection}} 和 {{target_language}}">${escapeHtml(item.user_template || '请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>')}</textarea></label>
+        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditDescription" ${promptTextareaHeightAttr(mode, 'system', 'description')} placeholder="说明这个指令适合处理什么任务">${escapeHtml(item.description || '')}</textarea></label>
+        <label class="inline-edit-field"><span>系统提示词</span><textarea id="promptEditSystemTemplate" class="prompt-recipe-template" ${promptTextareaHeightAttr(mode, 'system', 'system-template')} placeholder="定义模型角色、任务和输出约束">${escapeHtml(item.system_template || '')}</textarea></label>
+        <label class="inline-edit-field"><span>用户提示词模板</span><textarea id="promptEditUserTemplate" class="prompt-recipe-template" ${promptTextareaHeightAttr(mode, 'system', 'user-template')} placeholder="必须包含 {{prompt}}，也可使用 {{selection}} 和 {{target_language}}">${escapeHtml(item.user_template || '请处理下面的提示词：\n<user_prompt>\n{{prompt}}\n</user_prompt>')}</textarea></label>
         <label class="inline-edit-check"><input id="promptEditPreserveReferences" type="checkbox" ${item.preserve_references !== false ? 'checked' : ''}><span>保护画布中的媒体引用，不允许模型删除或改写</span></label>
         <div class="inline-edit-grid">
             <label class="inline-edit-field"><span>推荐推理强度</span><select id="promptEditReasoningEffort"><option value="" ${!effort ? 'selected' : ''}>自动</option><option value="low" ${effort === 'low' ? 'selected' : ''}>低</option><option value="medium" ${effort === 'medium' ? 'selected' : ''}>中</option><option value="high" ${effort === 'high' ? 'selected' : ''}>高</option></select></label>
@@ -2646,8 +2697,8 @@ function renderPromptEditFields(item={}, assistant=false){
     return `
         <label class="inline-edit-field"><span>名称</span><input id="promptEditName" type="text" value="${escapeAttr(item.name || '')}" placeholder="提示词名称"></label>
         <label class="inline-edit-field"><span>分类</span><input id="promptEditCategory" type="text" value="${escapeAttr(item.category || (activePromptCategory === 'all' ? '未分类' : activePromptCategory))}" placeholder="例如 设定图"></label>
-        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditDescription" class="prompt-description-input" placeholder="在画布模式选择器中显示的简短说明">${escapeHtml(item.description || '')}</textarea></label>
-        <label class="inline-edit-field"><span>生成提示词模板</span><textarea id="promptEditPromptTemplate" class="prompt-recipe-template prompt-generation-template" placeholder="必须且只能包含一个 {{user_prompt}}">${escapeHtml(item.prompt_template || '{{user_prompt}}')}</textarea></label>
+        <label class="inline-edit-field"><span>用途说明</span><textarea id="promptEditDescription" class="prompt-description-input" ${promptTextareaHeightAttr(mode, 'generation', 'description')} placeholder="在画布模式选择器中显示的简短说明">${escapeHtml(item.description || '')}</textarea></label>
+        <label class="inline-edit-field"><span>生成提示词模板</span><textarea id="promptEditPromptTemplate" class="prompt-recipe-template prompt-generation-template" ${promptTextareaHeightAttr(mode, 'generation', 'prompt-template')} placeholder="必须且只能包含一个 {{user_prompt}}">${escapeHtml(item.prompt_template || '{{user_prompt}}')}</textarea></label>
         <div class="inline-edit-grid">
             <label class="inline-edit-field"><span>推荐比例</span><select id="promptEditRatio">${renderPromptOptionList(['','1:1','3:2','4:3','16:9','9:16','2:1'], item.recommended_ratio || '', '不覆盖')}</select></label>
             <label class="inline-edit-field"><span>推荐分辨率</span><select id="promptEditResolution">${renderPromptOptionList(['','1K','2K','4K'], item.recommended_resolution || '', '不覆盖')}</select></label>
@@ -2669,7 +2720,7 @@ function renderPromptDetail(item, readonly){
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
-                    ${renderPromptEditFields({}, assistant)}
+                    ${renderPromptEditFields({}, assistant, 'create')}
                 </div>
             </div>
         `;
@@ -2688,7 +2739,7 @@ function renderPromptDetail(item, readonly){
             </div>
             <div class="detail-scroll">
                 <div class="inline-edit-form">
-                    ${renderPromptEditFields(item, assistant)}
+                    ${renderPromptEditFields(item, assistant, 'edit')}
                 </div>
             </div>
         `;
@@ -2704,8 +2755,8 @@ function renderPromptDetail(item, readonly){
         </div>
         <div class="detail-scroll">
             <div class="prompt-detail-head"><div class="prompt-detail-title">${escapeHtml(item.name || '系统指令')}</div><div class="prompt-detail-scene">${escapeHtml(item.description || '提示词助手系统指令')}</div></div>
-            <section class="prompt-block"><div class="prompt-block-head"><span>系统提示词</span><span>${String(item.system_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.system_template || '未填写')}</textarea></section>
-            <section class="prompt-block"><div class="prompt-block-head"><span>用户提示词模板</span><span>${String(item.user_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" readonly spellcheck="false">${escapeHtml(item.user_template || '未填写')}</textarea></section>
+            <section class="prompt-block"><div class="prompt-block-head"><span>系统提示词</span><span>${String(item.system_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" ${promptTextareaHeightAttr('view', 'system', 'system-template')} readonly spellcheck="false">${escapeHtml(item.system_template || '未填写')}</textarea></section>
+            <section class="prompt-block"><div class="prompt-block-head"><span>用户提示词模板</span><span>${String(item.user_template || '').length} 字符</span></div><textarea class="prompt-block-body prompt-recipe-body" ${promptTextareaHeightAttr('view', 'system', 'user-template')} readonly spellcheck="false">${escapeHtml(item.user_template || '未填写')}</textarea></section>
             <div class="params-list assistant-params-list">
                 <div class="param-row"><strong>媒体引用保护</strong><span>${item.preserve_references !== false ? '开启' : '关闭'}</span></div>
                 <div class="param-row"><strong>推理强度</strong><span>${escapeHtml(item.recommended_reasoning_effort || '自动')}</span></div>
@@ -2728,7 +2779,7 @@ function renderPromptDetail(item, readonly){
             </div>
             <section class="prompt-block">
                 <div class="prompt-block-head"><span>生成提示词模板</span><span>${String(item.prompt_template || '').length} 字符</span></div>
-                <textarea class="prompt-block-body prompt-generation-template-body" readonly spellcheck="false">${escapeHtml(item.prompt_template || '未填写')}</textarea>
+                <textarea class="prompt-block-body prompt-generation-template-body" ${promptTextareaHeightAttr('view', 'generation', 'prompt-template')} readonly spellcheck="false">${escapeHtml(item.prompt_template || '未填写')}</textarea>
             </section>
             <div class="params-list generation-params-list">
                 <div class="param-row"><strong>推荐比例</strong><span>${escapeHtml(item.recommended_ratio || '不覆盖')}</span></div>
