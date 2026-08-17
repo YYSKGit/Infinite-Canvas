@@ -6996,12 +6996,13 @@ function veniceImageQuoteHasReferenceImage(subject){
     return imageRefsOnly(request.refs).length > 0;
 }
 function veniceImageQuoteRequestPayload(subject){
+    const hasReferenceImage = veniceImageQuoteHasReferenceImage(subject);
     return {
         provider_id:String(settings.provider_id || 'venice'),
         model:String(settings.model || ''),
         resolution:veniceImageQuoteResolution(),
-        quality:imageQualityForRequest(settings),
-        has_reference_image:veniceImageQuoteHasReferenceImage(subject)
+        quality:imageQualityForRequest(settings, {hasReferenceImage}),
+        has_reference_image:hasReferenceImage
     };
 }
 function syncVeniceImageQuote(){

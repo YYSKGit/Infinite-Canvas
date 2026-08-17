@@ -166,6 +166,72 @@ class ApiProviderSettingsTests(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["x-venice-middleface-version"], main.VENICE_OUTERFACE_VERSION)
         main.VENICE_MODEL_CATALOGS.pop(main.venice_auth_cache_key(provider), None)
 
+    def test_missing_venice_catalog_fetch_is_single_flight(self):
+        provider = {"id": "venice-single-flight", "protocol": "venice"}
+        cache_key = main.venice_auth_cache_key(provider)
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [{"id": "image-a", "settings": {}}]},
+        }, provider["id"])
+        fetch_count = 0
+
+        async def fake_fetch(_client, _provider):
+            nonlocal fetch_count
+            fetch_count += 1
+            await asyncio.sleep(0.01)
+            main.VENICE_MODEL_CATALOGS[cache_key] = catalog
+            return catalog
+
+        async def run_test():
+            client = object()
+            return await asyncio.gather(
+                main.ensure_venice_model_catalog(provider, client),
+                main.ensure_venice_model_catalog(provider, client),
+            )
+
+        main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+        main.VENICE_MODEL_CATALOG_REFRESH_LOCKS.pop(cache_key, None)
+        try:
+            with patch.object(main, "venice_fetch_model_catalog", side_effect=fake_fetch):
+                results = asyncio.run(run_test())
+        finally:
+            main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+            main.VENICE_MODEL_CATALOG_REFRESH_LOCKS.pop(cache_key, None)
+        self.assertEqual(fetch_count, 1)
+        self.assertTrue(all(result["provider_id"] == provider["id"] for result in results))
+
+    def test_startup_catalog_initialization_fetches_only_when_snapshot_is_missing(self):
+        provider = {"id": "venice-startup-test", "protocol": "venice", "enabled": True}
+        cache_key = main.venice_auth_cache_key(provider)
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [{"id": "image-a", "settings": {}}]},
+        }, provider["id"])
+        ensure = AsyncMock(return_value=catalog)
+        common_patches = (
+            patch.object(main, "load_api_providers", return_value=[provider]),
+            patch.object(main, "venice_client_cookie_value", return_value="test-cookie"),
+            patch.object(main, "load_persisted_venice_model_catalogs"),
+            patch.object(main, "ensure_venice_model_catalog", ensure),
+        )
+
+        main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+        try:
+            with common_patches[0], common_patches[1], common_patches[2], common_patches[3]:
+                asyncio.run(main.initialize_missing_venice_model_catalogs())
+            ensure.assert_awaited_once_with(provider)
+
+            ensure.reset_mock()
+            main.VENICE_MODEL_CATALOGS[cache_key] = catalog
+            with (
+                patch.object(main, "load_api_providers", return_value=[provider]),
+                patch.object(main, "venice_client_cookie_value", return_value="test-cookie"),
+                patch.object(main, "load_persisted_venice_model_catalogs"),
+                patch.object(main, "ensure_venice_model_catalog", ensure),
+            ):
+                asyncio.run(main.initialize_missing_venice_model_catalogs())
+            ensure.assert_not_awaited()
+        finally:
+            main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+
     def test_venice_model_catalog_persists_and_supports_stale_server_fallback(self):
         provider = {"id": "venice-persist-test"}
         cache_key = main.venice_auth_cache_key(provider)

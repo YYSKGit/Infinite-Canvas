@@ -196,6 +196,7 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
             "protocol": "venice",
             "model_routes": {
                 "gpt-image-2": {"image_edit": "gpt-image-2-edit"},
+                "qwen-image-2": {"image_edit": "qwen-edit-uncensored"},
             },
         }
         self.spec = {"mode": "preset", "aspect_ratio": "3:2", "resolution": "2K"}
@@ -213,6 +214,10 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
             "inpaint": {"models": [{"id": "gpt-image-2-edit", "settings": {
                 "aspectRatio": {"options": ["auto", "3:2"]},
                 "resolution": {"options": ["1K", "2K", "4K"]},
+            }}, {"id": "qwen-edit-uncensored", "settings": {
+                "aspectRatio": {"options": ["auto", "3:2"]},
+                "resolution": {"options": ["1K", "2K", "4K"]},
+                "quality": {"options": ["high"]},
             }}]},
         }, self.provider["id"])
         self.cache_key = main.venice_auth_cache_key(self.provider)
@@ -312,6 +317,7 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         self.assertNotIn("quality", automatic)
         self.assertEqual(main.compile_venice_image_quality("best", "gpt-image-2", self.provider), "")
         self.assertEqual(main.compile_venice_image_quality("high", "gpt-image-2-edit", self.provider), "")
+        self.assertEqual(main.compile_venice_image_quality("high", "qwen-edit-uncensored", self.provider), "high")
 
     def test_edit_request_sends_compiled_quality(self):
         captured = {}
@@ -337,18 +343,18 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
             asyncio.run(main.generate_venice_web_image_edit(
                 FakeClient(),
                 "edit prompt",
-                "gpt-image-2",
+                "qwen-image-2",
                 {"url": "data:image/png;base64,eA=="},
                 self.provider,
                 "high",
                 "2048x1360",
                 self.spec,
             ))
-        self.assertEqual(captured["data"]["modelId"], "gpt-image-2-edit")
+        self.assertEqual(captured["data"]["modelId"], "qwen-edit-uncensored")
         self.assertEqual(captured["data"]["quality"], "high")
         self.assertEqual(captured["data"]["aspectRatio"], "3:2")
         self.assertEqual(captured["data"]["resolution"], "2K")
-        self.assertEqual(size_fields.call_args.args[2], "gpt-image-2-edit")
+        self.assertEqual(size_fields.call_args.args[2], "qwen-edit-uncensored")
 
     def test_edit_auto_aspect_omits_ratio_but_keeps_selected_resolution(self):
         fields = main.venice_image_edit_size_fields(
@@ -446,7 +452,7 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         self.assertEqual(result["quality"], "auto")
         self.assertEqual(result["quote"], 0)
 
-    def test_paid_quote_sends_compiled_quality_without_network(self):
+    def test_paid_edit_quote_omits_quality_not_supported_by_routed_model(self):
         captured = {}
 
         class FakeResponse:
@@ -484,9 +490,24 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         ):
             result = asyncio.run(main.get_venice_image_quote(payload))
         self.assertEqual(captured["body"]["variants"][0]["modelId"], "gpt-image-2-edit")
-        self.assertEqual(captured["body"]["variants"][0]["quality"], "high")
+        self.assertNotIn("quality", captured["body"]["variants"][0])
         self.assertTrue(result["is_edit"])
+        self.assertEqual(result["quality"], "auto")
+
+    def test_free_edit_quote_uses_routed_models_quality_contract(self):
+        payload = main.VeniceImageQuoteRequest(
+            provider_id="venice",
+            model="qwen-image-2",
+            size="2048x1360",
+            size_spec=self.spec,
+            quality="high",
+            has_reference_image=True,
+        )
+        with patch.object(main, "get_api_provider", return_value=self.provider):
+            result = asyncio.run(main.get_venice_image_quote(payload))
+        self.assertEqual(result["model"], "qwen-edit-uncensored")
         self.assertEqual(result["quality"], "high")
+        self.assertEqual(result["quote"], 0)
 
 
 class RetiredProviderImageMetadataTests(unittest.TestCase):

@@ -203,6 +203,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 GLOBAL_LOOP = None
 VENICE_AUTH_REFRESH_TASK = None
+VENICE_MODEL_CATALOG_STARTUP_TASK = None
 VENICE_BROWSER_ONLINE_EVENT = None
 VENICE_LAST_BROWSER_USER_AGENT = ""
 VENICE_BROWSER_USER_AGENT_MAX_LENGTH = 512
@@ -258,11 +259,12 @@ async def capture_venice_browser_user_agent(request: Request, call_next):
     return await call_next(request)
 
 async def startup_event():
-    global GLOBAL_LOOP, VENICE_AUTH_REFRESH_TASK, VENICE_BROWSER_ONLINE_EVENT
+    global GLOBAL_LOOP, VENICE_AUTH_REFRESH_TASK, VENICE_MODEL_CATALOG_STARTUP_TASK, VENICE_BROWSER_ONLINE_EVENT
     GLOBAL_LOOP = asyncio.get_running_loop()
     VENICE_BROWSER_ONLINE_EVENT = asyncio.Event()
     sync_venice_browser_presence()
     VENICE_AUTH_REFRESH_TASK = asyncio.create_task(venice_auth_refresh_loop())
+    VENICE_MODEL_CATALOG_STARTUP_TASK = asyncio.create_task(initialize_missing_venice_model_catalogs())
     sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
@@ -281,14 +283,16 @@ async def startup_event():
         print(f"纠正图片扩展名失败: {exc}")
 
 async def shutdown_event():
-    global VENICE_AUTH_REFRESH_TASK, VENICE_BROWSER_ONLINE_EVENT
-    if VENICE_AUTH_REFRESH_TASK is not None:
-        VENICE_AUTH_REFRESH_TASK.cancel()
-        try:
-            await VENICE_AUTH_REFRESH_TASK
-        except asyncio.CancelledError:
-            pass
-        VENICE_AUTH_REFRESH_TASK = None
+    global VENICE_AUTH_REFRESH_TASK, VENICE_MODEL_CATALOG_STARTUP_TASK, VENICE_BROWSER_ONLINE_EVENT
+    for task in (VENICE_AUTH_REFRESH_TASK, VENICE_MODEL_CATALOG_STARTUP_TASK):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    VENICE_AUTH_REFRESH_TASK = None
+    VENICE_MODEL_CATALOG_STARTUP_TASK = None
     VENICE_BROWSER_ONLINE_EVENT = None
 
 @app.websocket("/ws/stats")
@@ -478,6 +482,7 @@ VENICE_WEB_AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
 VENICE_WEB_AUTH_LOCKS: Dict[str, asyncio.Lock] = {}
 VENICE_AUTH_REFRESH_FAILURES: Dict[str, Dict[str, Any]] = {}
 VENICE_MODEL_CATALOGS: Dict[str, Dict[str, Any]] = {}
+VENICE_MODEL_CATALOG_REFRESH_LOCKS: Dict[str, asyncio.Lock] = {}
 VENICE_MODEL_CATALOG_CACHE_FILE = os.path.join(DATA_DIR, "venice_model_catalogs.json")
 VENICE_MODEL_CATALOG_LOCK = Lock()
 VENICE_MODEL_CATALOG_CACHE_LOADED = False
@@ -9141,12 +9146,12 @@ def compile_venice_image_quality(quality, model, provider=None):
     supports_quality = bool(venice_model_capability(model, provider).get("supports_quality"))
     return requested if supports_quality and requested in IMAGE_QUALITY_VALUES else ""
 
-def venice_image_quote_body(model, resolution, quality="auto", provider=None, capability_model=None):
+def venice_image_quote_body(model, resolution, quality="auto", provider=None):
     variant = {
         "modelId": str(model or ""),
         "resolution": image_resolution_tier(resolution, "1K"),
     }
-    compiled_quality = compile_venice_image_quality(quality, capability_model or model, provider)
+    compiled_quality = compile_venice_image_quality(quality, model, provider)
     if compiled_quality:
         variant["quality"] = compiled_quality
     return {"variants": [variant]}
@@ -9611,6 +9616,47 @@ async def venice_fetch_model_catalog(client, provider):
     catalog = normalize_venice_model_catalog(raw, (provider or {}).get("id") or "venice")
     return remember_venice_model_catalog(provider, catalog)
 
+async def ensure_venice_model_catalog(provider, client=None):
+    """Return a usable catalog, fetching it once when no persisted snapshot exists."""
+    catalog = venice_catalog_for_provider(provider)
+    if valid_venice_model_catalog(catalog):
+        return catalog
+
+    cache_key = venice_auth_cache_key(provider)
+    lock = VENICE_MODEL_CATALOG_REFRESH_LOCKS.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        catalog = venice_catalog_for_provider(provider)
+        if valid_venice_model_catalog(catalog):
+            return catalog
+        if client is not None:
+            return await venice_fetch_model_catalog(client, provider)
+        timeout = httpx.Timeout(connect=20.0, read=45.0, write=20.0, pool=20.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as catalog_client:
+            return await venice_fetch_model_catalog(catalog_client, provider)
+
+async def initialize_missing_venice_model_catalogs():
+    """Warm only missing Venice catalogs without making application startup fail."""
+    load_persisted_venice_model_catalogs()
+    providers = [
+        item for item in load_api_providers()
+        if item.get("enabled", True)
+        and is_venice_provider(item)
+        and venice_client_cookie_value(item.get("id") or "venice")
+    ]
+    for provider in providers:
+        if valid_venice_model_catalog(venice_catalog_for_provider(provider)):
+            continue
+        try:
+            await ensure_venice_model_catalog(provider)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            SERVER_LOGGER.warning(
+                "Venice model catalog startup initialization failed · provider=%s · %s",
+                str(provider.get("id") or "venice"),
+                network_exception_detail(exc),
+            )
+
 async def refresh_configured_venice_web_auth(force_refresh: bool):
     providers = [
         item for item in load_api_providers()
@@ -9840,6 +9886,7 @@ async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queu
     raise HTTPException(status_code=504, detail=f"Venice 视频生成任务超时：{last_payload or queue_id}{timeout_hint} (task_id={queue_id})")
 
 async def generate_venice_video(client, payload, provider, requested_model):
+    await ensure_venice_model_catalog(provider, client)
     requested_model = selected_model(requested_model, "seedance-2-0-enhanced-reference-to-video")
     has_media_input = venice_video_has_media(payload)
     model = requested_model if has_media_input else venice_video_text_model(requested_model, provider)
@@ -10045,7 +10092,7 @@ async def generate_venice_web_image_edit(client, prompt, model, ref, provider, q
     # Size support belongs to the routed inpaint model that receives this
     # multipart request, not to the user-selected text-to-image entry model.
     data.update(venice_image_edit_size_fields(size, size_spec, edit_model, provider))
-    compiled_quality = compile_venice_image_quality(quality, model, provider)
+    compiled_quality = compile_venice_image_quality(quality, edit_model, provider)
     if compiled_quality:
         data["quality"] = compiled_quality
     async def send(jwt, _user_id):
@@ -11500,6 +11547,7 @@ async def generate_venice_provider_image(prompt, size, quality, model, reference
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
     timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        await ensure_venice_model_catalog(provider, client)
         if refs:
             image_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() != "mask"]
             if len(image_refs) != 1 or len(refs) != len(image_refs):
@@ -14477,9 +14525,13 @@ async def build_online_image_result(payload: OnlineImageRequest):
     image_refs = image_references(refs)
     count = max(1, min(8, int(payload.n or 1)))
     resolved_size = resolve_image_size_spec(payload.size, payload.size_spec)
+    venice_provider = is_venice_provider(provider)
+    if venice_provider:
+        await ensure_venice_model_catalog(provider)
+    quality_model = venice_image_edit_model(model, provider) if venice_provider and image_refs else model
     effective_quality = (
-        compile_venice_image_quality(payload.quality, model, provider) or "auto"
-        if is_venice_provider(provider)
+        compile_venice_image_quality(payload.quality, quality_model, provider) or "auto"
+        if venice_provider
         else str(payload.quality or "auto")
     )
     async def generate_one():
@@ -14727,6 +14779,8 @@ async def get_venice_models_catalog(provider_id: str = "venice"):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or provider_id} 不是 Venice。")
     timeout = httpx.Timeout(connect=20.0, read=45.0, write=20.0, pool=20.0)
     try:
+        if not valid_venice_model_catalog(venice_catalog_for_provider(provider)):
+            return await ensure_venice_model_catalog(provider)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             return await venice_fetch_model_catalog(client, provider)
     except HTTPException as exc:
@@ -14766,6 +14820,7 @@ async def get_venice_video_quote(payload: VeniceVideoQuoteRequest):
     provider = get_api_provider(payload.provider_id)
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
+    await ensure_venice_model_catalog(provider)
     requested_model = selected_model(payload.model, "seedance-2-0-reference-to-video")
     model = requested_model if payload.has_media_input else venice_video_text_model(requested_model, provider)
     if not model:
@@ -14816,6 +14871,7 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
     provider = get_api_provider(payload.provider_id)
     if not is_venice_provider(provider):
         raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or payload.provider_id} 不是 Venice。")
+    await ensure_venice_model_catalog(provider)
     requested_model = selected_model(payload.model, "grok-imagine-image-quality")
     model = venice_image_edit_model(requested_model, provider) if payload.has_reference_image else requested_model
     if not model:
@@ -14824,7 +14880,7 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
     resolved_size = resolve_image_size_spec(requested_size, payload.size_spec)
     compiled_size = compile_venice_image_size(requested_size, model, resolved_size, provider)
     resolution = compiled_size.get("resolution") or resolved_size.get("resolution") or "1K"
-    quality = compile_venice_image_quality(payload.quality, requested_model, provider)
+    quality = compile_venice_image_quality(payload.quality, model, provider)
     if str(model).strip().lower().replace("_", "-") in VENICE_FREE_IMAGE_MODELS:
         return {
             "provider_id": str(provider.get("id") or payload.provider_id),
@@ -14839,7 +14895,7 @@ async def get_venice_image_quote(payload: VeniceImageQuoteRequest):
             "usd": 0,
             "cny": 0,
         }
-    body = venice_image_quote_body(model, resolution, payload.quality, provider, requested_model)
+    body = venice_image_quote_body(model, resolution, payload.quality, provider)
     timeout = httpx.Timeout(connect=20.0, read=30.0, write=20.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         async def send(jwt, _user_id):
@@ -15001,6 +15057,13 @@ async def image_params(provider_id: str = "", model: str = ""):
         engine = "volcengine"
     else:
         engine = "api"
+    if is_venice_provider(provider) and not valid_venice_model_catalog(venice_catalog_for_provider(provider)):
+        try:
+            await ensure_venice_model_catalog(provider)
+        except Exception:
+            # Keep the existing notice response when Venice is temporarily
+            # unavailable; actual generation will retry and report the error.
+            pass
     return {
         "engine": engine,
         "submit": "/api/canvas-image-tasks",

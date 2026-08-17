@@ -11,6 +11,8 @@ test('Smart Canvas submits structured size intent beside the legacy pixel size',
     assert.match(smartCanvasSource, /mode:'auto_aspect', resolution/);
     assert.match(smartCanvasSource, /size_spec:imageSizeSpecForRun\(requestSettings\)/);
     assert.match(smartCanvasSource, /quality:imageQualityForRequest\(requestSettings, \{hasReferenceImage\}\)/);
+    assert.match(smartCanvasSource, /quality:imageQualityForRequest\(settings, \{hasReferenceImage\}\)/);
+    assert.match(smartCanvasSource, /has_reference_image:hasReferenceImage/);
 });
 
 test('Smart Canvas image settings use the compact image-only option set', () => {
