@@ -451,6 +451,15 @@ test('image and video parameter summary pills omit redundant carets', () => {
   assert.match(css, /\.video-settings-pill \.video-settings-summary\s*\{[^}]*color:inherit[^}]*font-weight:500/);
 });
 
+test('Smart Canvas video resolution always requires an explicit supported value', () => {
+  const videoControl = js.match(/function renderVideoSettingsControl\(\)[\s\S]*?\n\}/)?.[0] || '';
+  const legacyControl = js.match(/function renderVideoResolutionControl\(/)?.[0] || '';
+  assert.equal(legacyControl, '');
+  assert.doesNotMatch(videoControl, /videoResAuto/);
+  assert.doesNotMatch(videoControl, /\['',\s*\.\.\.caps\.resolutions\]/);
+  assert.match(videoControl, /const resolutionOptions = caps\.catalogControlled[\s\S]*?\['480p','720p','1080p','4k'\][\s\S]*?: caps\.resolutions/);
+});
+
 test('clearing a generation mode only closes hover-opened or inline panels', () => {
   const clearMode = js.match(/function clearGenerationMode\(\)[\s\S]*?\n\}/)?.[0] || '';
   assert.match(clearMode, /keepPinnedPanelOpen[\s\S]*?classList\.contains\('pinned'\)[\s\S]*?!generationModePanel\?\.classList\.contains\('inline-anchor'\)/);

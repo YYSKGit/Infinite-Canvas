@@ -2287,6 +2287,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .theme-dark .selection-box { background:rgba(248,250,252,.1); }
 .composer-actions { position:relative; grid-area:run; align-self:center; justify-self:end; display:flex; align-items:center; justify-content:flex-end; padding:0; border:0; background:transparent; box-shadow:none; }
 .composer-action-buttons { display:flex; align-items:center; justify-content:flex-end; gap:4px; padding:4px; border-radius:14px; border:1px solid rgba(148,163,184,.2); background:color-mix(in srgb, var(--panel) 92%, transparent); box-shadow:0 12px 28px rgba(15,23,42,.14); backdrop-filter:blur(18px); }
+body.smart-composer-controls-settling .composer-action-buttons .run-btn,
+body.smart-composer-controls-settling .kind-toggle button { transition:none !important; }
 .venice-image-quote[hidden],.venice-video-quote[hidden] { display:none !important; }
 .venice-image-quote,.venice-video-quote { min-height:22px; margin-right:8px; display:flex; align-items:center; justify-content:center; gap:4px; color:var(--muted); font-size:10px; line-height:1; font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .venice-quote-count-icon { width:12px !important; height:12px !important; flex:0 0 auto; stroke-width:2.2; opacity:.82; }

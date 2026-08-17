@@ -151,6 +151,18 @@ test('generated nodes expose a quick run button that reuses single-node generati
     assert.match(cssSource, /\.mini-x\.smart-node-run-btn\s*\{/);
 });
 
+test('composer run controls do not replay intermediate states while selection changes', () => {
+    const clearSelection = extractFunction('clearSelection');
+    const syncSelection = extractFunction('syncSelectionUi');
+    const updateComposer = extractFunction('updateComposer');
+    assert.match(clearSelection, /settleSmartComposerControls\(\)/);
+    assert.match(syncSelection, /settleSmartComposerControls\(\)[\s\S]*?syncRunButtonState\(\)/);
+    assert.match(jsSource, /function settleSmartComposerControls\(\)[\s\S]*?smart-composer-controls-settling[\s\S]*?requestAnimationFrame[\s\S]*?requestAnimationFrame/);
+    assert.match(cssSource, /body\.smart-composer-controls-settling \.composer-action-buttons \.run-btn,\s*body\.smart-composer-controls-settling \.kind-toggle button\s*\{\s*transition:none !important;/);
+    assert.doesNotMatch(updateComposer, /if\(cascadeRunBtn\) cascadeRunBtn\.style\.display = 'none'/);
+    assert.match(updateComposer, /if\(switchedNode\)\{[\s\S]*?settings = smartSettingsForNode\(subject\);[\s\S]*?\}\s*syncRunButtonState\(node\);/);
+});
+
 test('every completed node-group type exposes a far-right node delete action', () => {
     assert.match(jsSource, /const isDeletableNodeGroup = !isPending && \(isGroup \|\| isHistory \|\| isSmartGroup\);/);
     assert.match(jsSource, /isDeletableNodeGroup[\s\S]*?class="mini-x node-delete"/);

@@ -724,6 +724,7 @@ for(const priorRunFailed of [false, true]){
             'visibleReferenceImagesFor',
             'videoProviderDescriptor',
             'videoCapabilitiesFor',
+            'normalizeVideoSettingsForCapabilities',
             'runApiVideoGeneration'
         ], {
             nodes,
@@ -776,12 +777,13 @@ for(const priorRunFailed of [false, true]){
         const visibleRefs = loaded.visibleReferenceImagesFor(target);
         assert.deepEqual(Array.from(visibleRefs, ref => ref.url), ['/a.png']);
 
+        const savedResolution = priorRunFailed ? '480p' : '';
         await loaded.runApiVideoGeneration('prompt', refs, {
             videoProvider:'custom-api',
             videoModel:'seedance-2-0-enhanced-reference-to-video',
             videoDuration:1,
             videoAspect:'9:16',
-            videoResolution:'480p'
+            videoResolution:savedResolution
         }, {});
 
         assert.equal(capturedRequests.length, 1);
@@ -790,6 +792,7 @@ for(const priorRunFailed of [false, true]){
         assert.deepEqual(body.images.map(image => image.url), ['/a.png']);
         assert.equal(body.images.length, 1);
         assert.equal(body.duration, 4);
+        assert.equal(body.resolution, savedResolution || '720p');
     });
 }
 
@@ -801,6 +804,28 @@ test('video frame-role mode accepts one or two images but not zero or three', ()
     assert.equal(canUseVideoFrameRoles(supported, 2), true);
     assert.equal(canUseVideoFrameRoles(supported, 3), false);
     assert.equal(canUseVideoFrameRoles({frameRoles:false}, 1), false);
+});
+
+test('legacy Smart Canvas video resolution empties migrate to an explicit model default', () => {
+    const {normalizeVideoSettingsForCapabilities} = loadProductionFunctions(['normalizeVideoSettingsForCapabilities'], {
+        videoCapabilitiesFor:() => ({
+            invalid:false,
+            pending:false,
+            aspects:['16:9','9:16'],
+            resolutions:['720p','1080p'],
+            defaultResolution:'720p',
+            duration:{min:4,max:15},
+            generateAudio:true,
+            frameRoles:true,
+            multimodal:true
+        })
+    });
+    const legacy = {videoAspect:'16:9', videoResolution:'', videoDuration:5};
+    normalizeVideoSettingsForCapabilities(legacy);
+    assert.equal(legacy.videoResolution, '720p');
+    const unsupported = {videoAspect:'16:9', videoResolution:'4k', videoDuration:5};
+    normalizeVideoSettingsForCapabilities(unsupported);
+    assert.equal(unsupported.videoResolution, '720p');
 });
 
 test('Venice video capabilities expose only parameters consumed by its request adapter', () => {

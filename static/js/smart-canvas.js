@@ -4087,6 +4087,7 @@ function selectLockedRunningVideoNode(nodeId){
     return true;
 }
 function clearSelection(){
+    settleSmartComposerControls();
     savePromptDraftForCurrent();
     selectedId = '';
     selectedIds = [];
@@ -4100,6 +4101,7 @@ function clearImageClickTimer(){
     }
 }
 function syncSelectionUi(){
+    settleSmartComposerControls();
     const ids = selectedNodeIds();
     const selectedGroupMembers = selectedSmartGroupMemberIds();
     world.classList.toggle('smart-multi-selected', ids.length > 1);
@@ -5698,20 +5700,6 @@ function renderVideoAspectControl(){
         </div>
     </div>`;
 }
-function renderVideoResolutionControl(){
-    const options = [['', tr('smart.videoResAuto')], ['480p','480P'], ['720p','720P'], ['1080p','1080P']];
-    const value = settings.videoResolution || '';
-    const labelMap = Object.fromEntries(options);
-    return `<div class="smart-control resolution-control">
-        <button class="smart-pill" type="button"><i data-lucide="monitor"></i><span>${escapeHtml(labelMap[value] || value || tr('smart.videoResAuto'))}</span></button>
-        <div class="smart-popover compact-popover">
-            <div class="smart-popover-title">${escapeHtml(tr('smart.videoResolution'))}</div>
-            <div class="model-list">
-                ${options.map(([v,l]) => `<button type="button" class="direct-option ${v === value ? 'active' : ''}" data-smart-param="videoResolution" data-smart-value="${escapeHtml(v)}"><span>${escapeHtml(l)}</span></button>`).join('')}
-            </div>
-        </div>
-    </div>`;
-}
 function renderVideoToggleControl(key, label){
     const on = !!settings[key];
     return `<button type="button" class="setting-check ${on ? 'active' : ''}" data-toggle-param="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
@@ -6094,6 +6082,7 @@ function videoCapabilitiesFor(source=settings, options=null){
     const base = {
         aspects:['16:9','9:16','1:1','4:3','3:4','21:9'],
         resolutions:['480p','720p','1080p'],
+        defaultResolution:'720p',
         duration:{min:4,max:15},
         supportsDuration:true,
         generateAudio:false,
@@ -6168,6 +6157,7 @@ function videoCapabilitiesFor(source=settings, options=null){
             ...base,
             aspects:veo31 ? ['16:9','9:16'] : base.aspects,
             resolutions:veo31 ? ['720p','1080p','4k'] : base.resolutions,
+            defaultResolution:veo31 ? '720p' : '480p',
             duration:veo31 ? {min:4,max:8} : {min:4,max:15},
             generateAudio:!veo31,
             multimodal:!veo31,
@@ -6189,15 +6179,15 @@ function videoCapabilitiesFor(source=settings, options=null){
     // Generic compatible video endpoints receive these fields directly.
     return {...base, generateAudio:true, enhancePrompt:true, enableUpsample:true, watermark:true, cameraFixed:true};
 }
-function normalizeVideoSettingsForCapabilities(target=settings){
-    const caps = videoCapabilitiesFor(target);
+function normalizeVideoSettingsForCapabilities(target=settings, options=null){
+    const caps = videoCapabilitiesFor(target, options);
     if(caps.invalid || caps.pending) return target;
     const fallbackAspect = caps.aspects.includes('16:9') ? '16:9' : (caps.aspects[0] || '16:9');
     if(!caps.aspects.includes(String(target.videoAspect || ''))) target.videoAspect = fallbackAspect;
     const resolution = String(target.videoResolution || '').trim().toLowerCase();
-    if(caps.catalogControlled && !caps.resolutions.includes(resolution)){
+    if(caps.resolutions.length && !caps.resolutions.includes(resolution)){
         target.videoResolution = caps.resolutions.includes(caps.defaultResolution) ? caps.defaultResolution : (caps.resolutions[0] || '');
-    } else if(resolution && !caps.resolutions.includes(resolution)) target.videoResolution = '';
+    } else if(!caps.resolutions.length) target.videoResolution = '';
     const minDuration = Math.max(4, Number(caps.duration?.min) || 4);
     const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
     const requestedDuration = Math.max(minDuration, Math.min(maxDuration, Number(target.videoDuration) || caps.duration?.default || 5));
@@ -6301,7 +6291,7 @@ function renderVideoBooleanChoice(key, label, onLabel='开启', offLabel='关闭
 }
 function videoResolutionLabel(value){
     const normalized = String(value || '').trim().toLowerCase();
-    return normalized ? normalized.toUpperCase() : tr('smart.videoResAuto');
+    return normalized.toUpperCase();
 }
 function syncVideoSettingsSelection(ctrl){
     if(!ctrl) return;
@@ -6348,9 +6338,9 @@ function renderVideoSettingsControl(){
     const aspectHtml = visibleAspects.length ? `<div class="video-aspect-grid">
         ${visibleAspects.map(value => `<button type="button" class="video-aspect-option ${value === aspect ? 'active' : ''}" data-video-setting-param="videoAspect" data-video-setting-value="${escapeHtml(value)}" ${caps.catalogControlled && !caps.aspects.includes(value) ? 'disabled aria-disabled="true"' : ''}><span class="ratio-icon ${videoAspectIconClass(value)}"></span><span>${escapeHtml(value)}</span></button>`).join('')}
     </div>` : '';
-    const resolutionOptions = caps.catalogControlled && caps.resolutions.length ? ['', '480p','720p','1080p','4k'] : (caps.resolutions.length ? ['', ...caps.resolutions] : []);
+    const resolutionOptions = caps.catalogControlled && caps.resolutions.length ? ['480p','720p','1080p','4k'] : caps.resolutions;
     const resolutionHtml = resolutionOptions.length ? `<div class="video-resolution-grid">
-        ${resolutionOptions.map(value => `<button type="button" class="${value === resolution.toLowerCase() ? 'active' : ''}" data-video-setting-param="videoResolution" data-video-setting-value="${escapeHtml(value)}" ${caps.catalogControlled && !caps.resolutions.includes(value) ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(value ? value.toUpperCase() : tr('smart.videoResAuto'))}</button>`).join('')}
+        ${resolutionOptions.map(value => `<button type="button" class="${value === resolution.toLowerCase() ? 'active' : ''}" data-video-setting-param="videoResolution" data-video-setting-value="${escapeHtml(value)}" ${caps.catalogControlled && !caps.resolutions.includes(value) ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(value.toUpperCase())}</button>`).join('')}
     </div>` : '';
     const durationValues = Array.isArray(caps.duration?.values) ? caps.duration.values : [];
     const durationStep = durationValues.length > 1 && durationValues.slice(1).every((value, index) => value - durationValues[index] === durationValues[1] - durationValues[0])
@@ -18949,6 +18939,17 @@ async function savePromptAssistantRecipe(){
 
 let lastComposerNodeId = '';
 let activeComposerSubject = null;
+let composerControlsSettleRaf = 0;
+function settleSmartComposerControls(){
+    document.body.classList.add('smart-composer-controls-settling');
+    if(composerControlsSettleRaf) cancelAnimationFrame(composerControlsSettleRaf);
+    composerControlsSettleRaf = requestAnimationFrame(() => {
+        composerControlsSettleRaf = requestAnimationFrame(() => {
+            document.body.classList.remove('smart-composer-controls-settling');
+            composerControlsSettleRaf = 0;
+        });
+    });
+}
 function currentComposerSubject(){
     return selectedNode();
 }
@@ -19090,10 +19091,8 @@ function setComposerOpen(open){
 function updateComposer(){
     const node = selectedNode();
     if(promptAssistantOpen) renderPromptAssistantResult(node);
-    syncRunButtonState(node);
     if(smartCascadeSilentSelection && !activeComposerSubject){
         setComposerOpen(false);
-        if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         activeComposerSubject = null;
         lastComposerNodeId = '';
         return;
@@ -19101,7 +19100,6 @@ function updateComposer(){
     setComposerOpen(!!node);
     const blocksOriginalMediaEditing = node?.originalMediaSource === 'video-frame' || node?.originalMediaSource === 'upload';
     if(!isSmartRunnableNode(node) || blocksOriginalMediaEditing){
-        if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         savePromptDraftForCurrent();
         setComposerOpen(false);
         activeComposerSubject = null;
@@ -19125,6 +19123,7 @@ function updateComposer(){
         settings = smartSettingsForNode(subject);
         loadPromptDraft(subject);
     }
+    syncRunButtonState(node);
     setPromptInputLocked(false);
     syncCascadeRunButton(node);
     positionComposerForNode(node);
@@ -24262,6 +24261,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
     const hasVideoMedia = Boolean(initialVideoContext.images.length || initialVideoContext.videos.length || initialVideoContext.audios.length || manualSmartVideoLink(runSettings)?.url);
     const videoCaps = videoCapabilitiesFor(runSettings, {hasMedia:hasVideoMedia});
     if(videoCaps.invalid || videoCaps.pending) throw new Error(videoCaps.errorDetail || videoCaps.errorTitle || 'Venice 视频参数不可用');
+    normalizeVideoSettingsForCapabilities(runSettings, {hasMedia:hasVideoMedia});
     if(veniceVideoProvider) ensureVeniceProgress(runContext, {kind:'video', total:1, estimateMs:veniceVideoEstimateMs(runSettings, hasVideoMedia)});
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.videoProvider || '');
     try {
