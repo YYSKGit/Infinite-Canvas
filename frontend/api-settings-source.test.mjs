@@ -75,33 +75,14 @@ test('Venice routes follow source model rename and deletion', () => {
   assert.match(source, /delete item\.model_routes\[removed\]/);
 });
 
-test('Venice image rows expose compact editable capability controls', () => {
-  assert.match(source, /function veniceImageCapabilityHtml/);
-  assert.match(source, /updateVeniceImageCapability\(\$\{index\}, 'size_mode'/);
-  assert.match(source, /updateVeniceImageCapability\(\$\{index\}, 'supports_quality'/);
-  assert.match(source, /item\.image_capabilities\[model\] = current/);
-  assert.match(source, /has-venice-capabilities/);
-  assert.match(css, /\.venice-model-capabilities[^}]*grid-template-columns:104px 38px/);
-  assert.match(css, /\.venice-size-mode select[^}]*--app-select-menu-min-width:78px/);
-  assert.match(css, /\.model-row\.has-venice-route\.has-venice-capabilities/);
-  assert.match(css, /\.venice-quality-toggle:has\(input:checked\)/);
-  const capability = new Function(`return (${extractFunction('veniceImageCapability')});`)();
-  const item = {
-    protocol:'venice',
-    image_models:['model-a'],
-    image_capabilities:{'model-a':{size_mode:'aspect', supports_quality:false}}
-  };
-  const update = new Function(
-    'provider',
-    'veniceImageCapability',
-    `return (${extractFunction('updateVeniceImageCapability')});`
-  )(() => item, capability);
-  update(0, 'supports_quality', true);
-  assert.deepEqual(item.image_capabilities['model-a'], {size_mode:'aspect', supports_quality:true});
-  update(0, 'size_mode', 'pixel');
-  assert.deepEqual(item.image_capabilities['model-a'], {size_mode:'pixel', supports_quality:true});
-  update(0, 'size_mode', 'unsupported');
-  assert.equal(item.image_capabilities['model-a'].size_mode, 'pixel');
+test('Venice image rows no longer expose manual capability controls', () => {
+  assert.doesNotMatch(source, /function veniceImageCapabilityHtml/);
+  assert.doesNotMatch(source, /function updateVeniceImageCapability/);
+  assert.doesNotMatch(source, /has-venice-capabilities/);
+  assert.doesNotMatch(css, /\.venice-model-capabilities/);
+  assert.doesNotMatch(css, /\.venice-size-mode/);
+  assert.doesNotMatch(css, /\.venice-quality-toggle/);
+  assert.match(source, /onclick="removeModel\('\$\{kind\}', \$\{index\}\)"/);
 });
 
 test('chat model ID and name fields use the same compact prefixes', () => {

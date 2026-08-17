@@ -543,11 +543,12 @@ test('Venice fan-out submits one reference image per API task', async () => {
         sizeForRun:() => '1024x1024',
         imageSizeSpecForRun:() => ({mode:'preset', aspect_ratio:'1:1', resolution:'1K'}),
         normalizeImageSettingsForCapabilities:value => ({...value, quality:'medium'}),
+        imageCapabilitiesFor:() => ({invalid:false}),
         imageQualityForRequest:value => value.quality || '',
+        veniceImageEstimateMs:() => 1000,
         rememberSmartRunTaskId:() => {},
         runningHubProgressNodeForContext:() => null,
         tr:key => key,
-        VENICE_IMAGE_ESTIMATE_MS:1000,
         SMART_REFERENCE_IMAGE_MAX:20,
         fetch:async (_url, options) => {
             requestBodies.push(JSON.parse(options.body));
@@ -807,7 +808,8 @@ test('Venice video capabilities expose only parameters consumed by its request a
         settings:{},
         apiProviders:[{id:'venice-test', protocol:'venice', base_url:'https://api.venice.ai/api/v1'}],
         videoProviderById:providerId => ({id:providerId, protocol:'venice', base_url:'https://api.venice.ai/api/v1'}),
-        volcengineProvider:() => ({id:'volcengine', protocol:'volcengine'})
+        volcengineProvider:() => ({id:'volcengine', protocol:'volcengine'}),
+        veniceCatalogVideoResolution:() => ({invalid:false, record:null})
     });
     const caps = loaded.videoCapabilitiesFor({videoProvider:'venice-test', videoModel:'seedance'});
     assert.deepEqual({...caps.duration}, {min:4, max:15});
@@ -818,6 +820,80 @@ test('Venice video capabilities expose only parameters consumed by its request a
     assert.equal(caps.cameraFixed, false);
     assert.equal(caps.frameRoles, false);
     assert.equal(caps.trustedAsset, false);
+});
+
+test('Venice image capability lookup is strict for missing routes and incorrect model IDs', () => {
+    const provider = {id:'venice-test', protocol:'venice', model_routes:{}};
+    const loaded = loadProductionFunctions([
+        'normalizedVeniceCatalogModelId',
+        'veniceCatalogModels',
+        'veniceCatalogModel',
+        'veniceProviderModelRoute',
+        'imageProviderDescriptor',
+        'veniceCatalogReady',
+        'veniceCatalogImageResolution',
+        'veniceCatalogImageRecord',
+        'imageCapabilitiesFor'
+    ], {
+        settings:{},
+        veniceModelCatalog:{categories:{
+            image:{models:[{id:'base-image', settings:{aspectRatio:{options:['1:1']}}}]},
+            inpaint:{models:[{id:'exact-edit-model', settings:{quality:{default:'high', options:['high']}}}]}
+        }},
+        apiProviders:[provider],
+        apiProviderById:() => provider,
+        volcengineProvider:() => ({id:'volcengine'})
+    });
+    const missingRoute = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'base-image'},
+        {hasReferenceImage:true}
+    );
+    assert.equal(missingRoute.invalid, true);
+    assert.match(missingRoute.errorDetail, /未配置 I2I 编辑模型/);
+
+    provider.model_routes['base-image'] = {image_edit:'wrong-edit-id'};
+    const wrongRoute = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'base-image'},
+        {hasReferenceImage:true}
+    );
+    assert.equal(wrongRoute.invalid, true);
+    assert.match(wrongRoute.errorDetail, /wrong-edit-id/);
+
+    provider.model_routes['base-image'].image_edit = 'exact-edit-model';
+    const routed = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'base-image'},
+        {hasReferenceImage:true}
+    );
+    assert.equal(routed.invalid, undefined);
+    assert.deepEqual(Array.from(routed.qualityOptions), ['high']);
+
+    const direct = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'exact-edit-model'},
+        {hasReferenceImage:true}
+    );
+    assert.equal(direct.invalid, undefined);
+    assert.deepEqual(Array.from(direct.qualityOptions), ['high']);
+
+    const wrongBase = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'typo-image-id'},
+        {hasReferenceImage:false}
+    );
+    assert.equal(wrongBase.invalid, true);
+    assert.match(wrongBase.errorDetail, /typo-image-id/);
+
+    const wrongCase = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'BASE-IMAGE'},
+        {hasReferenceImage:false}
+    );
+    assert.equal(wrongCase.invalid, undefined);
+    assert.deepEqual(Array.from(wrongCase.aspectRatios), ['1:1']);
+
+    const wrongSeparator = loaded.imageCapabilitiesFor(
+        {provider_id:'venice-test', model:'base_image'},
+        {hasReferenceImage:false}
+    );
+    assert.equal(wrongSeparator.invalid, true);
+    assert.match(wrongSeparator.errorDetail, /base_image/);
 });
 
 test('Venice quote badges prioritize the remaining generation count', () => {

@@ -3427,35 +3427,6 @@ function veniceModelRouteHtml(kind, index, model, item){
         <input value="${escapeAttr(target)}" placeholder="${escapeAttr(placeholder)}" oninput="updateVeniceModelRoute('${kind}', ${index}, this)">
     </div>`;
 }
-function veniceImageCapability(item, model){
-    const capabilities = (item?.image_capabilities && typeof item.image_capabilities === 'object') ? item.image_capabilities : {};
-    const configured = capabilities[String(model || '').trim()];
-    const sizeMode = ['pixel', 'aspect', 'aspect_resolution'].includes(configured?.size_mode)
-        ? configured.size_mode
-        : 'aspect_resolution';
-    return {size_mode:sizeMode, supports_quality:configured?.supports_quality === true};
-}
-function veniceImageCapabilityHtml(kind, index, model, item){
-    if(kind !== 'image' || String(item?.protocol || '').toLowerCase() !== 'venice') return '';
-    const capability = veniceImageCapability(item, model);
-    const sizeTitle = tr('api.veniceSizeModeLabel');
-    const qualityTitle = tr('api.veniceQualitySupportLabel');
-    const option = (value, labelKey) => `<option value="${value}" ${capability.size_mode === value ? 'selected' : ''} title="${escapeAttr(tr(labelKey))}">${value === 'pixel' ? 'PX' : value === 'aspect' ? 'AR' : 'AR+R'}</option>`;
-    return `<div class="venice-model-capabilities" role="group" aria-label="${escapeAttr(tr('api.veniceCapabilitiesLabel'))}">
-        <label class="venice-size-mode" title="${escapeAttr(sizeTitle)}">
-            <span aria-hidden="true">SZ</span>
-            <select aria-label="${escapeAttr(sizeTitle)}" onchange="updateVeniceImageCapability(${index}, 'size_mode', this.value)">
-                ${option('pixel', 'api.veniceSizeModePixel')}
-                ${option('aspect', 'api.veniceSizeModeAspect')}
-                ${option('aspect_resolution', 'api.veniceSizeModeAspectResolution')}
-            </select>
-        </label>
-        <label class="venice-quality-toggle" title="${escapeAttr(qualityTitle)}">
-            <input type="checkbox" aria-label="${escapeAttr(qualityTitle)}" ${capability.supports_quality ? 'checked' : ''} onchange="updateVeniceImageCapability(${index}, 'supports_quality', this.checked)">
-            <span aria-hidden="true">Q</span>
-        </label>
-    </div>`;
-}
 function veniceModelFieldsHtml(kind, index, model, alias, item){
     const idMissing = String(model || '').trim() ? '' : ' is-missing';
     const nameMissing = String(alias || '').trim() ? '' : ' is-missing';
@@ -3467,8 +3438,7 @@ function veniceModelFieldsHtml(kind, index, model, alias, item){
     <div class="model-prefixed-field venice-model-field venice-model-name-field${nameMissing}">
         ${modelDragHandleHtml('NM', tr('api.modelDisplayName'), kind, index)}
         <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value); syncModelFieldMissing(this)">
-    </div>
-    ${veniceImageCapabilityHtml(kind, index, model, item)}`;
+    </div>`;
 }
 function standardModelFieldsHtml(kind, index, model, alias, item){
     const usePrefixes = kind === 'chat'
@@ -3502,7 +3472,6 @@ function renderModels(kind){
     }
     const showProtocol = kind !== 'video' && providerSupportsModelProtocol(item);
     const showVeniceRoute = Boolean(veniceModelRouteName(kind)) && String(item?.protocol || '').toLowerCase() === 'venice';
-    const showVeniceCapabilities = kind === 'image' && showVeniceRoute;
     const aliases = (item?.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
     const rowsHtml = models.map((model, index) => {
         const alias = String(aliases[String(model || '').trim()] || '');
@@ -3510,7 +3479,7 @@ function renderModels(kind){
             ? veniceModelFieldsHtml(kind, index, model, alias, item)
             : standardModelFieldsHtml(kind, index, model, alias, item);
         return `
-        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}${showVeniceCapabilities ? ' has-venice-capabilities' : ''}" data-model-kind="${kind}" data-model-index="${index}" ondragover="dragModelRowOver(event, '${kind}', ${index})" ondrop="dropModelRow(event, '${kind}', ${index})" ondragend="finishModelRowDrag()">
+        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}" data-model-kind="${kind}" data-model-index="${index}" ondragover="dragModelRowOver(event, '${kind}', ${index})" ondrop="dropModelRow(event, '${kind}', ${index})" ondragend="finishModelRowDrag()">
             ${fieldsHtml}
             ${modelProtocolSelectHtml(kind, index, model, item)}
             <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
@@ -3858,22 +3827,6 @@ function syncPendingVeniceModelFields(kind, index, input){
     const aliasInput = row.querySelector('.venice-model-name-field input');
     if(routeInput) updateVeniceModelRoute(kind, index, routeInput);
     if(aliasInput) updateModelAlias(kind, index, aliasInput.value);
-}
-function updateVeniceImageCapability(index, field, value){
-    const item = provider();
-    const model = String(item?.image_models?.[index] || '').trim();
-    if(!item || String(item.protocol || '').toLowerCase() !== 'venice' || !model) return;
-    if(!item.image_capabilities || typeof item.image_capabilities !== 'object') item.image_capabilities = {};
-    const current = veniceImageCapability(item, model);
-    if(field === 'size_mode'){
-        if(!['pixel', 'aspect', 'aspect_resolution'].includes(value)) return;
-        current.size_mode = value;
-    } else if(field === 'supports_quality'){
-        current.supports_quality = value === true;
-    } else {
-        return;
-    }
-    item.image_capabilities[model] = current;
 }
 function updateModelAlias(kind, index, value){
     const item = provider();

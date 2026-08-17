@@ -258,6 +258,13 @@ let veniceImageQuoteController = null;
 let veniceImageQuoteSignature = '';
 let veniceImageQuoteRequestToken = 0;
 let veniceImageQuoteCache = null;
+let veniceModelCatalog = null;
+let veniceModelCatalogPromise = null;
+let veniceModelCatalogDbPromise = null;
+let veniceModelCatalogState = 'idle';
+let veniceModelCatalogError = '';
+const VENICE_MODEL_CATALOG_DB = 'infinite-canvas-venice-model-catalog';
+const VENICE_MODEL_CATALOG_STORE = 'snapshots';
 const VENICE_CREDITS_CACHE_KEY = 'smart_canvas_venice_credits_cache_v3';
 const VENICE_CREDITS_MIN_REFRESH_MS = 30000;
 const VENICE_CREDITS_AUTO_REFRESH_MS = 5 * 60 * 1000;
@@ -286,7 +293,7 @@ let smartGenerationSurfaceObserver = null;
 const SMART_GENERATION_ANIMATION_VIDEO_URL = '/static/media/load-bg-animation.mp4';
 const SMART_GENERATION_ANIMATION_POSTER_URL = '/static/media/load-bg-animation-poster.webp';
 const smartGenerationReducedMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)') || null;
-const VENICE_IMAGE_ESTIMATE_MS = 10000;
+const VENICE_FALLBACK_IMAGE_ESTIMATE_MS = 10000;
 const VENICE_PROGRESS_TICK_MS = 100;
 const smartNodeRunTokens = new Map();
 const activePromptNodeStreams = new Map();
@@ -3243,7 +3250,8 @@ function smartNodeRunDisabled(node){
     return !isSmartRunnableNode(node)
         || smartNodeInFlight(node)
         || smartCascadeIsLoopRunning(node?.id)
-        || queuedInAncestorRun;
+        || queuedInAncestorRun
+        || Boolean(smartNodeVeniceCapabilityIssue(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -5714,6 +5722,132 @@ function normalizeImageGenerationCount(value){
     if(count >= 2) return 2;
     return 1;
 }
+function normalizedVeniceCatalogModelId(value){
+    return String(value || '').trim().toLowerCase();
+}
+function veniceCatalogModels(category){
+    const models = veniceModelCatalog?.categories?.[category]?.models;
+    return Array.isArray(models) ? models : [];
+}
+function veniceCatalogModel(category, model){
+    const target = normalizedVeniceCatalogModelId(model);
+    if(!target) return null;
+    return veniceCatalogModels(category).find(item => {
+        const identifiers = [item?.id, item?.apiModelId, ...(Array.isArray(item?.aliasIds) ? item.aliasIds : [])];
+        return identifiers.some(value => normalizedVeniceCatalogModelId(value) === target);
+    }) || null;
+}
+function veniceProviderModelRoute(provider, model, routeName){
+    const target = normalizedVeniceCatalogModelId(model);
+    const routes = provider?.model_routes && typeof provider.model_routes === 'object' ? provider.model_routes : {};
+    const entry = Object.entries(routes).find(([source]) => normalizedVeniceCatalogModelId(source) === target)?.[1];
+    return String(entry?.[routeName] || '').trim();
+}
+function veniceCatalogAverageExecutionTime(item, fallback=0){
+    const value = Number(item?.averageExecutionTime);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+function veniceImageEstimateMs(source=settings, hasReferenceImage=false){
+    const resolved = veniceCatalogImageResolution(source, {hasReferenceImage});
+    if(resolved.invalid) return 0;
+    return veniceCatalogAverageExecutionTime(
+        resolved.record,
+        VENICE_FALLBACK_IMAGE_ESTIMATE_MS
+    );
+}
+function veniceVideoEstimateMs(source=settings, hasMedia=false){
+    const resolved = veniceCatalogVideoResolution(source, {hasMedia});
+    return resolved.invalid ? 0 : veniceCatalogAverageExecutionTime(resolved.record, 0);
+}
+function openVeniceModelCatalogDb(){
+    if(!window.indexedDB) return Promise.reject(new Error('IndexedDB unavailable'));
+    if(veniceModelCatalogDbPromise) return veniceModelCatalogDbPromise;
+    veniceModelCatalogDbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(VENICE_MODEL_CATALOG_DB, 1);
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            if(!db.objectStoreNames.contains(VENICE_MODEL_CATALOG_STORE)) db.createObjectStore(VENICE_MODEL_CATALOG_STORE, {keyPath:'providerId'});
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('Failed to open Venice model catalog cache'));
+        request.onblocked = () => reject(new Error('Venice model catalog cache is blocked'));
+    }).catch(error => {
+        veniceModelCatalogDbPromise = null;
+        throw error;
+    });
+    return veniceModelCatalogDbPromise;
+}
+async function readCachedVeniceModelCatalog(providerId){
+    const db = await openVeniceModelCatalogDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(VENICE_MODEL_CATALOG_STORE, 'readonly');
+        const request = tx.objectStore(VENICE_MODEL_CATALOG_STORE).get(String(providerId || 'venice'));
+        request.onsuccess = () => resolve(request.result?.catalog || null);
+        request.onerror = () => reject(request.error || new Error('Failed to read Venice model catalog cache'));
+    });
+}
+async function writeCachedVeniceModelCatalog(providerId, catalog){
+    const db = await openVeniceModelCatalogDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(VENICE_MODEL_CATALOG_STORE, 'readwrite');
+        tx.objectStore(VENICE_MODEL_CATALOG_STORE).put({providerId:String(providerId || 'venice'), catalog, savedAt:Date.now()});
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error || new Error('Failed to save Venice model catalog cache'));
+        tx.onabort = () => reject(tx.error || new Error('Venice model catalog cache write aborted'));
+    });
+}
+function applyVeniceModelCatalog(catalog){
+    if(!catalog || typeof catalog !== 'object') return false;
+    veniceModelCatalog = catalog;
+    veniceModelCatalogState = 'ready';
+    veniceModelCatalogError = '';
+    if(initialSmartCanvasRendered) renderDynamicParams();
+    return true;
+}
+async function loadVeniceModelCatalogOnce(){
+    if(veniceModelCatalogPromise) return veniceModelCatalogPromise;
+    const providerId = resolveVeniceCreditsProviderId('');
+    if(!providerId) return null;
+    veniceModelCatalogState = 'loading';
+    veniceModelCatalogError = '';
+    veniceModelCatalogPromise = (async () => {
+        let cachedCatalog = null;
+        try {
+            cachedCatalog = await readCachedVeniceModelCatalog(providerId);
+            applyVeniceModelCatalog(cachedCatalog);
+        } catch(error) {
+            console.warn('Venice model catalog cache read failed:', error);
+        }
+        try {
+            const response = await fetch(`/api/venice/models/catalog?provider_id=${encodeURIComponent(providerId)}`);
+            if(!response.ok) throw new Error(await response.text());
+            const catalog = await response.json();
+            if(!applyVeniceModelCatalog(catalog)) throw new Error('Venice model catalog response is invalid');
+            writeCachedVeniceModelCatalog(providerId, catalog).catch(error => console.warn('Venice model catalog cache write failed:', error));
+            return veniceModelCatalog;
+        } catch(error) {
+            console.warn('Venice model catalog load failed:', error);
+            if(!cachedCatalog){
+                veniceModelCatalogState = 'error';
+                veniceModelCatalogError = String(error?.message || error || 'Venice 模型目录加载失败');
+                if(initialSmartCanvasRendered) renderDynamicParams();
+            }
+            toast(cachedCatalog
+                ? 'Venice 模型信息更新失败，已继续使用上次成功记录。'
+                : 'Venice 模型信息加载失败，当前无法校验模型参数。');
+            return veniceModelCatalog;
+        }
+    })();
+    return veniceModelCatalogPromise;
+}
+const VENICE_IMAGE_RATIO_TO_API = {
+    auto:'auto', square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4', landscape43:'4:3',
+    story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21'
+};
+function veniceImageRatioFromApi(value){
+    const target = String(value || '').trim().toLowerCase();
+    return Object.entries(VENICE_IMAGE_RATIO_TO_API).find(([, apiValue]) => apiValue.toLowerCase() === target)?.[0] || '';
+}
 function imageProviderDescriptor(source=settings){
     const providerId = String(source?.provider_id || '').trim();
     const provider = providerId === 'volcengine'
@@ -5727,12 +5861,114 @@ function imageProviderDescriptor(source=settings){
     const capability = Object.entries(capabilities).find(([key]) => String(key || '').trim().toLowerCase().replace(/_/g, '-') === normalizedModel)?.[1] || {};
     return {provider, providerId, model, capability};
 }
-function imageCapabilitiesFor(source=settings){
+function veniceCatalogReady(){
+    const categories = veniceModelCatalog?.categories;
+    return Boolean(categories && typeof categories === 'object' && Object.keys(categories).length);
+}
+function veniceCatalogImageResolution(source=settings, options=null){
     const descriptor = imageProviderDescriptor(source);
+    if(String(descriptor.provider?.protocol || '').trim().toLowerCase() !== 'venice') return {applicable:false, invalid:false, record:null};
+    if(!veniceCatalogReady()){
+        if(veniceModelCatalogState === 'error'){
+            return {
+                applicable:true, invalid:true, record:null,
+                errorTitle:'Venice 模型信息不可用',
+                errorDetail:'模型目录加载失败且没有可用的历史记录，暂时无法校验参数。请刷新页面后重试。'
+            };
+        }
+        return {
+            applicable:true, invalid:false, pending:true, record:null,
+            errorTitle:'正在读取 Venice 模型参数',
+            errorDetail:'画布会继续加载，参数将在模型目录就绪后自动更新。'
+        };
+    }
+    const hasReferenceImage = options?.hasReferenceImage === true;
+    const model = descriptor.model;
+    if(!model){
+        return {applicable:true, invalid:true, record:null, errorTitle:'Venice 参数不可用', errorDetail:'尚未选择图片模型。'};
+    }
+    const directEditRecord = hasReferenceImage ? veniceCatalogModel('inpaint', model) : null;
+    if(directEditRecord) return {applicable:true, invalid:false, record:directEditRecord, requestModel:model, direct:true};
+    const baseRecord = veniceCatalogModel('image', model);
+    if(!baseRecord){
+        return {
+            applicable:true, invalid:true, record:null,
+            errorTitle:hasReferenceImage ? 'Venice 编辑参数不可用' : 'Venice 图片参数不可用',
+            errorDetail:`模型目录中未找到“${model}”，请检查 API 设置中的图片模型 ID。`
+        };
+    }
+    if(!hasReferenceImage) return {applicable:true, invalid:false, record:baseRecord, requestModel:model};
+    const routedModel = veniceProviderModelRoute(descriptor.provider, model, 'image_edit');
+    if(!routedModel){
+        return {
+            applicable:true, invalid:true, record:null,
+            errorTitle:'Venice 编辑参数不可用',
+            errorDetail:`图片模型“${model}”未配置 I2I 编辑模型，请前往 API 设置补充。`
+        };
+    }
+    const editRecord = veniceCatalogModel('inpaint', routedModel);
+    if(!editRecord){
+        return {
+            applicable:true, invalid:true, record:null,
+            errorTitle:'Venice 编辑参数不可用',
+            errorDetail:`模型目录中未找到编辑模型“${routedModel}”，请检查 I2I 模型 ID。`
+        };
+    }
+    return {applicable:true, invalid:false, record:editRecord, requestModel:routedModel};
+}
+function veniceCatalogImageRecord(source=settings, options=null){
+    return veniceCatalogImageResolution(source, options).record || null;
+}
+function imageCapabilitiesFor(source=settings, options=null){
+    const descriptor = imageProviderDescriptor(source);
+    const catalogResolution = veniceCatalogImageResolution(source, options);
+    if(catalogResolution.pending){
+        return {
+            catalogControlled:true, pending:true, invalid:false,
+            errorTitle:catalogResolution.errorTitle, errorDetail:catalogResolution.errorDetail,
+            sizeMode:'', supportsQuality:false, declaresResolution:false,
+            aspectRatios:[], resolutions:[], qualityOptions:[]
+        };
+    }
+    if(catalogResolution.invalid){
+        return {
+            catalogControlled:true,
+            invalid:true,
+            errorTitle:catalogResolution.errorTitle,
+            errorDetail:catalogResolution.errorDetail,
+            sizeMode:'', supportsQuality:false, declaresResolution:false,
+            aspectRatios:[], resolutions:[], qualityOptions:[]
+        };
+    }
+    const catalogModel = catalogResolution.record;
+    if(catalogModel){
+        const modelSettings = catalogModel.settings && typeof catalogModel.settings === 'object' ? catalogModel.settings : {};
+        const aspect = modelSettings.aspectRatio && typeof modelSettings.aspectRatio === 'object' ? modelSettings.aspectRatio : {};
+        const resolution = modelSettings.resolution && typeof modelSettings.resolution === 'object' ? modelSettings.resolution : {};
+        const quality = modelSettings.quality && typeof modelSettings.quality === 'object' ? modelSettings.quality : {};
+        const aspectRatios = Array.isArray(aspect.options) ? aspect.options.map(value => String(value).toLowerCase()) : [];
+        const resolutions = Array.isArray(resolution.options) ? resolution.options.map(value => String(value).toLowerCase()) : [];
+        const qualityOptions = Array.isArray(quality.options) ? quality.options.map(value => String(value).toLowerCase()) : [];
+        return {
+            catalogControlled:true,
+            catalogModel,
+            sizeMode:aspectRatios.length ? (resolutions.length ? 'aspect_resolution' : 'aspect') : 'pixel',
+            supportsQuality:qualityOptions.length > 0,
+            declaresResolution:Boolean(modelSettings.resolution && typeof modelSettings.resolution === 'object'),
+            aspectRatios,
+            defaultAspectRatio:String(aspect.default || '').toLowerCase(),
+            resolutions,
+            defaultResolution:String(resolution.default || '').toLowerCase(),
+            qualityOptions,
+            defaultQuality:String(quality.default || '').toLowerCase()
+        };
+    }
     const rawMode = String(descriptor.capability?.size_mode || '').trim().toLowerCase().replace(/-/g, '_');
     return {
+        catalogControlled:false,
         sizeMode:['pixel','aspect','aspect_resolution'].includes(rawMode) ? rawMode : '',
-        supportsQuality:descriptor.capability?.supports_quality === true
+        supportsQuality:descriptor.capability?.supports_quality === true,
+        aspectRatios:[], resolutions:[], qualityOptions:[]
     };
 }
 function imageEditModeForNode(node=activeComposerNode() || selectedNode()){
@@ -5740,8 +5976,12 @@ function imageEditModeForNode(node=activeComposerNode() || selectedNode()){
 }
 function normalizeImageSettingsForCapabilities(target=settings, options=null){
     if(!target || typeof target !== 'object') return target;
-    const caps = imageCapabilitiesFor(target);
     const hasReferenceImage = options?.hasReferenceImage === true;
+    const caps = imageCapabilitiesFor(target, {hasReferenceImage});
+    if(caps.invalid || caps.pending){
+        target.count = normalizeImageGenerationCount(target.count);
+        return target;
+    }
     if(String(target.resolution || '').toLowerCase() === 'auto'){
         target.ratio = 'auto';
         target.resolution = '1k';
@@ -5752,19 +5992,32 @@ function normalizeImageSettingsForCapabilities(target=settings, options=null){
     const validRatios = new Set(['auto','square','portrait','landscape','portrait43','landscape43','story','wide','ultrawide','ultratall']);
     if(String(target.ratio || '') === 'source') target.ratio = 'auto';
     else if(!validRatios.has(String(target.ratio || ''))) target.ratio = 'square';
+    if(caps.catalogControlled && caps.aspectRatios.length && !caps.aspectRatios.includes(VENICE_IMAGE_RATIO_TO_API[target.ratio])){
+        target.ratio = veniceImageRatioFromApi(caps.defaultAspectRatio)
+            || veniceImageRatioFromApi(caps.aspectRatios[0])
+            || 'square';
+    }
+    if(caps.catalogControlled && caps.resolutions.length && !caps.resolutions.includes(target.resolution)){
+        target.resolution = caps.resolutions.includes(caps.defaultResolution) ? caps.defaultResolution : caps.resolutions[0];
+    }
     // Pixel-only text-to-image contracts need concrete dimensions. Image-edit
     // requests may retain auto because the edit adapter can derive the output
     // shape from the submitted reference image.
     if(caps.sizeMode === 'pixel' && target.ratio === 'auto' && !hasReferenceImage) target.ratio = 'square';
     if(!['low','medium','high'].includes(String(target.quality || '').toLowerCase())) target.quality = 'medium';
     else target.quality = String(target.quality).toLowerCase();
+    if(caps.catalogControlled && caps.qualityOptions.length && !caps.qualityOptions.includes(target.quality)){
+        target.quality = caps.qualityOptions.includes(caps.defaultQuality) ? caps.defaultQuality : caps.qualityOptions[0];
+    }
     target.count = normalizeImageGenerationCount(target.count);
     return target;
 }
-function imageQualityForRequest(source=settings){
-    if(!imageCapabilitiesFor(source).supportsQuality) return '';
+function imageQualityForRequest(source=settings, options=null){
+    const caps = imageCapabilitiesFor(source, options);
+    if(!caps.supportsQuality) return '';
     const quality = String(source?.quality || '').trim().toLowerCase();
-    return ['low','medium','high'].includes(quality) ? quality : 'medium';
+    const allowed = caps.catalogControlled ? caps.qualityOptions : ['low','medium','high'];
+    return allowed.includes(quality) ? quality : (caps.defaultQuality || allowed[0] || '');
 }
 function videoProviderDescriptor(source=settings){
     const providerId = String(source?.videoProvider || '').trim();
@@ -5772,18 +6025,79 @@ function videoProviderDescriptor(source=settings){
         ? volcengineProvider()
         : ((apiProviders || []).find(item => String(item?.id || '').trim() === providerId) || videoProviderById(providerId));
     return {
+        provider,
         id:providerId,
         protocol:String(provider?.protocol || '').trim().toLowerCase(),
         baseUrl:String(provider?.base_url || '').trim().toLowerCase(),
-        model:String(source?.videoModel || '').trim().toLowerCase()
+        model:String(source?.videoModel || '').trim()
     };
 }
-function videoCapabilitiesFor(source=settings){
+function veniceCatalogVideoRecord(source=settings, options=null){
+    return veniceCatalogVideoResolution(source, options).record || null;
+}
+function veniceCatalogVideoResolution(source=settings, options=null){
+    const descriptor = videoProviderDescriptor(source);
+    if(descriptor.protocol !== 'venice') return {applicable:false, invalid:false, record:null};
+    if(!veniceCatalogReady()){
+        if(veniceModelCatalogState === 'error'){
+            return {
+                applicable:true, invalid:true, record:null,
+                errorTitle:'Venice 模型信息不可用',
+                errorDetail:'模型目录加载失败且没有可用的历史记录，暂时无法校验参数。请刷新页面后重试。'
+            };
+        }
+        return {
+            applicable:true, invalid:false, pending:true, record:null,
+            errorTitle:'正在读取 Venice 模型参数',
+            errorDetail:'画布会继续加载，参数将在模型目录就绪后自动更新。'
+        };
+    }
+    const context = typeof activeVideoReferenceContext === 'function' ? activeVideoReferenceContext() : {images:[], videos:[], audios:[]};
+    const hasMedia = options?.hasMedia === true || (options?.hasMedia !== false && Boolean(context.images?.length || context.videos?.length || context.audios?.length));
+    const model = descriptor.model;
+    if(!model){
+        return {applicable:true, invalid:true, record:null, errorTitle:'Venice 参数不可用', errorDetail:'尚未选择视频模型。'};
+    }
+    const selectedRecord = veniceCatalogModel('video', model);
+    if(!selectedRecord){
+        return {
+            applicable:true, invalid:true, record:null,
+            errorTitle:'Venice 视频参数不可用',
+            errorDetail:`模型目录中未找到“${model}”，请检查 API 设置中的视频模型 ID。`
+        };
+    }
+    if(hasMedia || selectedRecord.capabilities?.textToVideo === true){
+        return {applicable:true, invalid:false, record:selectedRecord, requestModel:model, direct:true};
+    }
+    const routedModel = veniceProviderModelRoute(descriptor.provider, model, 'text_to_video');
+    if(!routedModel){
+        return {
+            applicable:true, invalid:true, record:null,
+            errorTitle:'Venice 文生视频参数不可用',
+            errorDetail:`视频模型“${model}”未配置 T2V 模型，请前往 API 设置补充。`
+        };
+    }
+    const textRecord = veniceCatalogModel('video', routedModel);
+    if(!textRecord){
+        return {
+            applicable:true, invalid:true, record:null,
+            errorTitle:'Venice 文生视频参数不可用',
+            errorDetail:`模型目录中未找到文生视频模型“${routedModel}”，请检查 T2V 模型 ID。`
+        };
+    }
+    return {applicable:true, invalid:false, record:textRecord, requestModel:routedModel};
+}
+function veniceCatalogDurationValues(duration){
+    if(!Array.isArray(duration?.options)) return [];
+    return duration.options.map(option => Number(option?.value ?? option)).filter(value => Number.isFinite(value) && value > 0);
+}
+function videoCapabilitiesFor(source=settings, options=null){
     const descriptor = videoProviderDescriptor(source);
     const base = {
         aspects:['16:9','9:16','1:1','4:3','3:4','21:9'],
         resolutions:['480p','720p','1080p'],
         duration:{min:4,max:15},
+        supportsDuration:true,
         generateAudio:false,
         enhancePrompt:false,
         enableUpsample:false,
@@ -5795,21 +6109,63 @@ function videoCapabilitiesFor(source=settings){
     };
     const isApimart = descriptor.protocol === 'apimart' || descriptor.baseUrl.includes('apimart.ai');
     const isYuli = descriptor.baseUrl.includes('yuli.host');
-    const isAgnes = descriptor.baseUrl.includes('agnes-ai.com') || descriptor.model.startsWith('agnes-video-');
+    const normalizedModel = descriptor.model.toLowerCase();
+    const isAgnes = descriptor.baseUrl.includes('agnes-ai.com') || normalizedModel.startsWith('agnes-video-');
     if(descriptor.protocol === 'venice'){
-        return {...base, generateAudio:true};
+        const catalogResolution = veniceCatalogVideoResolution(source, options);
+        if(catalogResolution.pending){
+            return {
+                ...base,
+                catalogControlled:true, pending:true, invalid:false,
+                errorTitle:catalogResolution.errorTitle, errorDetail:catalogResolution.errorDetail,
+                aspects:[], resolutions:[], supportsDuration:false, generateAudio:false
+            };
+        }
+        if(catalogResolution.invalid){
+            return {
+                ...base,
+                catalogControlled:true,
+                invalid:true,
+                errorTitle:catalogResolution.errorTitle,
+                errorDetail:catalogResolution.errorDetail,
+                aspects:[], resolutions:[], supportsDuration:false, generateAudio:false
+            };
+        }
+        const catalogModel = catalogResolution.record;
+        if(!catalogModel) return {...base, generateAudio:true};
+        const modelSettings = catalogModel.settings && typeof catalogModel.settings === 'object' ? catalogModel.settings : {};
+        const capabilities = catalogModel.capabilities && typeof catalogModel.capabilities === 'object' ? catalogModel.capabilities : {};
+        const aspects = Array.isArray(modelSettings.aspectRatio?.options) ? modelSettings.aspectRatio.options.map(String) : [];
+        const resolutions = Array.isArray(modelSettings.resolution?.options) ? modelSettings.resolution.options.map(value => String(value).toLowerCase()) : [];
+        const durationValues = veniceCatalogDurationValues(modelSettings.duration);
+        const defaultDuration = Number.parseInt(String(modelSettings.duration?.default || ''), 10);
+        return {
+            ...base,
+            catalogControlled:true,
+            catalogModel,
+            aspects,
+            defaultAspect:String(modelSettings.aspectRatio?.default || ''),
+            resolutions,
+            defaultResolution:String(modelSettings.resolution?.default || '').toLowerCase(),
+            duration:durationValues.length ? {
+                min:Math.min(...durationValues), max:Math.max(...durationValues), values:durationValues,
+                default:Number.isFinite(defaultDuration) ? defaultDuration : durationValues[0]
+            } : base.duration,
+            supportsDuration:durationValues.length > 0,
+            generateAudio:capabilities.supportsAudio === true && capabilities.supportsAudioConfig === true
+        };
     }
     if(descriptor.protocol === 'jimeng'){
-        const seedanceVip = descriptor.model.includes('seedance2.0_vip') || descriptor.model.includes('seedance2.0fast_vip');
-        const duration = descriptor.model.includes('3.5') ? {min:4,max:12}
-            : (descriptor.model.includes('3.0') ? {min:4,max:10} : {min:4,max:15});
+        const seedanceVip = normalizedModel.includes('seedance2.0_vip') || normalizedModel.includes('seedance2.0fast_vip');
+        const duration = normalizedModel.includes('3.5') ? {min:4,max:12}
+            : (normalizedModel.includes('3.0') ? {min:4,max:10} : {min:4,max:15});
         return {...base, resolutions:seedanceVip ? ['720p','1080p'] : ['720p'], duration, multimodal:true, frameRoles:true};
     }
     if(descriptor.protocol === 'volcengine' || descriptor.id === 'volcengine'){
         return {...base, generateAudio:true, watermark:true, cameraFixed:true, multimodal:true, frameRoles:true, trustedAsset:true};
     }
     if(isApimart){
-        const veo31 = descriptor.model.startsWith('veo3.1');
+        const veo31 = normalizedModel.startsWith('veo3.1');
         return {
             ...base,
             aspects:veo31 ? ['16:9','9:16'] : base.aspects,
@@ -5837,13 +6193,20 @@ function videoCapabilitiesFor(source=settings){
 }
 function normalizeVideoSettingsForCapabilities(target=settings){
     const caps = videoCapabilitiesFor(target);
+    if(caps.invalid || caps.pending) return target;
     const fallbackAspect = caps.aspects.includes('16:9') ? '16:9' : (caps.aspects[0] || '16:9');
     if(!caps.aspects.includes(String(target.videoAspect || ''))) target.videoAspect = fallbackAspect;
     const resolution = String(target.videoResolution || '').trim().toLowerCase();
-    if(resolution && !caps.resolutions.includes(resolution)) target.videoResolution = '';
+    if(caps.catalogControlled && !caps.resolutions.includes(resolution)){
+        target.videoResolution = caps.resolutions.includes(caps.defaultResolution) ? caps.defaultResolution : (caps.resolutions[0] || '');
+    } else if(resolution && !caps.resolutions.includes(resolution)) target.videoResolution = '';
     const minDuration = Math.max(4, Number(caps.duration?.min) || 4);
     const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
-    target.videoDuration = Math.max(minDuration, Math.min(maxDuration, Number(target.videoDuration) || 5));
+    const requestedDuration = Math.max(minDuration, Math.min(maxDuration, Number(target.videoDuration) || caps.duration?.default || 5));
+    target.videoDuration = Array.isArray(caps.duration?.values) && caps.duration.values.length
+        ? caps.duration.values.reduce((closest, value) => Math.abs(value - requestedDuration) < Math.abs(closest - requestedDuration) ? value : closest, caps.duration.values[0])
+        : requestedDuration;
+    if(caps.catalogControlled && !caps.generateAudio) target.videoGenerateAudio = false;
     if(!caps.frameRoles) target.videoUseFrameRoles = false;
     if(!caps.multimodal) target.videoMultimodal = false;
     return target;
@@ -5858,6 +6221,45 @@ function activeVideoReferenceContext(){
         audios:audioRefsOnly(refs)
     };
 }
+function smartNodeExpectedMediaKind(node){
+    if(!node || smartAncestorRunnableKind(node) !== 'generation') return '';
+    const activeNode = typeof activeComposerNode === 'function' ? activeComposerNode() : null;
+    const runSettings = activeNode?.id === node.id ? settings : smartSettingsForNode(node);
+    if(isApiLikeEngine(runSettings?.engine) && runSettings.apiKind === 'video') return 'video';
+    const knownKind = String(node.outputKind || '').trim().toLowerCase();
+    return ['image','video','audio'].includes(knownKind) ? knownKind : 'image';
+}
+function smartNodeVeniceCapabilityIssue(node, source=null, options={}){
+    if(!node || !isSmartRunnableNode(node)) return null;
+    const activeNode = typeof activeComposerNode === 'function' ? activeComposerNode() : null;
+    const runSettings = source || (activeNode?.id === node.id ? settings : smartSettingsForNode(node));
+    if(!isApiLikeEngine(runSettings?.engine)) return null;
+    const refs = buildPromptRequest(
+        node,
+        generationReferenceImagesForRun(node, false, null),
+        false,
+        null,
+        runSettings
+    ).refs || [];
+    const hasMedia = options.hasExpectedMedia === true
+        || refs.some(ref => ['image','video','audio'].includes(mediaKindForItem(ref)));
+    const hasReferenceImage = options.hasExpectedImage === true || imageRefsOnly(refs).length > 0;
+    const caps = runSettings.apiKind === 'video'
+        ? videoCapabilitiesFor(runSettings, {hasMedia})
+        : imageCapabilitiesFor(runSettings, {hasReferenceImage});
+    if(!caps.invalid) return null;
+    return {
+        nodeId:String(node.id || ''),
+        errorTitle:String(caps.errorTitle || 'Venice 参数不可用'),
+        errorDetail:String(caps.errorDetail || '请检查 API 设置中的模型 ID。')
+    };
+}
+function smartVeniceCapabilityIssueMessage(issue, prefix='无法运行'){
+    if(!issue) return '';
+    const node = nodes.find(candidate => candidate.id === issue.nodeId);
+    const label = String(node?.title || '').trim() || '生成节点';
+    return `${prefix}：${label} · ${issue.errorDetail || issue.errorTitle}`;
+}
 function canUseVideoFrameRoles(caps, imageCount){
     const count = Number(imageCount) || 0;
     return Boolean(caps?.frameRoles && count >= 1 && count <= 2);
@@ -5869,13 +6271,33 @@ function renderVideoSettingSection(title, content, className=''){
         ${content}
     </section>`;
 }
-function renderVideoBooleanChoice(key, label, onLabel='开启', offLabel='关闭'){
+function renderVeniceCapabilityErrorControl(kind, caps){
+    const isVideo = kind === 'video';
+    const controlClass = isVideo ? 'video-settings-control' : 'image-settings-control';
+    const pillClass = isVideo ? 'video-settings-pill' : 'image-settings-pill';
+    const popoverClass = isVideo ? 'video-settings-popover' : 'image-settings-popover';
+    const ariaLabel = isVideo ? '视频参数错误' : '图片参数错误';
+    const pending = caps.pending === true;
+    return `<div class="smart-control parameter-settings-control ${controlClass} venice-capability-error-control${pending ? ' is-pending' : ''}">
+        <button class="smart-pill parameter-settings-pill ${pillClass} venice-capability-error-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <i data-lucide="${pending ? 'loader-circle' : 'triangle-alert'}"></i><span>${pending ? '参数加载中' : '参数不可用'}</span>
+        </button>
+        <div class="smart-popover parameter-settings-popover ${popoverClass} venice-capability-error-popover" role="dialog" aria-label="${ariaLabel}">
+            <div class="venice-capability-error-card">
+                <div class="venice-capability-error-title"><i data-lucide="circle-alert"></i><span>${escapeHtml(caps.errorTitle || 'Venice 参数不可用')}</span></div>
+                <div class="venice-capability-error-detail">${escapeHtml(caps.errorDetail || '请检查 API 设置中的模型 ID。')}</div>
+            </div>
+        </div>
+    </div>`;
+}
+function renderVideoBooleanChoice(key, label, onLabel='开启', offLabel='关闭', supported=true){
     const on = Boolean(settings[key]);
+    const disabled = supported ? '' : ' disabled aria-disabled="true"';
     return `<div class="video-boolean-row">
         <span class="video-boolean-label">${escapeHtml(label)}</span>
         <div class="video-segmented">
-            <button type="button" class="${on ? 'active' : ''}" data-video-bool-param="${escapeHtml(key)}" data-video-bool-value="true">${escapeHtml(onLabel)}</button>
-            <button type="button" class="${!on ? 'active' : ''}" data-video-bool-param="${escapeHtml(key)}" data-video-bool-value="false">${escapeHtml(offLabel)}</button>
+            <button type="button" class="${on ? 'active' : ''}" data-video-bool-param="${escapeHtml(key)}" data-video-bool-value="true"${disabled}>${escapeHtml(onLabel)}</button>
+            <button type="button" class="${!on ? 'active' : ''}" data-video-bool-param="${escapeHtml(key)}" data-video-bool-value="false"${disabled}>${escapeHtml(offLabel)}</button>
         </div>
     </div>`;
 }
@@ -5895,16 +6317,19 @@ function syncVideoSettingsSelection(ctrl){
         button.classList.toggle('active', (button.dataset.videoBoolValue === 'true') === currentValue);
     });
     const caps = videoCapabilitiesFor(settings);
-    const summaryParts = [String(settings.videoAspect || '16:9')];
+    const summaryParts = [];
+    if(caps.aspects.length) summaryParts.push(String(settings.videoAspect || '16:9'));
     if(caps.resolutions.length) summaryParts.push(videoResolutionLabel(settings.videoResolution));
-    summaryParts.push(`${Math.max(4, Number(settings.videoDuration) || 5)}s`);
+    if(caps.supportsDuration) summaryParts.push(`${Math.max(4, Number(settings.videoDuration) || 5)}s`);
     const summary = ctrl.querySelector('.video-settings-summary');
     if(summary) summary.textContent = summaryParts.join(' · ');
     const audioIcon = ctrl.querySelector('.video-settings-audio-icon');
     if(audioIcon) audioIcon.toggleAttribute('hidden', !(caps.generateAudio && settings.videoGenerateAudio));
 }
 function renderVideoSettingsControl(){
+    normalizeVideoSettingsForCapabilities(settings);
     const caps = videoCapabilitiesFor(settings);
+    if(caps.invalid || caps.pending) return renderVeniceCapabilityErrorControl('video', caps);
     const refs = activeVideoReferenceContext();
     const imageCount = refs.images.length;
     const hasMedia = imageCount > 0 || refs.videos.length > 0 || refs.audios.length > 0;
@@ -5914,23 +6339,29 @@ function renderVideoSettingsControl(){
     const maxDuration = Math.min(15, Math.max(minDuration, Number(caps.duration?.max) || 15));
     const duration = Math.max(minDuration, Math.min(maxDuration, Number(settings.videoDuration) || 5));
     const durationProgress = maxDuration > minDuration ? ((duration - minDuration) / (maxDuration - minDuration)) * 100 : 100;
-    const summaryParts = [aspect];
+    const summaryParts = [];
+    if(caps.aspects.length) summaryParts.push(aspect);
     if(caps.resolutions.length) summaryParts.push(videoResolutionLabel(resolution));
-    summaryParts.push(`${duration}s`);
+    if(caps.supportsDuration) summaryParts.push(`${duration}s`);
     const audioSummary = caps.generateAudio
         ? `<i data-lucide="volume-2" class="video-settings-audio-icon" aria-label="${escapeHtml(tr('smart.videoGenerateAudio'))}" ${settings.videoGenerateAudio ? '' : 'hidden'}></i>`
         : '';
-    const aspectHtml = `<div class="video-aspect-grid">
-        ${caps.aspects.map(value => `<button type="button" class="video-aspect-option ${value === aspect ? 'active' : ''}" data-video-setting-param="videoAspect" data-video-setting-value="${escapeHtml(value)}"><span class="ratio-icon ${videoAspectIconClass(value)}"></span><span>${escapeHtml(value)}</span></button>`).join('')}
-    </div>`;
-    const resolutionOptions = caps.resolutions.length ? ['', ...caps.resolutions] : [];
-    const resolutionHtml = resolutionOptions.length ? `<div class="video-resolution-grid">
-        ${resolutionOptions.map(value => `<button type="button" class="${value === resolution.toLowerCase() ? 'active' : ''}" data-video-setting-param="videoResolution" data-video-setting-value="${escapeHtml(value)}">${escapeHtml(value ? value.toUpperCase() : tr('smart.videoResAuto'))}</button>`).join('')}
+    const visibleAspects = caps.catalogControlled && caps.aspects.length ? ['21:9','16:9','4:3','1:1','3:4','9:16'] : caps.aspects;
+    const aspectHtml = visibleAspects.length ? `<div class="video-aspect-grid">
+        ${visibleAspects.map(value => `<button type="button" class="video-aspect-option ${value === aspect ? 'active' : ''}" data-video-setting-param="videoAspect" data-video-setting-value="${escapeHtml(value)}" ${caps.catalogControlled && !caps.aspects.includes(value) ? 'disabled aria-disabled="true"' : ''}><span class="ratio-icon ${videoAspectIconClass(value)}"></span><span>${escapeHtml(value)}</span></button>`).join('')}
     </div>` : '';
-    const durationHtml = `<div class="video-duration-editor">
-        <input type="range" min="${minDuration}" max="${maxDuration}" step="1" value="${duration}" style="--video-duration-progress:${durationProgress}%" data-video-duration-slider aria-label="${escapeHtml(tr('smart.videoDuration'))}">
+    const resolutionOptions = caps.catalogControlled && caps.resolutions.length ? ['', '480p','720p','1080p','4k'] : (caps.resolutions.length ? ['', ...caps.resolutions] : []);
+    const resolutionHtml = resolutionOptions.length ? `<div class="video-resolution-grid">
+        ${resolutionOptions.map(value => `<button type="button" class="${value === resolution.toLowerCase() ? 'active' : ''}" data-video-setting-param="videoResolution" data-video-setting-value="${escapeHtml(value)}" ${caps.catalogControlled && !caps.resolutions.includes(value) ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(value ? value.toUpperCase() : tr('smart.videoResAuto'))}</button>`).join('')}
+    </div>` : '';
+    const durationValues = Array.isArray(caps.duration?.values) ? caps.duration.values : [];
+    const durationStep = durationValues.length > 1 && durationValues.slice(1).every((value, index) => value - durationValues[index] === durationValues[1] - durationValues[0])
+        ? durationValues[1] - durationValues[0]
+        : 1;
+    const durationHtml = caps.supportsDuration ? `<div class="video-duration-editor">
+        <input type="range" min="${minDuration}" max="${maxDuration}" step="${durationStep}" value="${duration}" style="--video-duration-progress:${durationProgress}%" data-video-duration-slider aria-label="${escapeHtml(tr('smart.videoDuration'))}">
         <output class="video-duration-value">${duration}</output><span class="video-duration-unit">s</span>
-    </div>`;
+    </div>` : '';
     const generalHtml = caps.generateAudio
         ? renderVideoBooleanChoice('videoGenerateAudio', tr('smart.videoGenerateAudio'))
         : '';
@@ -5983,8 +6414,10 @@ function renderImageSettingSection(title, content, className=''){
         ${content}
     </section>`;
 }
-function imageSettingsSummaryParts(source=settings){
-    const caps = imageCapabilitiesFor(source);
+function imageSettingsSummaryParts(source=settings, options=null){
+    const caps = imageCapabilitiesFor(source, options);
+    if(caps.pending) return ['参数加载中'];
+    if(caps.invalid) return ['参数不可用'];
     const count = normalizeImageGenerationCount(source?.count);
     const resolution = String(source?.resolution || '1k').toLowerCase();
     if(resolution === 'custom'){
@@ -6017,13 +6450,14 @@ function syncImageSettingsSelection(ctrl){
         button.classList.toggle('active', String(settings[key] ?? '') === button.dataset.imageSettingValue);
     });
     const summary = ctrl.querySelector('.image-settings-summary');
-    if(summary) summary.textContent = imageSettingsSummaryParts(settings).join(' · ');
+    if(summary) summary.textContent = imageSettingsSummaryParts(settings, {hasReferenceImage:imageEditModeForNode()}).join(' · ');
     if(settings.resolution !== 'custom') ctrl.querySelector('.image-custom-size-note')?.remove();
 }
 function renderImageSettingsControl(){
     const hasReferenceImage = imageEditModeForNode();
     normalizeImageSettingsForCapabilities(settings, {hasReferenceImage});
-    const caps = imageCapabilitiesFor(settings);
+    const caps = imageCapabilitiesFor(settings, {hasReferenceImage});
+    if(caps.invalid || caps.pending) return renderVeniceCapabilityErrorControl('image', caps);
     const ratio = String(settings.ratio || 'square');
     const resolution = String(settings.resolution || '1k').toLowerCase();
     const quality = String(settings.quality || 'medium').toLowerCase();
@@ -6035,13 +6469,17 @@ function renderImageSettingsControl(){
     ];
     const autoDisabled = caps.sizeMode === 'pixel' && !hasReferenceImage;
     const qualityHtml = caps.supportsQuality ? `<div class="image-quality-grid">
-        ${['low','medium','high'].map(value => `<button type="button" class="${value === quality ? 'active' : ''}" data-image-setting-param="quality" data-image-setting-value="${value}">${escapeHtml(imageQualityLabel(value))}</button>`).join('')}
+        ${['low','medium','high'].map(value => `<button type="button" class="${value === quality ? 'active' : ''}" data-image-setting-param="quality" data-image-setting-value="${value}" ${caps.catalogControlled && !caps.qualityOptions.includes(value) ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(imageQualityLabel(value))}</button>`).join('')}
     </div>` : '';
     const resolutionHtml = caps.sizeMode === 'aspect' ? '' : `<div class="image-resolution-grid">
-        ${['1k','2k','4k'].map(value => `<button type="button" class="${value === resolution ? 'active' : ''}" data-image-setting-param="resolution" data-image-setting-value="${value}">${value.toUpperCase()}</button>`).join('')}
+        ${['1k','2k','4k'].map(value => `<button type="button" class="${value === resolution ? 'active' : ''}" data-image-setting-param="resolution" data-image-setting-value="${value}" ${caps.catalogControlled && caps.declaresResolution && !caps.resolutions.includes(value) ? 'disabled aria-disabled="true"' : ''}>${value.toUpperCase()}</button>`).join('')}
     </div>`;
     const ratioHtml = `<div class="image-ratio-grid">
-        ${ratioOptions.map(([value,label]) => `<button type="button" class="image-ratio-option ${value === ratio ? 'active' : ''}" data-image-setting-param="ratio" data-image-setting-value="${escapeHtml(value)}" ${value === 'auto' && autoDisabled ? `disabled title="${escapeHtml(tr('smart.imageAspectAutoPixelDisabled'))}"` : ''}><span class="ratio-icon ${ratioIconClass(value)}"></span><span>${escapeHtml(label)}</span></button>`).join('')}
+        ${ratioOptions.map(([value,label]) => {
+            const unavailable = (value === 'auto' && autoDisabled)
+                || (caps.catalogControlled && caps.aspectRatios.length > 0 && !caps.aspectRatios.includes(VENICE_IMAGE_RATIO_TO_API[value]));
+            return `<button type="button" class="image-ratio-option ${value === ratio ? 'active' : ''}" data-image-setting-param="ratio" data-image-setting-value="${escapeHtml(value)}" ${unavailable ? `disabled aria-disabled="true"${value === 'auto' ? ` title="${escapeHtml(tr('smart.imageAspectAutoPixelDisabled'))}"` : ''}` : ''}><span class="ratio-icon ${ratioIconClass(value)}"></span><span>${escapeHtml(label)}</span></button>`;
+        }).join('')}
     </div>`;
     const countHtml = `<div class="image-count-grid">
         ${[1,2,4].map(value => `<button type="button" class="${value === count ? 'active' : ''}" data-image-setting-param="count" data-image-setting-value="${value}">${value}${escapeHtml(tr('smart.countUnit'))}</button>`).join('')}
@@ -6051,7 +6489,7 @@ function renderImageSettingsControl(){
     return `<div class="smart-control parameter-settings-control image-settings-control">
         <button class="smart-pill parameter-settings-pill image-settings-pill" type="button" aria-haspopup="dialog" aria-expanded="false">
             <i data-lucide="sliders-horizontal"></i>
-            <span class="image-settings-summary">${escapeHtml(imageSettingsSummaryParts(settings).join(' · '))}</span>
+            <span class="image-settings-summary">${escapeHtml(imageSettingsSummaryParts(settings, {hasReferenceImage}).join(' · '))}</span>
         </button>
         <div class="smart-popover parameter-settings-popover image-settings-popover" role="dialog" aria-label="${escapeHtml(tr('smart.imageParameters'))}">
             ${renderImageSettingSection(tr('smart.imageQuality'), qualityHtml)}
@@ -7100,6 +7538,8 @@ function renderDynamicParams(){
         closeGenerationModePanel();
         scheduleSave();
     }
+    syncRunButtonState();
+    syncCascadeRunButton();
     if(window.lucide) lucide.createIcons();
 }
 function renderApiParams(){
@@ -8499,6 +8939,7 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-image-setting-param]').forEach(btn => {
         btn.onclick = event => {
+            if(btn.disabled) return;
             event.preventDefault();
             event.stopPropagation();
             markControlInteracting(btn);
@@ -8512,6 +8953,7 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-video-setting-param]').forEach(btn => {
         btn.onclick = event => {
+            if(btn.disabled) return;
             event.preventDefault();
             event.stopPropagation();
             markControlInteracting(btn);
@@ -8523,6 +8965,7 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-video-bool-param]').forEach(btn => {
         btn.onclick = event => {
+            if(btn.disabled) return;
             event.preventDefault();
             event.stopPropagation();
             markControlInteracting(btn);
@@ -8555,7 +8998,10 @@ function bindDynamicParams(){
             const caps = videoCapabilitiesFor(settings);
             const min = Math.max(4, Number(caps.duration?.min) || 4);
             const max = Math.min(15, Math.max(min, Number(caps.duration?.max) || 15));
-            const value = Math.max(min, Math.min(max, Number(input.value) || 5));
+            const bounded = Math.max(min, Math.min(max, Number(input.value) || 5));
+            const value = Array.isArray(caps.duration?.values) && caps.duration.values.length
+                ? caps.duration.values.reduce((closest, candidate) => Math.abs(candidate - bounded) < Math.abs(closest - bounded) ? candidate : closest, caps.duration.values[0])
+                : bounded;
             input.value = String(value);
             input.style.setProperty('--video-duration-progress', `${max > min ? ((value - min) / (max - min)) * 100 : 100}%`);
             ctrl?.querySelector('.video-duration-value')?.replaceChildren(document.createTextNode(String(value)));
@@ -9656,7 +10102,9 @@ function smartRunButtonCancelTarget(node=selectedNode()){
 function syncRunButtonState(node=selectedNode()){
     if(!runBtn) return;
     const stopping = Boolean(smartRunButtonCancelTarget(node));
+    const capabilityIssue = stopping ? null : smartNodeVeniceCapabilityIssue(node);
     const runLabel = stopping ? (tr('common.stop') || '停止') : tr('smart.run');
+    const runTitle = capabilityIssue ? smartVeniceCapabilityIssueMessage(capabilityIssue) : runLabel;
     const runMode = stopping ? 'stop' : 'run';
     if(runBtn.dataset.runMode !== runMode){
         runBtn.dataset.runMode = runMode;
@@ -9666,8 +10114,8 @@ function syncRunButtonState(node=selectedNode()){
         refreshIcons();
     }
     runBtn.classList.toggle('is-stop', stopping);
-    runBtn.title = runLabel;
-    runBtn.setAttribute('aria-label', runLabel);
+    runBtn.title = runTitle;
+    runBtn.setAttribute('aria-label', runTitle);
     // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
     runBtn.disabled = stopping ? false : smartNodeRunDisabled(node);
@@ -21676,11 +22124,34 @@ function buildSmartAncestorRunPlan(targetId){
     const skippedIds = [...allReachable].filter(id => !activeIds.has(id) || pinnedBoundaryIds.has(id));
     const reachableConnections = connections.filter(conn => allReachable.has(conn.from) && allReachable.has(conn.to));
     const runConnections = connections.filter(conn => activeIds.has(conn.from) && activeIds.has(conn.to));
+    const plannedAncestorIds = (id, seen=new Set()) => {
+        const found = new Set();
+        for(const dependencyId of dependencies.get(id) || []){
+            if(seen.has(dependencyId)) continue;
+            found.add(dependencyId);
+            const nextSeen = new Set(seen);
+            nextSeen.add(dependencyId);
+            plannedAncestorIds(dependencyId, nextSeen).forEach(ancestorId => found.add(ancestorId));
+        }
+        return found;
+    };
+    const capabilityIssues = layers.flat()
+        .map(id => {
+            const expectedKinds = new Set([...plannedAncestorIds(id, new Set([id]))]
+                .map(ancestorId => smartNodeExpectedMediaKind(nodeById.get(ancestorId)))
+                .filter(Boolean));
+            return smartNodeVeniceCapabilityIssue(nodeById.get(id), null, {
+                hasExpectedImage:expectedKinds.has('image'),
+                hasExpectedMedia:expectedKinds.size > 0
+            });
+        })
+        .filter(Boolean);
     const targetRunnable = Boolean(smartAncestorRunnableKind(target));
     let invalid = '';
     if(cycleIds.length) invalid = 'cycle';
     else if(unsupportedLoopIds.size) invalid = 'loop';
     else if(invalidPinnedIds.length) invalid = 'pinned-output';
+    else if(capabilityIssues.length) invalid = 'capability';
     else if(!targetRunnable) invalid = 'target-not-runnable';
     else if(!layers.length) invalid = 'no-steps';
     return {
@@ -21698,6 +22169,7 @@ function buildSmartAncestorRunPlan(targetId){
         skippedIds,
         unsupportedLoopIds:[...unsupportedLoopIds],
         invalidPinnedIds,
+        capabilityIssues,
         cycleIds,
         reachableConnections,
         connections:runConnections,
@@ -22126,12 +22598,14 @@ function syncCascadeRunButton(node=selectedNode()){
         if(plan.invalid === 'cycle') summary = '无法运行：存在循环连线';
         else if(plan.invalid === 'loop') summary = '该链路包含循环节点，暂未接入新运行模式';
         else if(plan.invalid === 'pinned-output') summary = '无法运行：固定节点没有结果';
+        else if(plan.invalid === 'capability') summary = smartVeniceCapabilityIssueMessage(plan.capabilityIssues?.[0]);
         else {
             const skipped = plan.skippedIds.length;
             summary = `运行 ${plan.stepIds.length} 个${skipped ? ` · 固定跳过 ${skipped} 个` : ''}${plan.unpinTarget ? ' · 取消当前固定' : ''}`;
         }
     }
-    cascadeRunBtn.disabled = !visible || (Boolean(smartAncestorCascadeRun) && !runningForNode) || stoppingForNode || (!runningForNode && Boolean(node?.running));
+    cascadeRunBtn.disabled = !visible || (Boolean(smartAncestorCascadeRun) && !runningForNode) || stoppingForNode
+        || (!runningForNode && (Boolean(node?.running) || plan?.invalid === 'capability'));
     cascadeRunBtn.classList.toggle('is-stop', runningForNode);
     cascadeRunBtn.title = summary;
     cascadeRunBtn.setAttribute('aria-label', summary);
@@ -22170,6 +22644,7 @@ function smartAncestorRunErrorMessage(plan){
     if(plan?.invalid === 'cycle') return '无法运行：存在循环连线';
     if(plan?.invalid === 'loop') return '该链路包含循环节点，暂未接入新运行模式';
     if(plan?.invalid === 'pinned-output') return '无法运行：固定节点没有结果';
+    if(plan?.invalid === 'capability') return smartVeniceCapabilityIssueMessage(plan.capabilityIssues?.[0]);
     if(plan?.invalid === 'target-not-runnable') return '当前节点不是画布生成节点';
     return '没有可运行的上游节点';
 }
@@ -23608,14 +24083,17 @@ function smartGenerationPreflightError(runSettings=settings, refs=[]){
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=null, runContext=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
+    const hasReferenceImage = imageRefsOnly(refs).length > 0;
     const requestSettings = normalizeImageSettingsForCapabilities({...runSettings}, {
-        hasReferenceImage:imageRefsOnly(refs).length > 0
+        hasReferenceImage
     });
+    const imageCaps = imageCapabilitiesFor(requestSettings, {hasReferenceImage});
+    if(imageCaps.invalid || imageCaps.pending) throw new Error(imageCaps.errorDetail || imageCaps.errorTitle || 'Venice 图片参数不可用');
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(requestSettings.provider_id);
     const jobs = smartImageGenerationJobs(refs, requestSettings);
     const count = jobs.length;
     const veniceImageProvider = isVeniceProviderId(requestSettings.provider_id);
-    if(veniceImageProvider) ensureVeniceProgress(runContext, {kind:'image', total:count, estimateMs:VENICE_IMAGE_ESTIMATE_MS});
+    if(veniceImageProvider) ensureVeniceProgress(runContext, {kind:'image', total:count, estimateMs:veniceImageEstimateMs(requestSettings, hasReferenceImage)});
     const providerPrompts = (requestMeta && typeof requestMeta === 'object' && requestMeta.providerPrompts && typeof requestMeta.providerPrompts === 'object')
         ? requestMeta.providerPrompts
         : {};
@@ -23626,7 +24104,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, requestMeta=
         model:requestSettings.model,
         size:sizeForRun(requestSettings),
         size_spec:imageSizeSpecForRun(requestSettings),
-        quality:imageQualityForRequest(requestSettings),
+        quality:imageQualityForRequest(requestSettings, {hasReferenceImage}),
         n:1
     };
     const payloads = jobs.map(job => ({
@@ -23769,11 +24247,16 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, request
     const veniceProgressId = veniceVideoProvider && runContext
         ? `${runContext.runId}_${Math.random().toString(36).slice(2, 9)}`
         : '';
-    if(veniceVideoProvider) ensureVeniceProgress(runContext, {kind:'video', total:1});
+    const initialVideoContext = {
+        images:imageRefsOnly(refs), videos:videoRefsOnly(refs), audios:audioRefsOnly(refs)
+    };
+    const hasVideoMedia = Boolean(initialVideoContext.images.length || initialVideoContext.videos.length || initialVideoContext.audios.length || manualSmartVideoLink(runSettings)?.url);
+    const videoCaps = videoCapabilitiesFor(runSettings, {hasMedia:hasVideoMedia});
+    if(videoCaps.invalid || videoCaps.pending) throw new Error(videoCaps.errorDetail || videoCaps.errorTitle || 'Venice 视频参数不可用');
+    if(veniceVideoProvider) ensureVeniceProgress(runContext, {kind:'video', total:1, estimateMs:veniceVideoEstimateMs(runSettings, hasVideoMedia)});
     const veniceCreditsToken = beginVeniceCreditsFastRefresh(runSettings.videoProvider || '');
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
-        const videoCaps = videoCapabilitiesFor(runSettings);
         const trustedMode = Boolean(videoCaps.trustedAsset && runSettings.videoTrustedAsset);
         const trustedSource = trustedMode ? (['library','cloud','manual'].includes(runSettings.videoTrustedSource) ? runSettings.videoTrustedSource : 'library') : 'none';
         // 仅「素材库链接」来源才走 asset:// 认证地址 + 后端可信素材路由；上传云端/手动网址走普通直链。
@@ -24816,8 +25299,8 @@ function ensureVeniceProgress(context, {kind='image', total=1, estimateMs=null}=
                 index,
                 status:'running',
                 nodeName:`Venice · ${kind === 'video' ? '视频' : '图片'}`,
-                value:kind === 'image' ? 0 : null,
-                max:kind === 'image' ? 1 : null,
+                value:Number(estimateMs) > 0 ? 0 : null,
+                max:Number(estimateMs) > 0 ? 1 : null,
                 resultItems:[],
                 error:'',
                 estimateMs:Number(estimateMs) > 0 ? Number(estimateMs) : null,
@@ -24844,11 +25327,7 @@ function tickVeniceProgress(context){
     state.tasks.forEach(task => {
         if(['succeeded','failed','cancelled'].includes(task.status) || !(Number(task.estimateMs) > 0)) return;
         const localElapsed = Math.max(0, now - Number(task.startedAt || now));
-        const serverElapsed = Number(task.executionMs) >= 0
-            ? Number(task.executionMs) + Math.max(0, now - Number(task.observedAt || now))
-            : 0;
-        const elapsed = state.kind === 'video' ? Math.max(serverElapsed, 0) : localElapsed;
-        const next = veniceProgressFraction(elapsed, task.estimateMs);
+        const next = veniceProgressFraction(localElapsed, task.estimateMs);
         const previous = Number(task.value);
         const monotonic = Number.isFinite(previous) ? Math.max(previous, next) : next;
         if(task.max !== 1 || !Number.isFinite(previous) || Math.abs(monotonic - previous) >= .0005){
@@ -24864,19 +25343,6 @@ function updateVeniceVideoProgress(context, payload={}){
     const node = runningHubProgressNodeForContext(context);
     const task = node?.veniceProgress?.tasks?.[0];
     if(!task) return;
-    const incomingAverage = Number(payload.average_execution_time);
-    if(Number.isFinite(incomingAverage) && incomingAverage > 0){
-        if(!(Number(task.estimateMs) > 0)){
-            task.estimateMs = incomingAverage;
-        } else {
-            // Venice's average shifts slightly on every poll. Smooth it and
-            // cap each adjustment so the visible stroke never surges or stalls.
-            const current = Number(task.estimateMs);
-            const blendedDelta = (incomingAverage - current) * .18;
-            const cappedDelta = Math.max(-current * .025, Math.min(current * .025, blendedDelta));
-            task.estimateMs = Math.max(1000, current + cappedDelta);
-        }
-    }
     const incomingDuration = Number(payload.execution_duration);
     if(Number.isFinite(incomingDuration) && incomingDuration >= 0){
         task.executionMs = Math.max(Number(task.executionMs) || 0, incomingDuration);
@@ -27893,6 +28359,7 @@ window.onload = async () => {
     prepareSmartNotificationServiceWorker();
     startVeniceCreditsAutoRefresh();
     await loadConfig();
+    void loadVeniceModelCatalogOnce();
     smartCanvasLoadBaseSettings = cloneSmartSettings(settings);
     await loadAssetLibrary();
     await loadCanvas();

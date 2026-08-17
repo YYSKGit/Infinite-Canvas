@@ -474,6 +474,7 @@ VENICE_OUTERFACE_IMAGE_URL = "https://outerface.venice.ai/api/inference/image"
 VENICE_OUTERFACE_IMAGE_QUOTE_URL = "https://outerface.venice.ai/api/inference/image/quote"
 VENICE_OUTERFACE_IMAGE_EDIT_URL = "https://outerface.venice.ai/api/inference/multi-edit"
 VENICE_OUTERFACE_USER_SESSION_URL = "https://outerface.venice.ai/api/user/session"
+VENICE_OUTERFACE_MODELS_URL = "https://outerface.venice.ai/api/app/models"
 VENICE_OUTERFACE_VERSION = os.getenv("VENICE_OUTERFACE_VERSION", "0")
 VENICE_DEFAULT_WEB_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -487,6 +488,7 @@ VENICE_AUTH_REFRESH_SECONDS = max(5.0, float(os.getenv("VENICE_AUTH_REFRESH_SECO
 VENICE_WEB_AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
 VENICE_WEB_AUTH_LOCKS: Dict[str, asyncio.Lock] = {}
 VENICE_AUTH_REFRESH_FAILURES: Dict[str, Dict[str, Any]] = {}
+VENICE_MODEL_CATALOGS: Dict[str, Dict[str, Any]] = {}
 VENICE_AUTH_FAILURE_LOG_INTERVAL = max(60.0, float(os.getenv("VENICE_AUTH_FAILURE_LOG_INTERVAL", "300") or 300))
 VENICE_AUTH_MAX_FAILURE_BACKOFF = max(VENICE_AUTH_REFRESH_SECONDS, float(os.getenv("VENICE_AUTH_MAX_FAILURE_BACKOFF", "300") or 300))
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
@@ -2654,7 +2656,6 @@ def update_venice_video_progress(progress_id: str, **patch):
         current = VENICE_VIDEO_PROGRESS.setdefault(progress_id, {
             "progress_id": progress_id,
             "status": "SUBMITTING",
-            "average_execution_time": None,
             "execution_duration": None,
             "created_at": now,
         })
@@ -4655,7 +4656,7 @@ def normalize_model_routes(value):
             if not target:
                 continue
             selected_model(target, target)
-            if target.lower().replace("_", "-") == source.lower().replace("_", "-"):
+            if target.lower() == source.lower():
                 raise HTTPException(status_code=400, detail=f"Venice 模型 {source} 的关联模型不能指向自身。")
             routes[route_name] = target
         if routes:
@@ -9072,11 +9073,76 @@ def venice_size_resolution(size, size_spec=None):
     resolved = resolve_image_size_spec(size, size_spec)
     return resolved.get("resolution") or "1K"
 
+def normalize_venice_catalog_model_id(value) -> str:
+    return str(value or "").strip().lower()
+
+def normalize_venice_model_catalog(raw, provider_id=""):
+    """Keep a page-load snapshot of Venice's public model contract.
+
+    The category/model structure is intentionally retained instead of being
+    collapsed into today's UI flags so later capability work can reuse the
+    same on-demand catalog without changing the fetch contract.
+    """
+    categories = {}
+    if isinstance(raw, dict):
+        for category, payload in raw.items():
+            if not isinstance(payload, dict):
+                continue
+            models = [dict(model) for model in (payload.get("models") or []) if isinstance(model, dict)]
+            categories[str(category)] = {
+                **{key: value for key, value in payload.items() if key != "models"},
+                "models": models,
+            }
+    return {
+        "provider_id": str(provider_id or "venice"),
+        "fetched_at": time.time(),
+        "categories": categories,
+    }
+
+def venice_catalog_for_provider(provider=None):
+    return VENICE_MODEL_CATALOGS.get(venice_auth_cache_key(provider)) or {}
+
+def venice_catalog_model(provider, model, categories=None):
+    target = normalize_venice_catalog_model_id(model)
+    if not target:
+        return {}
+    catalog = venice_catalog_for_provider(provider)
+    category_map = catalog.get("categories") if isinstance(catalog, dict) else {}
+    if not isinstance(category_map, dict):
+        return {}
+    category_names = list(categories or category_map.keys())
+    for category in category_names:
+        payload = category_map.get(category) or {}
+        for item in payload.get("models") or []:
+            if not isinstance(item, dict):
+                continue
+            aliases = item.get("aliasIds") if isinstance(item.get("aliasIds"), list) else []
+            identifiers = [item.get("id"), item.get("apiModelId"), *aliases]
+            if any(normalize_venice_catalog_model_id(value) == target for value in identifiers):
+                return item
+    return {}
+
+def venice_catalog_image_capability(provider, model):
+    item = venice_catalog_model(provider, model, ("image", "inpaint"))
+    settings = item.get("settings") if isinstance(item, dict) else {}
+    if not isinstance(settings, dict):
+        return {}
+    aspect_ratio = settings.get("aspectRatio")
+    resolution = settings.get("resolution")
+    quality = settings.get("quality")
+    has_aspect = isinstance(aspect_ratio, dict) and bool(aspect_ratio.get("options"))
+    has_resolution = isinstance(resolution, dict) and bool(resolution.get("options"))
+    has_quality = isinstance(quality, dict) and bool(quality.get("options"))
+    return {
+        "size_mode": "aspect_resolution" if has_aspect and has_resolution else ("aspect" if has_aspect else "pixel"),
+        "supports_quality": has_quality,
+    }
+
 def provider_model_image_capability(provider, model):
     capabilities = normalize_image_capabilities((provider or {}).get("image_capabilities"))
-    normalized_model = str(model or "").strip().lower().replace("_", "-")
+    normalized_model = str(model or "").strip().lower()
     for configured_model, capability in capabilities.items():
-        if str(configured_model or "").strip().lower().replace("_", "-") == normalized_model:
+        if str(configured_model or "").strip().lower() == normalized_model:
             return capability
     return {}
 
@@ -9086,17 +9152,20 @@ def provider_model_image_size_mode(provider, model, fallback="enumerated"):
         return capability["size_mode"]
     # Compatibility for callers that construct an old provider dict directly.
     modes = normalize_image_size_modes((provider or {}).get("image_size_modes"))
-    normalized_model = str(model or "").strip().lower().replace("_", "-")
+    normalized_model = str(model or "").strip().lower()
     for configured_model, mode in modes.items():
-        if str(configured_model or "").strip().lower().replace("_", "-") == normalized_model:
+        if str(configured_model or "").strip().lower() == normalized_model:
             return mode
     return fallback
 
 def venice_model_capability(model, provider=None):
-    normalized_model = str(model or "").strip().lower().replace("_", "-")
+    catalog = venice_catalog_image_capability(provider, model)
+    if catalog:
+        return catalog
+    normalized_model = str(model or "").strip().lower()
     override = next((
         capability for configured_model, capability in VENICE_IMAGE_CAPABILITY_OVERRIDES.items()
-        if str(configured_model or "").strip().lower().replace("_", "-") == normalized_model
+        if str(configured_model or "").strip().lower() == normalized_model
     ), {})
     configured = provider_model_image_capability(provider, model)
     return {
@@ -9185,12 +9254,12 @@ def venice_model_route(model, route_name, provider=None):
     raw = str(model or "").strip()
     if not raw:
         return None
-    normalized = raw.lower().replace("_", "-")
+    normalized = normalize_venice_catalog_model_id(raw)
     routes = (provider or {}).get("model_routes")
     if not isinstance(routes, dict) or not routes:
         routes = VENICE_DEFAULT_MODEL_ROUTES
     for source, source_routes in routes.items():
-        if str(source or "").strip().lower().replace("_", "-") != normalized:
+        if normalize_venice_catalog_model_id(source) != normalized:
             continue
         if not isinstance(source_routes, dict):
             return None
@@ -9202,8 +9271,16 @@ def venice_image_edit_model(model, provider=None):
     raw = str(model or "").strip()
     if not raw:
         return None
-    normalized = raw.lower().replace("_", "-")
-    if normalized.endswith("-edit"):
+    suffix_normalized = raw.lower()
+    catalog = venice_catalog_for_provider(provider)
+    if catalog:
+        if venice_catalog_model(provider, raw, ("inpaint",)):
+            return raw
+        if not venice_catalog_model(provider, raw, ("image",)):
+            return None
+        routed = venice_model_route(raw, "image_edit", provider)
+        return routed if routed and venice_catalog_model(provider, routed, ("inpaint",)) else None
+    if suffix_normalized.endswith("-edit"):
         return raw
     return venice_model_route(raw, "image_edit", provider)
 
@@ -9211,7 +9288,15 @@ def venice_video_text_model(model, provider=None):
     raw = str(model or "").strip()
     if not raw:
         return None
-    normalized = raw.lower().replace("_", "-")
+    normalized = raw.lower()
+    catalog = venice_catalog_for_provider(provider)
+    catalog_model = venice_catalog_model(provider, raw, ("video",))
+    catalog_capabilities = catalog_model.get("capabilities") if isinstance(catalog_model, dict) else {}
+    if catalog:
+        if isinstance(catalog_capabilities, dict) and catalog_capabilities.get("textToVideo") is True:
+            return raw
+        routed = venice_model_route(raw, "text_to_video", provider)
+        return routed if routed and venice_catalog_model(provider, routed, ("video",)) else None
     if normalized.endswith("-text-to-video"):
         return raw
     return venice_model_route(raw, "text_to_video", provider)
@@ -9552,6 +9637,28 @@ async def venice_web_request(client, provider, send):
     token, user_id = await venice_web_auth_info(client, provider, force_refresh=True, stale_token=token)
     return await send(token, user_id)
 
+async def venice_fetch_model_catalog(client, provider):
+    async def send(token, _user_id):
+        headers = venice_web_headers({
+            "Accept": "application/json",
+            "Authorization": bearer_auth_value(token),
+            "x-venice-middleface-version": VENICE_OUTERFACE_VERSION,
+        })
+        return await client.get(
+            VENICE_OUTERFACE_MODELS_URL,
+            headers=headers,
+            params={"matureFilter": "false", "onlySafeVenice": "false"},
+        )
+
+    response = await venice_web_request(client, provider, send)
+    response.raise_for_status()
+    raw = response.json()
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=502, detail="Venice 模型目录返回格式无效。")
+    catalog = normalize_venice_model_catalog(raw, (provider or {}).get("id") or "venice")
+    VENICE_MODEL_CATALOGS[venice_auth_cache_key(provider)] = catalog
+    return catalog
+
 async def refresh_configured_venice_web_auth(force_refresh: bool):
     providers = [
         item for item in load_api_providers()
@@ -9762,7 +9869,6 @@ async def wait_for_venice_video_retrieve(client, provider, model, queue_id, queu
             progress_id,
             status=status or "PROCESSING",
             queue_id=queue_id,
-            average_execution_time=(raw or {}).get("average_execution_time"),
             execution_duration=(raw or {}).get("execution_duration"),
         )
         if status == "COMPLETED":
@@ -9984,7 +10090,9 @@ async def generate_venice_web_image_edit(client, prompt, model, ref, provider, q
         "prompt": str(prompt or ""),
         "requestId": venice_outerface_request_id(),
     }
-    data.update(venice_image_edit_size_fields(size, size_spec, model, provider))
+    # Size support belongs to the routed inpaint model that receives this
+    # multipart request, not to the user-selected text-to-image entry model.
+    data.update(venice_image_edit_size_fields(size, size_spec, edit_model, provider))
     compiled_quality = compile_venice_image_quality(quality, model, provider)
     if compiled_quality:
         data["quality"] = compiled_quality
@@ -14658,6 +14766,28 @@ async def get_venice_credits(provider_id: str = "venice"):
         "provider_id": str(provider.get("id") or provider_id),
         **usage,
     }
+
+@app.get("/api/venice/models/catalog")
+async def get_venice_models_catalog(provider_id: str = "venice"):
+    """Fetch once on demand; the Smart Canvas page owns the request timing."""
+    provider = get_api_provider(provider_id)
+    if not is_venice_provider(provider):
+        raise HTTPException(status_code=400, detail=f"平台 {provider.get('name') or provider.get('id') or provider_id} 不是 Venice。")
+    timeout = httpx.Timeout(connect=20.0, read=45.0, write=20.0, pool=20.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            return await venice_fetch_model_catalog(client, provider)
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as exc:
+        detail = venice_http_error_detail(exc.response, "Venice 模型目录查询失败")
+        raise HTTPException(status_code=502, detail=f"Venice 模型目录查询失败：{detail}") from exc
+    except httpx.HTTPError as exc:
+        detail = network_exception_detail(exc)
+        raise HTTPException(status_code=502, detail=f"Venice 模型目录查询网络异常：{detail}") from exc
+    except Exception as exc:
+        detail = network_exception_detail(exc)
+        raise HTTPException(status_code=502, detail=f"Venice 模型目录查询失败：{detail}") from exc
 
 @app.get("/api/venice/video/progress/{progress_id}")
 async def get_venice_video_progress(progress_id: str):

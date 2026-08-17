@@ -1135,14 +1135,15 @@ test('Venice image and video tasks reuse the border with stable asymptotic estim
         (sandbox.atEstimate - sandbox.beforeEstimate)
         - (sandbox.afterEstimate - sandbox.atEstimate)
     ) < 0.00005);
-    assert.match(jsSource, /const VENICE_IMAGE_ESTIMATE_MS = 10000;/);
+    assert.match(jsSource, /const VENICE_FALLBACK_IMAGE_ESTIMATE_MS = 10000;/);
     assert.match(jsSource, /const VENICE_PROGRESS_TICK_MS = 100;/);
     assert.match(jsSource, /node\?\.runningHubProgress \|\| node\?\.veniceProgress/);
     assert.match(cssSource, /\.rh-progress-border-host\.is-venice-progress \.rh-progress-stroke\s*\{[^}]*stroke-dasharray \.1s linear,/);
-    assert.match(jsSource, /average_execution_time/);
+    assert.doesNotMatch(jsSource, /average_execution_time/);
     assert.match(jsSource, /execution_duration/);
-    assert.match(jsSource, /const cappedDelta = Math\.max\(-current \* \.025/);
+    assert.match(jsSource, /veniceCatalogAverageExecutionTime/);
+    assert.match(jsSource, /const next = veniceProgressFraction\(localElapsed, task\.estimateMs\)/);
     assert.match(backendSource, /@app\.get\("\/api\/venice\/video\/progress\/\{progress_id\}"\)/);
-    assert.match(backendSource, /average_execution_time=\(raw or \{\}\)\.get\("average_execution_time"\)/);
+    assert.doesNotMatch(backendSource, /average_execution_time=\(raw or \{\}\)\.get\("average_execution_time"\)/);
     assert.match(backendSource, /execution_duration=\(raw or \{\}\)\.get\("execution_duration"\)/);
 });

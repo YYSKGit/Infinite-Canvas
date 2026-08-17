@@ -62,14 +62,21 @@ function extractFunction(name){
     assert.fail(`unterminated production function ${name}`);
 }
 
-function buildPlan(nodes, connections, targetId){
+function buildPlan(nodes, connections, targetId, invalidCapabilityIds=[], expectedImageCapabilityIds=[]){
     const sandbox = vm.createContext({
         nodes,
         canvas:{connections},
         isHistoryGroupNode:node => Boolean(node?.historyFor || node?.isHistoryGroup),
         isSmartImageNode:node => Boolean(node && (!node.type || node.type === 'smart-image')),
         smartNodeHasDisplayResult:node => Boolean((node?.images || []).some(image => image?.url)),
-        smartNodeInFlight:node => Boolean(node?.running || node?.pending || node?.queued)
+        smartNodeInFlight:node => Boolean(node?.running || node?.pending || node?.queued),
+        smartNodeExpectedMediaKind:node => node?.type === 'smart-prompt' ? '' : (node?.expectedMediaKind || 'image'),
+        smartNodeVeniceCapabilityIssue:(node, _source, options={}) => (
+            invalidCapabilityIds.includes(node?.id)
+            || (expectedImageCapabilityIds.includes(node?.id) && options.hasExpectedImage === true)
+        )
+            ? {nodeId:node.id, errorTitle:'Venice 参数不可用', errorDetail:'测试模型 ID 无效'}
+            : null
     });
     const names = [
         'smartAncestorRunnableKind',
@@ -153,6 +160,37 @@ test('a pinned node cuts off itself and its exclusive upstream path', () => {
         new Set(['upload->a', 'a->checkpoint', 'checkpoint->target'])
     );
     assert.deepEqual(plan.connections.map(connection => `${connection.from}->${connection.to}`), ['checkpoint->target']);
+});
+
+test('capability errors disable only nodes that the pinned-aware ancestor plan will execute', () => {
+    const invalidUpstream = buildPlan(
+        [generated('broken'), generated('target')],
+        [edge('broken', 'target')],
+        'target',
+        ['broken']
+    );
+    assert.equal(invalidUpstream.invalid, 'capability');
+    assert.deepEqual([...invalidUpstream.capabilityIssues].map(issue => issue.nodeId), ['broken']);
+
+    const futureEditInput = buildPlan(
+        [generated('producer'), generated('target')],
+        [edge('producer', 'target')],
+        'target',
+        [],
+        ['target']
+    );
+    assert.equal(futureEditInput.invalid, 'capability');
+    assert.deepEqual([...futureEditInput.capabilityIssues].map(issue => issue.nodeId), ['target']);
+
+    const pinnedBroken = buildPlan(
+        [generated('broken', 0, 0, {cascadePinned:true}), generated('target')],
+        [edge('broken', 'target')],
+        'target',
+        ['broken']
+    );
+    assert.equal(pinnedBroken.invalid, '');
+    assert.deepEqual([...pinnedBroken.capabilityIssues], []);
+    assert.deepEqual([...pinnedBroken.stepIds], ['target']);
 });
 
 test('shared upstream still runs when required by an unpinned branch', () => {

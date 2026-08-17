@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
 
@@ -33,13 +33,40 @@ class ApiProviderSettingsTests(unittest.TestCase):
             "custom-image": {"image_edit": "custom-image-edit"},
             "custom-video": {"text_to_video": "custom-text-video"},
         }}
-        self.assertEqual(main.venice_image_edit_model("custom_image", provider), "custom-image-edit")
+        self.assertEqual(main.venice_image_edit_model("CUSTOM-IMAGE", provider), "custom-image-edit")
         self.assertEqual(main.venice_video_text_model("CUSTOM-VIDEO", provider), "custom-text-video")
+        self.assertIsNone(main.venice_image_edit_model("custom_image", provider))
         self.assertIsNone(main.venice_image_edit_model("unmapped-image", provider))
+
+    def test_venice_catalog_allows_exact_direct_edit_and_text_video_models(self):
+        provider = {"id": "venice-direct", "model_routes": {
+            "base-image": {"image_edit": "missing-edit"},
+            "reference-video": {"text_to_video": "missing-text-video"},
+        }}
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [{"id": "base-image", "settings": {}}]},
+            "inpaint": {"models": [{"id": "qwen-edit-uncensored", "settings": {}}]},
+            "video": {"models": [
+                {"id": "dual-purpose-video", "capabilities": {"textToVideo": True}, "settings": {}},
+                {"id": "reference-video", "capabilities": {"textToVideo": False}, "settings": {}},
+            ]},
+        }, provider["id"])
+        main.VENICE_MODEL_CATALOGS[main.venice_auth_cache_key(provider)] = catalog
+        try:
+            self.assertEqual(main.venice_image_edit_model("qwen-edit-uncensored", provider), "qwen-edit-uncensored")
+            self.assertEqual(main.venice_video_text_model("dual-purpose-video", provider), "dual-purpose-video")
+            self.assertIsNone(main.venice_image_edit_model("base-image", provider))
+            self.assertIsNone(main.venice_video_text_model("reference-video", provider))
+        finally:
+            main.VENICE_MODEL_CATALOGS.pop(main.venice_auth_cache_key(provider), None)
 
     def test_venice_route_cannot_point_to_itself(self):
         with self.assertRaises(HTTPException):
-            main.normalize_model_routes({"same-model": {"image_edit": "same_model"}})
+            main.normalize_model_routes({"same-model": {"image_edit": "SAME-MODEL"}})
+        self.assertEqual(
+            main.normalize_model_routes({"same-model": {"image_edit": "same_model"}}),
+            {"same-model": {"image_edit": "same_model"}},
+        )
 
     def test_missing_venice_route_error_stays_compact(self):
         detail = main.venice_missing_model_route_detail("example-model", "image_edit")
@@ -82,6 +109,55 @@ class ApiProviderSettingsTests(unittest.TestCase):
         with patch.object(main, "VENICE_LAST_BROWSER_USER_AGENT", browser_user_agent):
             headers = main.venice_web_headers()
         self.assertEqual(headers["User-Agent"], browser_user_agent)
+
+    def test_venice_model_catalog_retains_future_metadata_and_drives_capability(self):
+        provider = {"id": "venice"}
+        raw = {
+            "image": {"total": 1, "models": [{
+                "id": "image-a",
+                "apiModelId": "image-a-api",
+                "averageExecutionTime": 12345,
+                "settings": {
+                    "aspectRatio": {"default": "1:1", "options": ["1:1", "16:9"]},
+                    "resolution": {"default": "1K", "options": ["1K", "2K"]},
+                    "quality": {"default": "medium", "options": ["low", "medium"]},
+                    "futureSetting": {"enabled": True},
+                },
+                "capabilities": {"futureCapability": True},
+            }]},
+        }
+        catalog = main.normalize_venice_model_catalog(raw, "venice")
+        main.VENICE_MODEL_CATALOGS[main.venice_auth_cache_key(provider)] = catalog
+        try:
+            model = main.venice_catalog_model(provider, "IMAGE-A-API", ("image",))
+            self.assertEqual(model["averageExecutionTime"], 12345)
+            self.assertTrue(model["settings"]["futureSetting"]["enabled"])
+            self.assertEqual(main.venice_catalog_model(provider, "image_a_api", ("image",)), {})
+            self.assertEqual(main.venice_model_capability("image-a", provider), {
+                "size_mode": "aspect_resolution",
+                "supports_quality": True,
+            })
+        finally:
+            main.VENICE_MODEL_CATALOGS.pop(main.venice_auth_cache_key(provider), None)
+
+    def test_venice_model_catalog_fetch_uses_web_auth_and_expected_query_once(self):
+        response = Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"video": {"models": [], "total": 0}}
+        client = AsyncMock()
+        client.get.return_value = response
+        provider = {"id": "venice"}
+        with patch.object(main, "venice_web_auth_info", AsyncMock(return_value=("test-jwt", "user"))):
+            catalog = asyncio.run(main.venice_fetch_model_catalog(client, provider))
+        self.assertEqual(catalog["provider_id"], "venice")
+        client.get.assert_awaited_once()
+        args, kwargs = client.get.await_args
+        self.assertEqual(args[0], main.VENICE_OUTERFACE_MODELS_URL)
+        self.assertEqual(kwargs["params"], {"matureFilter": "false", "onlySafeVenice": "false"})
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-jwt")
+        self.assertEqual(kwargs["headers"]["x-venice-middleface-version"], main.VENICE_OUTERFACE_VERSION)
+        main.VENICE_MODEL_CATALOGS.pop(main.venice_auth_cache_key(provider), None)
 
     def test_invalid_user_agent_does_not_replace_last_browser_value(self):
         browser_user_agent = "Mozilla/5.0 TestBrowser/123.0"

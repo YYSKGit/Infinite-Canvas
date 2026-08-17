@@ -311,6 +311,7 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
             patch.object(main, "venice_web_request", side_effect=fake_web_request),
             patch.object(main, "venice_raise_for_blocked_response"),
             patch.object(main, "venice_binary_image_response_to_data_url", return_value="data:image/png;base64,eA=="),
+            patch.object(main, "venice_image_edit_size_fields", wraps=main.venice_image_edit_size_fields) as size_fields,
         ):
             asyncio.run(main.generate_venice_web_image_edit(
                 FakeClient(),
@@ -326,6 +327,7 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         self.assertEqual(captured["data"]["quality"], "high")
         self.assertEqual(captured["data"]["aspectRatio"], "3:2")
         self.assertEqual(captured["data"]["resolution"], "2K")
+        self.assertEqual(size_fields.call_args.args[2], "gpt-image-2-edit")
 
     def test_edit_auto_aspect_omits_ratio_but_keeps_selected_resolution(self):
         fields = main.venice_image_edit_size_fields(
@@ -352,6 +354,31 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
             self.provider,
         )
         self.assertEqual(automatic, {})
+
+    def test_routed_edit_size_uses_the_actual_inpaint_catalog_model(self):
+        provider = {
+            "id": "venice-routed-edit-size",
+            "protocol": "venice",
+            "model_routes": {"z-image-turbo": {"image_edit": "qwen-edit-uncensored"}},
+        }
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [{"id": "z-image-turbo", "settings": {"widthHeightDivisor": 8}}]},
+            "inpaint": {"models": [{
+                "id": "qwen-edit-uncensored",
+                "settings": {"aspectRatio": {"default": "auto", "options": ["auto", "3:2"]}},
+            }]},
+        }, provider["id"])
+        cache_key = main.venice_auth_cache_key(provider)
+        main.VENICE_MODEL_CATALOGS[cache_key] = catalog
+        try:
+            edit_model = main.venice_image_edit_model("z-image-turbo", provider)
+            fields = main.venice_image_edit_size_fields(
+                "2048x1360", self.spec, edit_model, provider,
+            )
+        finally:
+            main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+        self.assertEqual(edit_model, "qwen-edit-uncensored")
+        self.assertEqual(fields, {"aspectRatio": "3:2"})
 
     def test_edit_full_auto_omits_all_size_fields(self):
         self.assertEqual(
