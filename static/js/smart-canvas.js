@@ -220,6 +220,8 @@ let imageClickTimer = null;
 let suppressImageClickUntil = 0;
 let lastMouseWorld = null;
 let lastConfigRefreshAt = 0;
+let backgroundDynamicParamsRenderPending = false;
+let backgroundDynamicParamsRenderTimer = 0;
 let smartMinimapState = null;
 let smartMinimapDrag = false;
 let zoomPreviewState = null;
@@ -5789,7 +5791,7 @@ function applyVeniceModelCatalog(catalog){
     veniceModelCatalog = catalog;
     veniceModelCatalogState = 'ready';
     veniceModelCatalogError = '';
-    if(initialSmartCanvasRendered) renderDynamicParams();
+    if(initialSmartCanvasRendered) requestBackgroundDynamicParamsRender();
     return true;
 }
 async function loadVeniceModelCatalogOnce(){
@@ -5822,7 +5824,7 @@ async function loadVeniceModelCatalogOnce(){
             if(!cachedCatalog){
                 veniceModelCatalogState = 'error';
                 veniceModelCatalogError = String(error?.message || error || 'Venice 模型目录加载失败');
-                if(initialSmartCanvasRendered) renderDynamicParams();
+                if(initialSmartCanvasRendered) requestBackgroundDynamicParamsRender();
             }
             toast(cachedCatalog
                 ? 'Venice 模型信息更新失败，已继续使用上次成功记录。'
@@ -6334,7 +6336,7 @@ function renderVideoSettingsControl(){
     const audioSummary = caps.generateAudio
         ? `<i data-lucide="volume-2" class="video-settings-audio-icon" aria-label="${escapeHtml(tr('smart.videoGenerateAudio'))}" ${settings.videoGenerateAudio ? '' : 'hidden'}></i>`
         : '';
-    const visibleAspects = caps.catalogControlled && caps.aspects.length ? ['21:9','16:9','4:3','1:1','3:4','9:16'] : caps.aspects;
+    const visibleAspects = caps.catalogControlled && caps.aspects.length ? ['16:9','9:16','4:3','3:4','21:9','1:1'] : caps.aspects;
     const aspectHtml = visibleAspects.length ? `<div class="video-aspect-grid">
         ${visibleAspects.map(value => `<button type="button" class="video-aspect-option ${value === aspect ? 'active' : ''}" data-video-setting-param="videoAspect" data-video-setting-value="${escapeHtml(value)}" ${caps.catalogControlled && !caps.aspects.includes(value) ? 'disabled aria-disabled="true"' : ''}><span class="ratio-icon ${videoAspectIconClass(value)}"></span><span>${escapeHtml(value)}</span></button>`).join('')}
     </div>` : '';
@@ -7292,7 +7294,31 @@ function comfyParamValue(field){
     if(settings.comfyParams[field.id] !== undefined) return settings.comfyParams[field.id];
     return field.default ?? (field.type === 'boolean' ? false : (field.type === 'number' || field.type === 'slider' ? 0 : ''));
 }
-function updateProviderModels(){ renderDynamicParams(); }
+function activeHoverSmartControl(){
+    return dynamicParams?.querySelector('.smart-control.hover-armed, .smart-control.popover-closing') || null;
+}
+function requestBackgroundDynamicParamsRender(){
+    if(!initialSmartCanvasRendered) return false;
+    if(activeHoverSmartControl()){
+        backgroundDynamicParamsRenderPending = true;
+        return false;
+    }
+    renderDynamicParams();
+    return true;
+}
+function schedulePendingBackgroundDynamicParamsRender(){
+    if(!backgroundDynamicParamsRenderPending) return;
+    if(backgroundDynamicParamsRenderTimer) window.clearTimeout(backgroundDynamicParamsRenderTimer);
+    backgroundDynamicParamsRenderTimer = window.setTimeout(() => {
+        backgroundDynamicParamsRenderTimer = 0;
+        if(activeHoverSmartControl()) return;
+        renderDynamicParams();
+    }, 220);
+}
+function updateProviderModels({background=false}={}){
+    if(background) requestBackgroundDynamicParamsRender();
+    else renderDynamicParams();
+}
 function controlTypeKey(el){
     if(!el) return '';
     const controlClasses = Array.from(el.classList).filter(c => c !== 'smart-control' && c.endsWith('-control'));
@@ -7505,6 +7531,11 @@ function syncEngineSelectUI(){
 }
 function renderDynamicParams(){
     if(!dynamicParams) return;
+    backgroundDynamicParamsRenderPending = false;
+    if(backgroundDynamicParamsRenderTimer){
+        window.clearTimeout(backgroundDynamicParamsRenderTimer);
+        backgroundDynamicParamsRenderTimer = 0;
+    }
     const keepOpen = openControlState();
     const scrollState = dynamicParamsScrollSnapshot();
     settings.engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(settings.engine) ? settings.engine : 'api';
@@ -7684,7 +7715,7 @@ function renderComfyParams(){
     ];
     if(settings.comfyMode === 'custom'){
         if(!settings.comfyWorkflow || !comfyWorkflows.some(w => w.name === settings.comfyWorkflow)) settings.comfyWorkflow = comfyWorkflows[0]?.name || '';
-        if(settings.comfyWorkflow && !comfyWorkflowCache[settings.comfyWorkflow]) ensureComfyWorkflow(settings.comfyWorkflow).then(renderDynamicParams);
+        if(settings.comfyWorkflow && !comfyWorkflowCache[settings.comfyWorkflow]) ensureComfyWorkflow(settings.comfyWorkflow).then(requestBackgroundDynamicParamsRender);
     }
     let html = '';
     if(settings.comfyMode === 'text'){
@@ -8641,7 +8672,7 @@ function setDynamicSetting(key, value, options={}){
     }
     if(key === 'comfyWorkflow') {
         settings.comfyParams = {};
-        ensureComfyWorkflow(settings.comfyWorkflow).then(renderDynamicParams);
+        ensureComfyWorkflow(settings.comfyWorkflow).then(requestBackgroundDynamicParamsRender);
     }
     if(key === 'rhConfigKey'){
         settings.rhParams = {};
@@ -8666,6 +8697,7 @@ function closeAllSmartPopovers({instantControl=null}={}){
     });
     closeGenerationModePanel({disarm:false});
     disarmDynamicParamHover();
+    disarmEngineSelectHover();
     if(outgoingControl){
         // Commit the old panel's hidden state while only that panel has its
         // transition disabled. The incoming panel keeps its normal entrance.
@@ -8684,7 +8716,7 @@ function releaseSmartPopoverClose(ctrl){
     if(!ctrl) return;
     if(ctrl._smartPopoverCloseTimer) window.clearTimeout(ctrl._smartPopoverCloseTimer);
     ctrl._smartPopoverCloseTimer = 0;
-    ctrl._smartPopoverCloseAwaitingLeave = false;
+    ctrl._smartPopoverReopenAfterClose = false;
     ctrl.classList.remove('popover-closing');
 }
 function beginSmartPopoverClose(ctrl){
@@ -8694,18 +8726,16 @@ function beginSmartPopoverClose(ctrl){
     if(!(opacity > 0)) return;
     ctrl.classList.add('popover-closing');
     ctrl.classList.remove('hover-armed');
-    ctrl._smartPopoverCloseAwaitingLeave = false;
+    ctrl._smartPopoverReopenAfterClose = false;
     if(ctrl._smartPopoverCloseTimer) window.clearTimeout(ctrl._smartPopoverCloseTimer);
     ctrl._smartPopoverCloseTimer = window.setTimeout(() => {
         ctrl._smartPopoverCloseTimer = 0;
-        if(ctrl.matches(':hover')){
-            // A pointer that returned during the fade must leave once before
-            // hover can arm this control again; otherwise the completed close
-            // would immediately bounce back open.
-            ctrl._smartPopoverCloseAwaitingLeave = true;
-            return;
-        }
+        const reopenAfterClose = Boolean(ctrl._smartPopoverReopenAfterClose && ctrl.matches(':hover'));
         releaseSmartPopoverClose(ctrl);
+        // Finish the complete close first. If the pointer genuinely returned
+        // during that fade, re-evaluate hover on the next painted frame instead
+        // of either cancelling the close or requiring another leave cycle.
+        if(reopenAfterClose) requestAnimationFrame(() => rearmSmartPopoverAfterClose(ctrl));
     }, 180);
 }
 function dynamicParamHoverBlocked(ctrl){
@@ -8717,6 +8747,7 @@ function dynamicParamHoverBlocked(ctrl){
 let dynamicParamHoverDisarmFrame = 0;
 function disarmDynamicParamHover(){
     dynamicParams?.querySelectorAll('.smart-control').forEach(ctrl => {
+        ctrl._smartPopoverReopenAfterClose = false;
         ctrl.classList.remove('hover-armed');
         if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
         if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
@@ -8727,6 +8758,43 @@ function disarmDynamicParamHover(){
         dynamicParamHoverDisarmFrame = 0;
         dynamicParams?.classList.toggle('hover-reentry-required', dynamicParams.matches(':hover'));
     });
+}
+let engineSelectHoverDisarmFrame = 0;
+function disarmEngineSelectHover(){
+    if(!engineSelect) return;
+    engineSelect._smartPopoverReopenAfterClose = false;
+    engineSelect.classList.remove('hover-armed');
+    engineSelect.classList.toggle('hover-reentry-required', engineSelect.matches(':hover'));
+    if(engineSelectHoverDisarmFrame) cancelAnimationFrame(engineSelectHoverDisarmFrame);
+    engineSelectHoverDisarmFrame = requestAnimationFrame(() => {
+        engineSelectHoverDisarmFrame = 0;
+        // A closing picker can uncover the engine control without a real
+        // pointer entry. Keep it disarmed until the pointer leaves once.
+        engineSelect.classList.toggle('hover-reentry-required', engineSelect.matches(':hover'));
+    });
+}
+function rearmSmartPopoverAfterClose(ctrl){
+    if(!ctrl?.matches?.(':hover') || ctrl.classList.contains('popover-closing')) return;
+    if(ctrl === engineSelect){
+        if(
+            engineSelectHoverDisarmFrame
+            || ctrl.classList.contains('hover-reentry-required')
+            || ctrl.classList.contains('closing')
+            || ctrl.classList.contains('pinned')
+        ) return;
+        ctrl.classList.add('hover-armed');
+        return;
+    }
+    if(!dynamicParams?.contains(ctrl)) return;
+    if(
+        dynamicParamHoverDisarmFrame
+        || dynamicParams.classList.contains('hover-reentry-required')
+        || dynamicParamHoverBlocked(ctrl)
+    ) return;
+    ctrl.classList.add('hover-armed');
+    if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
+    if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
+    revealCurrentPickerOption(ctrl);
 }
 // 悬浮打开弹层后点了里面的参数：标记 interacting，让它熬过重渲染不收起；鼠标真正离开该控件时才关闭。
 function markControlInteracting(el){
@@ -8846,17 +8914,22 @@ function bindDynamicParams(){
     dynamicParams.querySelectorAll('.smart-control').forEach(ctrl => {
         // 悬浮态的多选：鼠标移出整个控件（含上方弹层，弹层是 DOM 子节点）才解除，途中点参数不收起。
         ctrl.onmouseleave = () => {
-            if(ctrl._smartPopoverCloseAwaitingLeave) releaseSmartPopoverClose(ctrl);
-            else if(
+            ctrl._smartPopoverReopenAfterClose = false;
+            if(
                 !ctrl.classList.contains('pinned')
                 && !(ctrl === generationModeControl && generationModeUsesInlineAnchor())
             ) beginSmartPopoverClose(ctrl);
             ctrl.classList.remove('interacting', 'hover-armed', 'hover-dismissed');
             if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
             if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
+            schedulePendingBackgroundDynamicParamsRender();
         };
         ctrl.onmouseenter = () => {
             ctrl.classList.remove('hover-dismissed');
+            if(ctrl.classList.contains('popover-closing')){
+                ctrl._smartPopoverReopenAfterClose = true;
+                return;
+            }
             if(ctrl.classList.contains('hover-armed')){
                 if(ctrl.classList.contains('parameter-settings-control')) syncParameterSettingsOpenState(ctrl);
                 if(ctrl.classList.contains('generation-mode-control')) syncGenerationModeOpenState(ctrl);
@@ -9267,7 +9340,7 @@ async function loadConfig(options={}){
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
         if(options.waitForPointerIdle) await waitForSmartConfigPointerIdle();
-        updateProviderModels();
+        updateProviderModels({background:Boolean(options.waitForPointerIdle)});
         const wf = await fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}));
         comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
         runningHubWorkflowCache = {};
@@ -9280,7 +9353,7 @@ async function loadConfig(options={}){
         lastConfigRefreshAt = Date.now();
         sanitizeSmartApiSelection(settings);
         if(options.waitForPointerIdle) await waitForSmartConfigPointerIdle();
-        updateProviderModels();
+        updateProviderModels({background:Boolean(options.waitForPointerIdle)});
         scheduleVeniceCreditsRefresh('', 80);
     } catch(e) {
         setVeniceCreditsUi({state:'error', title:e?.message || tr('smart.toastApiSettingsFail')});
@@ -9290,7 +9363,7 @@ async function loadConfig(options={}){
 async function refreshSmartConfigFromSettings(){
     await loadConfig({waitForPointerIdle:true});
     await waitForSmartConfigPointerIdle();
-    renderDynamicParams();
+    requestBackgroundDynamicParamsRender();
     const node = selectedNode();
     if(node?.type === 'smart-prompt') {
         applySettingsToNode(node);
@@ -27165,10 +27238,22 @@ if(engineSelect){
             }
         };
     }
+    engineSelect.addEventListener('mouseenter', () => {
+        if(engineSelect.classList.contains('popover-closing')){
+            engineSelect._smartPopoverReopenAfterClose = true;
+        }
+    });
+    engineSelect.addEventListener('pointermove', event => {
+        if((event.pointerType && event.pointerType !== 'mouse') || event.buttons) return;
+        if(engineSelect.classList.contains('closing') || engineSelect.classList.contains('pinned')) return;
+        if(engineSelect.classList.contains('popover-closing')) return;
+        if(engineSelectHoverDisarmFrame || engineSelect.classList.contains('hover-reentry-required')) return;
+        engineSelect.classList.add('hover-armed');
+    });
     engineSelect.addEventListener('mouseleave', () => {
-        if(engineSelect._smartPopoverCloseAwaitingLeave) releaseSmartPopoverClose(engineSelect);
-        else beginSmartPopoverClose(engineSelect);
-        engineSelect.classList.remove('interacting', 'pinned', 'closing');
+        engineSelect._smartPopoverReopenAfterClose = false;
+        beginSmartPopoverClose(engineSelect);
+        engineSelect.classList.remove('interacting', 'pinned', 'closing', 'hover-armed', 'hover-reentry-required');
     });
     engineSelect.querySelectorAll('[data-engine-value]').forEach(btn => {
         btn.onclick = event => {
