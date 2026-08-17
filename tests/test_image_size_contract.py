@@ -136,12 +136,21 @@ class ImageSizeContractTests(unittest.TestCase):
         self.assertEqual(captured["body"]["quality"], "medium")
 
     def test_api_image_parameter_schema_matches_compact_control(self):
-        provider = {
-            "image_capabilities": {
-                "image-model": {"size_mode": "aspect_resolution", "supports_quality": True},
-                "pixel-model": {"size_mode": "pixel", "supports_quality": False},
-            },
-        }
+        provider = {"id": "venice-param-schema", "protocol": "venice"}
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [
+                {"id": "image-model", "settings": {
+                    "aspectRatio": {"options": ["auto", "1:1"]},
+                    "resolution": {"options": ["1K", "2K", "4K"]},
+                    "quality": {"options": ["low", "medium", "high"]},
+                }},
+                {"id": "pixel-model", "settings": {"widthHeightDivisor": 8}},
+            ]},
+        }, provider["id"])
+        cache_key = main.venice_auth_cache_key(provider)
+        main.VENICE_MODEL_CATALOGS[cache_key] = catalog
+        self.addCleanup(main.VENICE_MODEL_CATALOGS.pop, cache_key, None)
+
         fields = main.build_image_param_fields("api", provider, "image-model")
         size_field = next(field for field in fields if field["key"] == "size")
         quality_field = next(field for field in fields if field["key"] == "quality")
@@ -183,22 +192,34 @@ class ImageSizeContractTests(unittest.TestCase):
 class VeniceImageCapabilityCompilerTests(unittest.TestCase):
     def setUp(self):
         self.provider = {
-            "id": "venice",
+            "id": "venice-contract-tests",
             "protocol": "venice",
             "model_routes": {
                 "gpt-image-2": {"image_edit": "gpt-image-2-edit"},
             },
-            "image_capabilities": {
-                "gpt-image-2": {
-                    "size_mode": "aspect_resolution",
-                    "supports_quality": True,
-                },
-                "qwen-image-2": {"size_mode": "aspect", "supports_quality": False},
-                "qwen-image": {"size_mode": "pixel", "supports_quality": False},
-                "z-image-turbo": {"size_mode": "pixel", "supports_quality": False},
-            },
         }
         self.spec = {"mode": "preset", "aspect_ratio": "3:2", "resolution": "2K"}
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [
+                {"id": "gpt-image-2", "settings": {
+                    "aspectRatio": {"options": ["auto", "3:2"]},
+                    "resolution": {"options": ["1K", "2K", "4K"]},
+                    "quality": {"options": ["low", "medium", "high"]},
+                }},
+                {"id": "qwen-image-2", "settings": {"aspectRatio": {"options": ["auto", "3:2"]}}},
+                {"id": "qwen-image", "settings": {"widthHeightDivisor": 8}},
+                {"id": "z-image-turbo", "settings": {"widthHeightDivisor": 8}},
+            ]},
+            "inpaint": {"models": [{"id": "gpt-image-2-edit", "settings": {
+                "aspectRatio": {"options": ["auto", "3:2"]},
+                "resolution": {"options": ["1K", "2K", "4K"]},
+            }}]},
+        }, self.provider["id"])
+        self.cache_key = main.venice_auth_cache_key(self.provider)
+        main.VENICE_MODEL_CATALOGS[self.cache_key] = catalog
+
+    def tearDown(self):
+        main.VENICE_MODEL_CATALOGS.pop(self.cache_key, None)
 
     def test_resolution_model_keeps_selected_tier_and_standard_ratio(self):
         body = main.venice_outerface_image_body(
@@ -236,19 +257,19 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
                     self.assertEqual(body["aspectRatio"], aspect_ratio)
                     self.assertEqual(body["resolution"], resolution)
 
-    def test_provider_capability_override_wins_over_default(self):
+    def test_retired_provider_metadata_cannot_override_catalog(self):
+        retired_field = "_".join(("image", "capabilities"))
         provider = {
             **self.provider,
-            "image_capabilities": {
-                **self.provider["image_capabilities"],
+            retired_field: {
                 "gpt-image-2": {"size_mode": "pixel", "supports_quality": True},
             },
         }
         body = main.venice_outerface_image_body(
             "prompt", "2048x1360", "gpt-image-2", "user", self.spec, provider,
         )
-        self.assertIn("width", body)
-        self.assertNotIn("resolution", body)
+        self.assertNotIn("width", body)
+        self.assertEqual(body["resolution"], "2K")
 
     def test_native_venice_body_uses_same_structured_contract(self):
         body = main.venice_image_request_body(
@@ -380,6 +401,18 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         self.assertEqual(edit_model, "qwen-edit-uncensored")
         self.assertEqual(fields, {"aspectRatio": "3:2"})
 
+    def test_missing_catalog_or_model_fails_closed_instead_of_guessing_parameters(self):
+        with self.assertRaises(HTTPException) as missing_catalog:
+            main.compile_venice_image_size(
+                "2048x1360", "unknown-model", self.spec,
+                {"id": "venice-no-catalog", "protocol": "venice"},
+            )
+        self.assertEqual(missing_catalog.exception.status_code, 409)
+
+        with self.assertRaises(HTTPException) as wrong_model:
+            main.compile_venice_image_size("2048x1360", "wrong-model", self.spec, self.provider)
+        self.assertEqual(wrong_model.exception.status_code, 400)
+
     def test_edit_full_auto_omits_all_size_fields(self):
         self.assertEqual(
             main.venice_image_edit_size_fields(
@@ -456,72 +489,25 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         self.assertEqual(result["quality"], "high")
 
 
-class ProviderImageCapabilityPersistenceTests(unittest.TestCase):
-    def test_legacy_quality_options_migrate_to_boolean_capability(self):
-        provider = main.normalize_provider({
-            "id": "custom-api",
-            "name": "Custom",
-            "protocol": "openai",
-            "image_models": ["model-a", "model-b"],
-            "image_capabilities": {
-                "model-a": {"size_mode": "aspect", "quality_options": ["high"]},
-                "model-b": {"size_mode": "pixel", "quality_options": []},
-            },
-        })
-        self.assertEqual(provider["image_capabilities"], {
-            "model-a": {"size_mode": "aspect", "supports_quality": True},
-            "model-b": {"size_mode": "pixel", "supports_quality": False},
-        })
-
-    def test_legacy_size_modes_migrate_to_model_capabilities(self):
-        provider = main.normalize_provider({
-            "id": "custom-api",
-            "name": "Custom",
-            "protocol": "openai",
-            "image_models": ["model-a", "model-b"],
-            "image_size_modes": {
-                "model-a": "aspect-resolution",
-                "model-b": "pixel",
-                "removed-model": "aspect",
-                "bad": "unknown",
-            },
-        })
-        self.assertNotIn("image_size_modes", provider)
-        self.assertEqual(provider["image_capabilities"], {
-            "model-a": {"size_mode": "aspect_resolution", "supports_quality": False},
-            "model-b": {"size_mode": "pixel", "supports_quality": False},
-        })
-
-    def test_venice_capabilities_exactly_follow_current_models(self):
+class RetiredProviderImageMetadataTests(unittest.TestCase):
+    def test_normalization_discards_retired_image_metadata(self):
+        retired_contract_field = "_".join(("image", "capabilities"))
+        retired_size_field = "_".join(("image", "size", "modes"))
         provider = main.normalize_provider({
             "id": "venice",
             "name": "Venice",
             "protocol": "venice",
-            "image_models": ["gpt-image-2", "qwen-image-2", "new-model"],
-            "image_capabilities": {
-                "gpt-image-2": {"size_mode": "pixel", "supports_quality": True},
-                "removed-model": {"size_mode": "aspect", "supports_quality": True},
-            },
+            "image_models": ["gpt-image-2"],
+            retired_contract_field: {"gpt-image-2": {"size_mode": "pixel"}},
+            retired_size_field: {"gpt-image-2": "pixel"},
         })
-        self.assertEqual(provider["image_capabilities"], {
-            "gpt-image-2": {"size_mode": "pixel", "supports_quality": True},
-            "qwen-image-2": {"size_mode": "aspect", "supports_quality": False},
-            "new-model": {"size_mode": "aspect_resolution", "supports_quality": False},
-        })
+        self.assertNotIn(retired_contract_field, provider)
+        self.assertNotIn(retired_size_field, provider)
 
-    def test_default_venice_capabilities_do_not_include_unselected_models(self):
+    def test_default_provider_contains_no_retired_image_metadata(self):
+        retired_contract_field = "_".join(("image", "capabilities"))
         provider = next(item for item in main.default_api_providers() if item["id"] == "venice")
-        self.assertEqual(set(provider["image_capabilities"]), set(provider["image_models"]))
-        self.assertTrue(provider["image_capabilities"]["gpt-image-2"]["supports_quality"])
-
-    def test_venice_override_registry_only_contains_non_default_modes(self):
-        explicit_size_modes = {
-            capability.get("size_mode")
-            for capability in main.VENICE_IMAGE_CAPABILITY_OVERRIDES.values()
-            if capability.get("size_mode")
-        }
-        self.assertNotIn(main.VENICE_DEFAULT_IMAGE_SIZE_MODE, explicit_size_modes)
-        self.assertNotIn("gpt-image-2-edit", main.VENICE_IMAGE_CAPABILITY_OVERRIDES)
+        self.assertNotIn(retired_contract_field, provider)
 
 
 if __name__ == "__main__":

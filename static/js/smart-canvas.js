@@ -5823,7 +5823,11 @@ async function loadVeniceModelCatalogOnce(){
             if(!response.ok) throw new Error(await response.text());
             const catalog = await response.json();
             if(!applyVeniceModelCatalog(catalog)) throw new Error('Venice model catalog response is invalid');
-            writeCachedVeniceModelCatalog(providerId, catalog).catch(error => console.warn('Venice model catalog cache write failed:', error));
+            if(catalog?.stale === true){
+                toast('Venice 模型信息更新失败，已继续使用上次成功记录。');
+            }else{
+                writeCachedVeniceModelCatalog(providerId, catalog).catch(error => console.warn('Venice model catalog cache write failed:', error));
+            }
             return veniceModelCatalog;
         } catch(error) {
             console.warn('Venice model catalog load failed:', error);
@@ -5854,12 +5858,7 @@ function imageProviderDescriptor(source=settings){
         ? volcengineProvider()
         : ((apiProviders || []).find(item => String(item?.id || '').trim() === providerId) || apiProviderById(providerId));
     const model = String(source?.model || '').trim();
-    const normalizedModel = model.toLowerCase().replace(/_/g, '-');
-    const capabilities = provider?.image_capabilities && typeof provider.image_capabilities === 'object'
-        ? provider.image_capabilities
-        : {};
-    const capability = Object.entries(capabilities).find(([key]) => String(key || '').trim().toLowerCase().replace(/_/g, '-') === normalizedModel)?.[1] || {};
-    return {provider, providerId, model, capability};
+    return {provider, providerId, model};
 }
 function veniceCatalogReady(){
     const categories = veniceModelCatalog?.categories;
@@ -5963,11 +5962,10 @@ function imageCapabilitiesFor(source=settings, options=null){
             defaultQuality:String(quality.default || '').toLowerCase()
         };
     }
-    const rawMode = String(descriptor.capability?.size_mode || '').trim().toLowerCase().replace(/-/g, '_');
     return {
         catalogControlled:false,
-        sizeMode:['pixel','aspect','aspect_resolution'].includes(rawMode) ? rawMode : '',
-        supportsQuality:descriptor.capability?.supports_quality === true,
+        sizeMode:'',
+        supportsQuality:false,
         aspectRatios:[], resolutions:[], qualityOptions:[]
     };
 }
@@ -7023,6 +7021,17 @@ function syncVeniceImageQuote(){
         return;
     }
     const subject = activeSettingsSubject() || activeComposerNode();
+    const capabilityState = imageCapabilitiesFor(settings, {
+        hasReferenceImage:veniceImageQuoteHasReferenceImage(subject)
+    });
+    if(capabilityState.pending){
+        setVeniceImageQuoteStatus('loading', '加载', capabilityState.errorDetail || '正在读取 Venice 模型参数');
+        return;
+    }
+    if(capabilityState.invalid){
+        setVeniceImageQuoteStatus('error', '未知', capabilityState.errorDetail || 'Venice 模型参数不可用');
+        return;
+    }
     const taskCount = veniceImageQuoteTaskCount(subject);
     const payload = veniceImageQuoteRequestPayload(subject);
     if(!payload.model){

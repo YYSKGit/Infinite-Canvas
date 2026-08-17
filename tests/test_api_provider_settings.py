@@ -1,4 +1,6 @@
 import asyncio
+import os
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -147,10 +149,15 @@ class ApiProviderSettingsTests(unittest.TestCase):
         response.json.return_value = {"video": {"models": [], "total": 0}}
         client = AsyncMock()
         client.get.return_value = response
-        provider = {"id": "venice"}
-        with patch.object(main, "venice_web_auth_info", AsyncMock(return_value=("test-jwt", "user"))):
+        provider = {"id": "venice-fetch-test"}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(main, "VENICE_MODEL_CATALOG_CACHE_FILE", os.path.join(directory, "catalogs.json")),
+            patch.object(main, "VENICE_MODEL_CATALOG_CACHE_LOADED", True),
+            patch.object(main, "venice_web_auth_info", AsyncMock(return_value=("test-jwt", "user"))),
+        ):
             catalog = asyncio.run(main.venice_fetch_model_catalog(client, provider))
-        self.assertEqual(catalog["provider_id"], "venice")
+        self.assertEqual(catalog["provider_id"], provider["id"])
         client.get.assert_awaited_once()
         args, kwargs = client.get.await_args
         self.assertEqual(args[0], main.VENICE_OUTERFACE_MODELS_URL)
@@ -158,6 +165,65 @@ class ApiProviderSettingsTests(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-jwt")
         self.assertEqual(kwargs["headers"]["x-venice-middleface-version"], main.VENICE_OUTERFACE_VERSION)
         main.VENICE_MODEL_CATALOGS.pop(main.venice_auth_cache_key(provider), None)
+
+    def test_venice_model_catalog_persists_and_supports_stale_server_fallback(self):
+        provider = {"id": "venice-persist-test"}
+        cache_key = main.venice_auth_cache_key(provider)
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [{"id": "image-a", "settings": {"widthHeightDivisor": 8}}]},
+        }, provider["id"])
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            main, "VENICE_MODEL_CATALOG_CACHE_FILE", os.path.join(directory, "catalogs.json"),
+        ):
+            original_loaded = main.VENICE_MODEL_CATALOG_CACHE_LOADED
+            try:
+                main.VENICE_MODEL_CATALOG_CACHE_LOADED = True
+                main.remember_venice_model_catalog(provider, catalog)
+                main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+                main.VENICE_MODEL_CATALOG_CACHE_LOADED = False
+
+                restored = main.venice_catalog_for_provider(provider)
+                stale = main.stale_venice_model_catalog(provider, "upstream unavailable")
+            finally:
+                main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+                main.VENICE_MODEL_CATALOG_CACHE_LOADED = original_loaded
+
+        self.assertEqual(restored["categories"]["image"]["models"][0]["id"], "image-a")
+        self.assertTrue(stale["stale"])
+        self.assertEqual(stale["refresh_error"], "upstream unavailable")
+
+    def test_venice_catalog_endpoint_returns_last_good_snapshot_when_refresh_fails(self):
+        provider = {"id": "venice-stale-endpoint", "name": "Venice", "protocol": "venice"}
+        cache_key = main.venice_auth_cache_key(provider)
+        catalog = main.normalize_venice_model_catalog({
+            "image": {"models": [{"id": "image-a", "settings": {"widthHeightDivisor": 8}}]},
+        }, provider["id"])
+        main.VENICE_MODEL_CATALOGS[cache_key] = catalog
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+
+        try:
+            with (
+                patch.object(main, "get_api_provider", return_value=provider),
+                patch.object(main.httpx, "AsyncClient", FakeClient),
+                patch.object(
+                    main, "venice_fetch_model_catalog",
+                    AsyncMock(side_effect=HTTPException(status_code=502, detail="refresh failed")),
+                ),
+            ):
+                result = asyncio.run(main.get_venice_models_catalog(provider["id"]))
+        finally:
+            main.VENICE_MODEL_CATALOGS.pop(cache_key, None)
+
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["refresh_error"], "refresh failed")
+        self.assertEqual(result["categories"]["image"]["models"][0]["id"], "image-a")
 
     def test_invalid_user_agent_does_not_replace_last_browser_value(self):
         browser_user_agent = "Mozilla/5.0 TestBrowser/123.0"

@@ -455,18 +455,7 @@ VENICE_DEFAULT_MODEL_ROUTES = {
     "wan-2-7-image-to-video": {"text_to_video": "wan-2-7-text-to-video"},
     "wan-2-7-enhanced-image-to-video": {"text_to_video": "wan-2-7-enhanced-text-to-video"},
 }
-# Provider/model capabilities describe the upstream request shape. "auto" is a
-# user request mode and therefore intentionally is not a capability value.
-IMAGE_SIZE_MODES = {"pixel", "aspect", "aspect_resolution", "enumerated", "schema"}
 IMAGE_QUALITY_VALUES = {"low", "medium", "high"}
-VENICE_DEFAULT_IMAGE_SIZE_MODE = "aspect_resolution"
-VENICE_IMAGE_CAPABILITY_OVERRIDES = {
-    "chroma": {"size_mode": "pixel"},
-    "z-image-turbo": {"size_mode": "pixel"},
-    "qwen-image-2": {"size_mode": "aspect"},
-    "qwen-image-2-pro": {"size_mode": "aspect"},
-    "gpt-image-2": {"supports_quality": True},
-}
 VENICE_CLERK_CLIENT_URL = "https://clerk.venice.ai/v1/client"
 VENICE_OUTERFACE_VIDEO_QUEUE_URL = "https://outerface.venice.ai/api/inference/video/queue"
 VENICE_OUTERFACE_VIDEO_QUOTE_URL = "https://outerface.venice.ai/api/inference/video/quote"
@@ -489,6 +478,9 @@ VENICE_WEB_AUTH_CACHE: Dict[str, Dict[str, Any]] = {}
 VENICE_WEB_AUTH_LOCKS: Dict[str, asyncio.Lock] = {}
 VENICE_AUTH_REFRESH_FAILURES: Dict[str, Dict[str, Any]] = {}
 VENICE_MODEL_CATALOGS: Dict[str, Dict[str, Any]] = {}
+VENICE_MODEL_CATALOG_CACHE_FILE = os.path.join(DATA_DIR, "venice_model_catalogs.json")
+VENICE_MODEL_CATALOG_LOCK = Lock()
+VENICE_MODEL_CATALOG_CACHE_LOADED = False
 VENICE_AUTH_FAILURE_LOG_INTERVAL = max(60.0, float(os.getenv("VENICE_AUTH_FAILURE_LOG_INTERVAL", "300") or 300))
 VENICE_AUTH_MAX_FAILURE_BACKOFF = max(VENICE_AUTH_REFRESH_SECONDS, float(os.getenv("VENICE_AUTH_MAX_FAILURE_BACKOFF", "300") or 300))
 RUNNINGHUB_DEFAULT_IMAGE_MODELS = [
@@ -993,13 +985,6 @@ def default_api_providers():
             "chat_models": [],
             "video_models": VENICE_DEFAULT_VIDEO_MODELS,
             "model_routes": VENICE_DEFAULT_MODEL_ROUTES,
-            "image_capabilities": {
-                model: {
-                    "size_mode": VENICE_IMAGE_CAPABILITY_OVERRIDES.get(model, {}).get("size_mode", VENICE_DEFAULT_IMAGE_SIZE_MODE),
-                    "supports_quality": bool(VENICE_IMAGE_CAPABILITY_OVERRIDES.get(model, {}).get("supports_quality")),
-                }
-                for model in VENICE_DEFAULT_IMAGE_MODELS
-            },
             "ms_loras": [],
             "ms_defaults_version": 0,
         },
@@ -1095,14 +1080,6 @@ def merge_default_api_providers(providers):
             continue
         if not current.get("model_routes"):
             current["model_routes"] = normalize_model_routes(VENICE_DEFAULT_MODEL_ROUTES)
-        current["image_capabilities"] = image_capabilities_for_models(
-            current.get("image_models"),
-            current.get("image_capabilities"),
-            legacy_size_modes=current.get("image_size_modes"),
-            defaults=VENICE_IMAGE_CAPABILITY_OVERRIDES,
-            default_size_mode=VENICE_DEFAULT_IMAGE_SIZE_MODE,
-        )
-        current.pop("image_size_modes", None)
     return merged
 
 def normalize_model_list(values):
@@ -1350,78 +1327,6 @@ def normalize_image_request_mode(value):
     mode = str(value or "").strip().lower()
     return mode if mode in SUPPORTED_IMAGE_REQUEST_MODES else "openai"
 
-def normalize_image_size_modes(value):
-    if not isinstance(value, dict):
-        return {}
-    normalized = {}
-    for model, mode in value.items():
-        model_name = str(model or "").strip()
-        mode_name = str(mode or "").strip().lower().replace("-", "_")
-        if model_name and mode_name in IMAGE_SIZE_MODES:
-            normalized[model_name] = mode_name
-    return normalized
-
-def normalize_capability_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value != 0
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-def normalize_image_capabilities(value):
-    if not isinstance(value, dict):
-        return {}
-    normalized = {}
-    for model, raw in value.items():
-        model_name = str(model or "").strip()
-        if not model_name or not isinstance(raw, dict):
-            continue
-        size_mode = str(raw.get("size_mode") or "").strip().lower().replace("-", "_")
-        capability = {"size_mode": size_mode if size_mode in IMAGE_SIZE_MODES else ""}
-        if "supports_quality" in raw:
-            capability["supports_quality"] = normalize_capability_bool(raw.get("supports_quality"))
-        elif "quality_options" in raw:
-            # Deprecated compatibility input from the first capability format.
-            capability["supports_quality"] = bool(raw.get("quality_options"))
-        if capability["size_mode"] or "supports_quality" in capability:
-            normalized[model_name] = capability
-    return normalized
-
-def image_capabilities_for_models(models, value, legacy_size_modes=None, defaults=None, default_size_mode=""):
-    """Resolve one complete capability record per current image model."""
-    configured = normalize_image_capabilities(value)
-    seeded = normalize_image_capabilities(defaults)
-    legacy_modes = normalize_image_size_modes(legacy_size_modes)
-    normalize_id = lambda model: str(model or "").strip().lower().replace("_", "-")
-    configured_by_id = {normalize_id(model): capability for model, capability in configured.items()}
-    seeded_by_id = {normalize_id(model): capability for model, capability in seeded.items()}
-    legacy_by_id = {normalize_id(model): mode for model, mode in legacy_modes.items()}
-    fallback_mode = str(default_size_mode or "").strip().lower().replace("-", "_")
-    if fallback_mode not in IMAGE_SIZE_MODES:
-        fallback_mode = ""
-    resolved = {}
-    for model in model_list_from_values(models or []):
-        model_id = normalize_id(model)
-        configured_capability = configured_by_id.get(model_id)
-        seeded_capability = seeded_by_id.get(model_id) or {}
-        size_mode = (
-            (configured_capability or {}).get("size_mode")
-            or legacy_by_id.get(model_id)
-            or seeded_capability.get("size_mode")
-            or fallback_mode
-        )
-        supports_quality = (
-            configured_capability.get("supports_quality")
-            if configured_capability is not None and "supports_quality" in configured_capability
-            else bool(seeded_capability.get("supports_quality"))
-        )
-        if size_mode or supports_quality or configured_capability is not None:
-            resolved[model] = {
-                "size_mode": size_mode,
-                "supports_quality": bool(supports_quality),
-            }
-    return resolved
-
 def provider_endpoint_url(provider, key, default_path):
     base_url = str((provider or {}).get("base_url") or AI_BASE_URL).strip().rstrip("/")
     override = str((provider or {}).get(key) or "").strip()
@@ -1492,20 +1397,6 @@ def normalize_provider(item):
         model_routes = normalize_model_routes(VENICE_DEFAULT_MODEL_ROUTES)
     elif protocol != "venice":
         model_routes = {}
-    if protocol == "venice":
-        image_capabilities = image_capabilities_for_models(
-            image_models,
-            item.get("image_capabilities"),
-            legacy_size_modes=item.get("image_size_modes"),
-            defaults=VENICE_IMAGE_CAPABILITY_OVERRIDES,
-            default_size_mode=VENICE_DEFAULT_IMAGE_SIZE_MODE,
-        )
-    else:
-        image_capabilities = image_capabilities_for_models(
-            image_models,
-            item.get("image_capabilities"),
-            legacy_size_modes=item.get("image_size_modes"),
-        )
     return {
         "id": provider_id,
         "name": name,
@@ -1522,7 +1413,6 @@ def normalize_provider(item):
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
         "model_aliases": normalize_model_aliases(item.get("model_aliases")),
         "model_routes": model_routes,
-        "image_capabilities": image_capabilities,
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
         "ms_defaults_version": int(item.get("ms_defaults_version") or 0),
         "rh_apps": normalize_runninghub_entries(item.get("rh_apps") or [], "app"),
@@ -2786,9 +2676,6 @@ class ApiProviderPayload(BaseModel):
     model_protocols: Dict[str, str] = {}
     model_aliases: Dict[str, str] = {}
     model_routes: Dict[str, Dict[str, str]] = {}
-    image_capabilities: Dict[str, Dict[str, Any]] = {}
-    # Deprecated compatibility input. Normalized providers only persist image_capabilities.
-    image_size_modes: Dict[str, str] = {}
     ms_loras: List[Dict[str, Any]] = []
     ms_defaults_version: int = 0
     rh_apps: List[Dict[str, Any]] = []
@@ -9099,8 +8986,94 @@ def normalize_venice_model_catalog(raw, provider_id=""):
         "categories": categories,
     }
 
+def valid_venice_model_catalog(catalog) -> bool:
+    if not isinstance(catalog, dict):
+        return False
+    categories = catalog.get("categories")
+    if not isinstance(categories, dict) or not categories:
+        return False
+    return all(
+        isinstance(payload, dict) and isinstance(payload.get("models"), list)
+        for payload in categories.values()
+    )
+
+def load_persisted_venice_model_catalogs():
+    global VENICE_MODEL_CATALOG_CACHE_LOADED
+    if VENICE_MODEL_CATALOG_CACHE_LOADED:
+        return
+    with VENICE_MODEL_CATALOG_LOCK:
+        if VENICE_MODEL_CATALOG_CACHE_LOADED:
+            return
+        VENICE_MODEL_CATALOG_CACHE_LOADED = True
+        try:
+            with open(VENICE_MODEL_CATALOG_CACHE_FILE, "r", encoding="utf-8") as file:
+                raw = json.load(file)
+            catalogs = raw.get("catalogs") if isinstance(raw, dict) else {}
+            if not isinstance(catalogs, dict):
+                return
+            for cache_key, catalog in catalogs.items():
+                normalized_key = str(cache_key or "").strip().lower()
+                if normalized_key and valid_venice_model_catalog(catalog):
+                    VENICE_MODEL_CATALOGS.setdefault(normalized_key, catalog)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            print(f"加载 Venice 模型目录缓存失败: {exc}")
+
+def persist_venice_model_catalogs():
+    os.makedirs(os.path.dirname(VENICE_MODEL_CATALOG_CACHE_FILE), exist_ok=True)
+    with VENICE_MODEL_CATALOG_LOCK:
+        payload = {
+            "version": 1,
+            "catalogs": {
+                cache_key: catalog
+                for cache_key, catalog in VENICE_MODEL_CATALOGS.items()
+                if valid_venice_model_catalog(catalog)
+            },
+        }
+        temporary_path = f"{VENICE_MODEL_CATALOG_CACHE_FILE}.{os.getpid()}.tmp"
+        try:
+            with open(temporary_path, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+            os.replace(temporary_path, VENICE_MODEL_CATALOG_CACHE_FILE)
+        finally:
+            if os.path.exists(temporary_path):
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+
+def remember_venice_model_catalog(provider, catalog):
+    if not valid_venice_model_catalog(catalog):
+        raise HTTPException(status_code=502, detail="Venice 模型目录返回格式无效。")
+    load_persisted_venice_model_catalogs()
+    cache_key = venice_auth_cache_key(provider)
+    VENICE_MODEL_CATALOGS[cache_key] = catalog
+    try:
+        persist_venice_model_catalogs()
+    except Exception as exc:
+        # The in-memory and browser caches remain usable even if this process
+        # cannot update the durable server-side snapshot.
+        print(f"保存 Venice 模型目录缓存失败: {exc}")
+    return catalog
+
 def venice_catalog_for_provider(provider=None):
-    return VENICE_MODEL_CATALOGS.get(venice_auth_cache_key(provider)) or {}
+    cache_key = venice_auth_cache_key(provider)
+    catalog = VENICE_MODEL_CATALOGS.get(cache_key)
+    if catalog:
+        return catalog
+    load_persisted_venice_model_catalogs()
+    return VENICE_MODEL_CATALOGS.get(cache_key) or {}
+
+def stale_venice_model_catalog(provider, refresh_error):
+    catalog = venice_catalog_for_provider(provider)
+    if not catalog:
+        return {}
+    return {
+        **catalog,
+        "stale": True,
+        "refresh_error": str(refresh_error or "Venice 模型目录更新失败。"),
+    }
 
 def venice_catalog_model(provider, model, categories=None):
     target = normalize_venice_catalog_model_id(model)
@@ -9124,6 +9097,8 @@ def venice_catalog_model(provider, model, categories=None):
 
 def venice_catalog_image_capability(provider, model):
     item = venice_catalog_model(provider, model, ("image", "inpaint"))
+    if not item:
+        return {}
     settings = item.get("settings") if isinstance(item, dict) else {}
     if not isinstance(settings, dict):
         return {}
@@ -9138,47 +9113,25 @@ def venice_catalog_image_capability(provider, model):
         "supports_quality": has_quality,
     }
 
-def provider_model_image_capability(provider, model):
-    capabilities = normalize_image_capabilities((provider or {}).get("image_capabilities"))
-    normalized_model = str(model or "").strip().lower()
-    for configured_model, capability in capabilities.items():
-        if str(configured_model or "").strip().lower() == normalized_model:
-            return capability
-    return {}
-
-def provider_model_image_size_mode(provider, model, fallback="enumerated"):
-    capability = provider_model_image_capability(provider, model)
-    if capability.get("size_mode"):
-        return capability["size_mode"]
-    # Compatibility for callers that construct an old provider dict directly.
-    modes = normalize_image_size_modes((provider or {}).get("image_size_modes"))
-    normalized_model = str(model or "").strip().lower()
-    for configured_model, mode in modes.items():
-        if str(configured_model or "").strip().lower() == normalized_model:
-            return mode
-    return fallback
-
 def venice_model_capability(model, provider=None):
-    catalog = venice_catalog_image_capability(provider, model)
-    if catalog:
-        return catalog
-    normalized_model = str(model or "").strip().lower()
-    override = next((
-        capability for configured_model, capability in VENICE_IMAGE_CAPABILITY_OVERRIDES.items()
-        if str(configured_model or "").strip().lower() == normalized_model
-    ), {})
-    configured = provider_model_image_capability(provider, model)
-    return {
-        "size_mode": configured.get("size_mode") or override.get("size_mode") or VENICE_DEFAULT_IMAGE_SIZE_MODE,
-        "supports_quality": (
-            configured.get("supports_quality")
-            if "supports_quality" in configured
-            else bool(override.get("supports_quality"))
-        ),
-    }
+    return venice_catalog_image_capability(provider, model)
+
+def require_venice_model_capability(model, provider=None):
+    capability = venice_model_capability(model, provider)
+    if capability:
+        return capability
+    if not venice_catalog_for_provider(provider):
+        raise HTTPException(
+            status_code=409,
+            detail="Venice 模型目录尚不可用，无法安全确定请求参数。请刷新 Smart 智能画布后重试。",
+        )
+    raise HTTPException(
+        status_code=400,
+        detail=f"Venice 模型目录中未找到模型 {str(model or '').strip() or '(empty)'}，无法生成请求。",
+    )
 
 def venice_model_sizing_mode(model, provider=None):
-    mode = venice_model_capability(model, provider).get("size_mode") or VENICE_DEFAULT_IMAGE_SIZE_MODE
+    mode = require_venice_model_capability(model, provider)["size_mode"]
     return "resolution" if mode == "aspect_resolution" else mode
 
 def compile_venice_image_quality(quality, model, provider=None):
@@ -9656,8 +9609,7 @@ async def venice_fetch_model_catalog(client, provider):
     if not isinstance(raw, dict):
         raise HTTPException(status_code=502, detail="Venice 模型目录返回格式无效。")
     catalog = normalize_venice_model_catalog(raw, (provider or {}).get("id") or "venice")
-    VENICE_MODEL_CATALOGS[venice_auth_cache_key(provider)] = catalog
-    return catalog
+    return remember_venice_model_catalog(provider, catalog)
 
 async def refresh_configured_venice_web_auth(force_refresh: bool):
     providers = [
@@ -10065,9 +10017,9 @@ def venice_reference_image_bytes(ref) -> tuple:
 
 def venice_image_edit_size_fields(size, size_spec=None, model="", provider=None):
     resolved = resolve_image_size_spec(size, size_spec)
+    sizing_mode = require_venice_model_capability(model, provider)["size_mode"]
     if resolved.get("mode") == "auto":
         return {}
-    sizing_mode = venice_model_capability(model, provider).get("size_mode")
     fields = {}
     if resolved.get("mode") != "auto_aspect" and resolved.get("aspect_ratio"):
         fields["aspectRatio"] = resolved["aspect_ratio"]
@@ -14777,16 +14729,28 @@ async def get_venice_models_catalog(provider_id: str = "venice"):
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             return await venice_fetch_model_catalog(client, provider)
-    except HTTPException:
+    except HTTPException as exc:
+        cached = stale_venice_model_catalog(provider, exc.detail)
+        if cached:
+            return cached
         raise
     except httpx.HTTPStatusError as exc:
         detail = venice_http_error_detail(exc.response, "Venice 模型目录查询失败")
+        cached = stale_venice_model_catalog(provider, detail)
+        if cached:
+            return cached
         raise HTTPException(status_code=502, detail=f"Venice 模型目录查询失败：{detail}") from exc
     except httpx.HTTPError as exc:
         detail = network_exception_detail(exc)
+        cached = stale_venice_model_catalog(provider, detail)
+        if cached:
+            return cached
         raise HTTPException(status_code=502, detail=f"Venice 模型目录查询网络异常：{detail}") from exc
     except Exception as exc:
         detail = network_exception_detail(exc)
+        cached = stale_venice_model_catalog(provider, detail)
+        if cached:
+            return cached
         raise HTTPException(status_code=502, detail=f"Venice 模型目录查询失败：{detail}") from exc
 
 @app.get("/api/venice/video/progress/{progress_id}")
@@ -14984,9 +14948,15 @@ IMAGE_PARAM_RESOLUTIONS = [
 def build_image_param_fields(engine: str, provider: dict, model: str):
     """返回某平台/引擎的图像生成参数字段定义。客户端按 type 动态渲染并回填到生成请求。
     字段 key 直接对应 OnlineImageRequest 的字段名（size/quality/n/reference_images）。"""
-    capability = provider_model_image_capability(provider, model)
     api_image_engine = engine in ("api", "volcengine")
-    supports_auto_aspect = api_image_engine and capability.get("size_mode") != "pixel"
+    venice_provider = is_venice_provider(provider)
+    capability = venice_catalog_image_capability(provider, model) if venice_provider else {}
+    if venice_provider and not capability:
+        return [{
+            "key": "_venice_catalog_notice", "type": "notice",
+            "label": "Venice 模型目录尚不可用或未找到当前模型，无法安全显示参数。",
+        }]
+    supports_auto_aspect = api_image_engine and (not venice_provider or capability.get("size_mode") != "pixel")
     image_ratios = ([{"value": "auto", "label": "自动"}] if supports_auto_aspect else []) + IMAGE_PARAM_RATIOS
     size_field = {
         "key": "size", "type": "size", "label": "尺寸",

@@ -31,11 +31,13 @@ test('Venice catalog loads once without blocking the canvas and reuses the last 
     assert.doesNotMatch(smartCanvasSource, /await loadVeniceModelCatalogOnce\(\)/);
     assert.equal((smartCanvasSource.match(/loadVeniceModelCatalogOnce\(\)/g) || []).length, 2);
     assert.match(smartCanvasSource, /cachedCatalog = await readCachedVeniceModelCatalog\(providerId\)/);
+    assert.match(smartCanvasSource, /if\(catalog\?\.stale === true\)/);
     assert.match(smartCanvasSource, /已继续使用上次成功记录/);
     assert.match(smartCanvasSource, /当前无法校验模型参数/);
     assert.match(smartCanvasSource, /caps\.catalogControlled && !caps\.qualityOptions\.includes\(value\).*disabled/);
     assert.match(smartCanvasSource, /caps\.catalogControlled && !caps\.aspects\.includes\(value\).*disabled/);
     assert.match(smartCanvasSource, /if\(btn\.disabled\) return/);
+    assert.match(smartCanvasSource, /if\(capabilityState\.pending\)[\s\S]*setVeniceImageQuoteStatus\('loading'/);
 });
 
 test('entirely unsupported Venice parameter groups are hidden instead of showing only disabled choices', () => {
@@ -74,10 +76,9 @@ test('pixel-size models allow auto only when an image reference will be submitte
     assert.match(smartCanvasSource, /syncImageSettingsPanelForRefs\(\)/);
 });
 
-test('API settings preserves legacy capability data without exposing manual controls', () => {
-    assert.match(apiSettingsSource, /image_capabilities:\(item\.image_capabilities/);
-    assert.match(apiSettingsSource, /item\.image_capabilities\[newName\] = capability/);
-    assert.match(apiSettingsSource, /delete item\.image_capabilities\[removed\]/);
+test('API settings has fully retired the former provider image metadata field', () => {
+    const retiredField = ['image', 'capabilities'].join('_');
+    assert.doesNotMatch(apiSettingsSource, new RegExp(retiredField));
     assert.doesNotMatch(apiSettingsSource, /function veniceImageCapabilityHtml/);
     assert.doesNotMatch(apiSettingsSource, /function updateVeniceImageCapability/);
 });
