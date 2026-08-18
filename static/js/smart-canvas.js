@@ -10022,6 +10022,49 @@ function smartRunErrorMessage(error, fallback=''){
         .replace(/\s+/g, ' ')
         .slice(0, 320);
 }
+function smartRunErrorPresentation(error, cancelled=false){
+    if(cancelled){
+        return {
+            title:tr('smart.taskCancelled'),
+            message:tr('smart.runCancelledHint'),
+            known:true
+        };
+    }
+    const raw = smartRunErrorMessage(error, tr('smart.errRunFailed'));
+    const normalized = raw.toLowerCase();
+    const matches = pattern => pattern.test(normalized);
+    let messageKey = '';
+    if(matches(/only supports? (?:a )?single (?:image|reference)|single reference|不支持\s*mask|多图参考|只支持单张参考图/)){
+        messageKey = 'smart.runErrorReferenceLimit';
+    } else if(matches(/imageurl is required|requires? reference|reference image.+required|需要参考图|缺少参考(?:图|素材)|需要参考素材/)){
+        messageKey = 'smart.runErrorNeedReference';
+    } else if(matches(/image content is not supported|model that supports vision|does not support (?:image|vision)|不支持图片输入|不支持视觉/)){
+        messageKey = 'smart.runErrorVisionModel';
+    } else if(matches(/content[_\s-]*policy|content security|veniceguardviolation|minor[_\s-]*detected|faceassetmoderation|x-venice-is-(?:blurred|content-violation|adult-model-content-violation)|内容(?:安全)?(?:审查|审核|策略|过滤)|安全(?:审查|审核)/)){
+        messageKey = 'smart.runErrorSafety';
+    } else if(matches(/expired clerk session|session (?:has )?expired|登录状态.*失效|会话.*失效/)){
+        messageKey = 'smart.runErrorSession';
+    } else if(matches(/insufficientbalance|insufficient balance|余额不足|额度不足|credits?[^\n]*(?:low|insufficient)/)){
+        messageKey = 'smart.runErrorBalance';
+    } else if(matches(/faceassetprocessingfailed|face asset processing|人脸素材.*(?:处理|解析).*失败/)){
+        messageKey = 'smart.runErrorFaceAsset';
+    } else if(matches(/invalid request|invalidparameters|number must be|total pixel count|invalid enum value|aspectratio|(?:width|height)[^\n]*required|尺寸|分辨率|比例[^\n]*(?:不支持|无效|超出)/)){
+        messageKey = 'smart.runErrorParameters';
+    } else if(matches(/timed?\s*out|timeout|任务超时|生成超时/)){
+        messageKey = 'smart.runErrorTimeout';
+    } else if(matches(/纯黑|black image|没有返回(?:图片|视频|产物)|no (?:images|videos|outputs)|empty (?:image|images|output)|返回(?:图片|视频|产物)为空/)){
+        messageKey = 'smart.runErrorOutput';
+    } else if(matches(/service unavailable|server disconnected|请求上游[^\n]*失败|请求 venice[^\n]*失败|request[^\n]*failed|inferenceerror|upstream processing|enrichmentfailed|上游接口错误|网络(?:错误|异常|连接失败)|fetch failed|data is empty/)){
+        messageKey = 'smart.runErrorService';
+    } else if(matches(/请先[^\n]*(?:选择|添加|配置|保存)|no (?:api )?model|no workflow|没有找到可运行节点|配置不完整/)){
+        messageKey = 'smart.runErrorConfiguration';
+    }
+    return {
+        title:tr('smart.errRunFailed'),
+        message:tr(messageKey || 'smart.runErrorUnknown'),
+        known:Boolean(messageKey)
+    };
+}
 function cloneSmartRetrySnapshot(snapshot){
     if(!snapshot || typeof snapshot !== 'object') return null;
     try { return JSON.parse(JSON.stringify(snapshot)); } catch(_error) { return null; }
@@ -10075,6 +10118,10 @@ function markSmartNodeRunFailed(node, options={}){
         : [];
     node.pending = activeTasks.length;
     if(!activeTasks.length){
+        // Failure replaces the live generation surface in place. Keep the
+        // pending box (including any resize made while running) instead of
+        // restoring the smaller pre-run empty-node geometry.
+        clearSmartNodePreRunBox(node);
         node.runFinishedAt = nowMs();
         if(!node.runStartedAt) node.runStartedAt = node.runFinishedAt;
         node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(node.runStartedAt || node.runFinishedAt));
@@ -13512,19 +13559,21 @@ function runningHubProgressBorderHtml(node, layout=null){
         ${label ? `<span class="image-resolution-badge rh-progress-node-badge" role="status">${escapeHtml(label)}</span>` : ''}
     </div>`;
 }
-function smartTerminalRunBodyHtml(node, layout){
+function smartTerminalRunBodyHtml(node){
     const cancelled = node.runStatus === 'cancelled' || node.runCancelled === true;
-    const reason = smartRunErrorMessage(
+    const presentation = smartRunErrorPresentation(
         node.runError,
-        cancelled ? tr('smart.taskCancelled') : tr('smart.errRunFailed')
+        cancelled
     );
     const action = cancelled ? tr('smart.generateAgain') : tr('smart.retry');
-    return `<div class="smart-run-terminal ${cancelled ? 'is-cancelled' : 'is-failed'}" style="width:${layout.width}px;height:${layout.height}px">
-        <button class="smart-run-retry" type="button" data-smart-retry="${escapeAttr(node.id)}" title="${escapeAttr(action)}">
+    return `<div class="smart-run-terminal ${cancelled ? 'is-cancelled' : 'is-failed'}">
+        <div class="smart-run-terminal-icon" aria-hidden="true"><i data-lucide="${cancelled ? 'circle-slash-2' : 'triangle-alert'}"></i></div>
+        <div class="smart-run-terminal-title">${escapeHtml(presentation.title)}</div>
+        <div class="smart-run-terminal-reason">${escapeHtml(presentation.message)}</div>
+        <button class="smart-run-retry" type="button" data-smart-retry="${escapeAttr(node.id)}">
             <i data-lucide="refresh-cw"></i>
             <span>${escapeHtml(action)}</span>
         </button>
-        <div class="smart-run-terminal-reason" title="${escapeAttr(reason)}">${escapeHtml(reason)}</div>
     </div>`;
 }
 function smartHistoryPreviousBadgeHtml(node, imageIndex){
@@ -13635,7 +13684,7 @@ function nodeBodyHtml(node, layout){
         return `<div class="smart-group-card media-group-card smart-pending-group-card has-thumbs">${mediaGroupSummaryHtml([], count, smartProgressTaskMediaKind(node), 0)}${skeleton}</div>`;
     }
     if(imgs.length === 0 && (node.runStatus === 'failed' || node.runStatus === 'cancelled' || node.runFailed || node.runCancelled)){
-        return smartTerminalRunBodyHtml(node, layout);
+        return smartTerminalRunBodyHtml(node);
     }
     const showSingleImageName = !isHistoryGroupNode(node);
     const isRunning = Boolean(node.running || node.pending || node.jimengPending);
@@ -13948,13 +13997,14 @@ function render(){
         const isImageNode = node.type === 'smart-image' || !node.type;
         const isJimengPending = Boolean(node.jimengPending && node.jimengPending.submitId && imgs.length === 0);
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
-        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
-        const isHistory = isHistoryGroupNode(node);
-        const isGroup = isImageNode && (imgs.length > 1 || runningHubProgressTasks(node).length > 1 || (imgs.length === 0 && Number(node.pending) > 1));
-        const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const isGenerating = nodeHasLiveRunState(node);
         const isRunFailed = !isGenerating && (node.runStatus === 'failed' || node.runFailed === true);
         const isRunCancelled = !isGenerating && (node.runStatus === 'cancelled' || node.runCancelled === true);
+        const isTerminalEmpty = isImageNode && imgs.length === 0 && (isRunFailed || isRunCancelled);
+        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending && !isTerminalEmpty;
+        const isHistory = isHistoryGroupNode(node);
+        const isGroup = isImageNode && (imgs.length > 1 || runningHubProgressTasks(node).length > 1 || (imgs.length === 0 && Number(node.pending) > 1));
+        const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const isRunPartial = !isGenerating && node.runStatus === 'partial' && imgs.length > 0;
         const ancestorRunState = smartAncestorNodeVisualState(node.id);
         const shimmerDelay = continuousAnimationDelay(1500, node.runStartedAt);
@@ -13978,9 +14028,9 @@ function render(){
             : '';
         const floatingActions = `${floatingCancelBtn}${floatingPinBtn}${floatingRunBtn}${floatingDeleteBtn}`;
         const hint = isEmpty ? '' : (isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty'))));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistoricalRunningSnapshot ? 'historical-running-snapshot-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isRunFailed ? 'node-run-failed' : ''} ${isRunCancelled ? 'node-run-cancelled' : ''} ${isRunPartial ? 'node-run-partial' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isTerminalEmpty ? 'terminal-node' : ''} ${isHistoricalRunningSnapshot ? 'historical-running-snapshot-node' : ''} ${isGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isSelectedGroupMember ? 'selected-group-member' : ''} ${node.cascadePinned ? 'cascade-pinned' : ''} ${ancestorRunState ? `ancestor-run-${ancestorRunState}` : ''} ${isRunFailed ? 'node-run-failed' : ''} ${isRunCancelled ? 'node-run-cancelled' : ''} ${isRunPartial ? 'node-run-partial' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''} ${isGenerating ? 'node-generating' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px;--loading-shimmer-delay:${shimmerDelay}ms;--loading-spin-delay:${pendingSpinDelay}ms;--ancestor-node-delay:${ancestorNodeDelay}ms">
             ${runningHubProgressBorderHtml(node, layout)}
-            <div class="node-head">${isHistoricalRunningSnapshot && !isHistoricalRunningSnapshotGroup ? '' : `<div class="node-title">${title}</div>`}<div class="node-actions">${deleteBtn}</div></div>
+            ${isTerminalEmpty ? '' : `<div class="node-head">${isHistoricalRunningSnapshot && !isHistoricalRunningSnapshotGroup ? '' : `<div class="node-title">${title}</div>`}<div class="node-actions">${deleteBtn}</div></div>`}
             ${floatingActions ? `<div class="floating-node-actions">${floatingActions}</div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
@@ -13988,7 +14038,7 @@ function render(){
             ${isRunPartial ? `<div class="smart-run-partial-note" title="${escapeAttr(node.runError || tr('smart.partialComplete'))}">${escapeHtml(tr('smart.partialComplete'))}</div>` : ''}
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
             ${hint ? `<div class="node-hint">${hint}</div>` : ''}
-            ${imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            ${imgs.length || node.pending || isQueued || isJimengPending || isTerminalEmpty || isPrompt || isLoop || isSmartGroup ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in"></div>
             <div class="node-port port-out" data-port="out"></div>
         </div>`;
@@ -22332,10 +22382,7 @@ function runSmartNodeQuick(nodeId){
     return runGeneration(null, {nodeId});
 }
 function runSmartNodeRetry(nodeId){
-    const node = nodes.find(candidate => candidate.id === nodeId);
-    if(!node || smartNodeRunDisabled(node)) return {status:'skipped'};
-    const retrySnapshot = cloneSmartRetrySnapshot(node.runRetrySnapshot);
-    return runGeneration(null, {nodeId, retrySnapshot});
+    return runSmartNodeQuick(nodeId);
 }
 function toggleSmartAncestorPin(nodeId){
     const node = nodes.find(candidate => candidate.id === nodeId);
@@ -23946,7 +23993,6 @@ async function runGeneration(event=null, options={}){
             return {status:'pending', nodeId:node.id, error:e};
         }
         pendingNode.pending = 0;
-        clearSmartNodePreRunBox(pendingNode, true);
         markSmartNodeRunFailed(pendingNode, {keepRecoverableTasks:true, error:e});
         delete pendingNode._runMetaTargetId;
         if(!e?.smartGenerationLogged) addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStart, error:e.message || String(e)});
@@ -25762,7 +25808,6 @@ function applyJimengQueryResult(node, data){
         delete node.jimengPending;
         node.running = false;
         node.pending = 0;
-        clearSmartNodePreRunBox(node, true);
         markSmartNodeRunFailed(node, {error:data.error || '即梦任务失败'});
         notifySmartTaskFailure(data.error || '即梦任务失败');
         toast((data.error || '即梦任务失败').slice(0, 160));
@@ -26059,9 +26104,6 @@ async function resumeSmartPendingNode(node, logContext={}){
             if(!node.pending && smartPendingTasks(node).length === 0){
                 delete node.pendingTasks;
                 markSmartNodeRunFailed(node, {error:e});
-                if(!(node.images || []).length){
-                    clearSmartNodePreRunBox(node, true);
-                }
             }
             failures.push(e);
             logTaskFailure(e.message || tr('smart.errRunFailed'), task);

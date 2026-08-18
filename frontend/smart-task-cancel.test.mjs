@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import {fileURLToPath} from 'node:url';
 
 const jsSource = readFileSync(fileURLToPath(new URL('../static/js/smart-canvas.js', import.meta.url)), 'utf8');
 const cssSource = readFileSync(fileURLToPath(new URL('../static/css/smart-canvas.css', import.meta.url)), 'utf8');
@@ -155,6 +155,72 @@ test('generated nodes expose a quick run button that reuses single-node generati
     const quickRun = extractFunction('runSmartNodeQuick');
     assert.match(quickRun, /runGeneration\(null,\s*\{nodeId\}\)/);
     assert.match(cssSource, /\.mini-x\.smart-node-run-btn\s*\{/);
+});
+
+test('failed generation nodes show friendly known errors and send uncommon details to logs', () => {
+    const translations = {
+        'smart.errRunFailed':'生成失败',
+        'smart.taskCancelled':'任务已取消',
+        'smart.runCancelledHint':'本次生成已停止，你可以调整设置后重新生成',
+        'smart.runErrorSafety':'内容未通过审核，请调整描述或素材后重试',
+        'smart.runErrorNeedReference':'当前模型需要参考素材，请添加后重试',
+        'smart.runErrorReferenceLimit':'当前模型不支持多图或蒙版参考，请减少参考素材后重试',
+        'smart.runErrorVisionModel':'当前模型不支持图片输入，请更换支持视觉的模型后重试',
+        'smart.runErrorSession':'登录状态已失效，请在 API 设置中重新登录后重试',
+        'smart.runErrorBalance':'账户余额不足，请补充额度或切换服务后重试',
+        'smart.runErrorFaceAsset':'人脸素材处理失败，请更换更清晰的素材后重试',
+        'smart.runErrorParameters':'当前尺寸或比例不受模型支持，请调整生成参数后重试',
+        'smart.runErrorTimeout':'生成超时，服务可能繁忙，请稍后重试',
+        'smart.runErrorOutput':'生成结果异常，请调整描述或稍后重试',
+        'smart.runErrorService':'生成服务暂时不可用，请稍后重试',
+        'smart.runErrorConfiguration':'生成配置不完整，请检查模型与服务设置后重试',
+        'smart.runErrorUnknown':'任务未完成，详细原因请在右上角日志中查看'
+    };
+    const sandbox = vm.createContext({tr:key => translations[key] || key});
+    vm.runInContext(`
+        ${extractFunction('smartRunErrorMessage')}
+        ${extractFunction('smartRunErrorPresentation')}
+        globalThis.safety = smartRunErrorPresentation('{"error":"CONTENT_POLICY_VIOLATION"}');
+        globalThis.parameters = smartRunErrorPresentation('{"height":{"_errors":["Required"]},"error":"Invalid request"}');
+        globalThis.reference = smartRunErrorPresentation('{"imageUrl":{"_errors":["imageUrl is required for image-to-video models"]}}');
+        globalThis.vision = smartRunErrorPresentation('Image content is not supported by this model. Please use a model that supports vision.');
+        globalThis.session = smartRunErrorPresentation('{"error":"Expired Clerk session"}');
+        globalThis.balance = smartRunErrorPresentation('{"error":"insufficientBalance"}');
+        globalThis.service = smartRunErrorPresentation('{"error":"inferenceError","details":"Data is empty. Likely caused by upstream processing issue."}');
+        globalThis.unknown = smartRunErrorPresentation('Assignment to constant variable.');
+        globalThis.cancelled = smartRunErrorPresentation('用户已取消', true);
+    `, sandbox);
+    assert.equal(sandbox.safety.message, translations['smart.runErrorSafety']);
+    assert.equal(sandbox.parameters.message, translations['smart.runErrorParameters']);
+    assert.equal(sandbox.reference.message, translations['smart.runErrorNeedReference']);
+    assert.equal(sandbox.vision.message, translations['smart.runErrorVisionModel']);
+    assert.equal(sandbox.session.message, translations['smart.runErrorSession']);
+    assert.equal(sandbox.balance.message, translations['smart.runErrorBalance']);
+    assert.equal(sandbox.service.message, translations['smart.runErrorService']);
+    assert.equal(sandbox.unknown.message, translations['smart.runErrorUnknown']);
+    assert.equal(sandbox.unknown.known, false);
+    assert.equal(sandbox.cancelled.title, translations['smart.taskCancelled']);
+    Object.entries(translations)
+        .filter(([key]) => key === 'smart.runCancelledHint' || key.startsWith('smart.runError'))
+        .forEach(([key, message]) => assert.doesNotMatch(message, /[。.！!？?]$/, key));
+    assert.match(jsSource, /smart-run-terminal-icon[\s\S]*smart-run-terminal-title[\s\S]*smart-run-terminal-reason[\s\S]*smart-run-retry/);
+    assert.doesNotMatch(extractFunction('smartTerminalRunBodyHtml'), /\btitle=/);
+    assert.match(cssSource, /\.smart-run-terminal-icon\s*\{[^}]*color:#f05252;/);
+    assert.match(cssSource, /\.smart-run-terminal-title\s*\{[^}]*color:#f05252;/);
+    assert.match(cssSource, /\.smart-run-terminal\s*\{[^}]*gap:8px;/);
+    assert.match(cssSource, /\.smart-run-terminal-reason\s*\{[^}]*margin-top:6px;/);
+    assert.match(cssSource, /\.smart-run-retry\s*\{[^}]*margin-top:8px;/);
+    assert.match(cssSource, /\.terminal-node \.node-body\s*\{[^}]*container-type:size;/);
+    assert.match(cssSource, /@supports \(width:1cqmin\)\s*\{/);
+    assert.match(cssSource, /\.smart-run-terminal-icon\s*\{[^}]*width:clamp\(42px, 14cqmin, 76px\)/);
+    assert.match(cssSource, /\.smart-run-terminal-title\s*\{[^}]*font-size:clamp\(15px, 5\.2cqmin, 26px\)/);
+    assert.match(cssSource, /\.smart-run-terminal-reason\s*\{[^}]*max-width:min\(520px, 88%\)[^}]*font-size:clamp\(11px, 3\.8cqmin, 16px\)/);
+    assert.match(cssSource, /\.smart-run-retry\s*\{[^}]*min-width:clamp\(88px, 30cqmin, 160px\)[^}]*height:clamp\(34px, 11\.5cqmin, 50px\)/);
+    assert.match(cssSource, /\.smart-run-retry\s*\{[^}]*background:#2563eb;/);
+    assert.match(cssSource, /\.smart-run-retry:hover\s*\{[^}]*background:#1d4ed8;/);
+    assert.doesNotMatch(cssSource, /\.smart-run-retry:hover\s*\{[^}]*transform:/);
+    assert.doesNotMatch(cssSource, /\.smart-run-retry:hover\s*\{[^}]*box-shadow:/);
+    assert.doesNotMatch(cssSource, /\.smart-run-terminal\.is-cancelled \.smart-run-retry/);
 });
 
 test('composer run controls do not replay intermediate states while selection changes', () => {
@@ -376,25 +442,71 @@ test('every media-count mutation path uses the shared layout normalizer', () => 
     assert.match(runGeneration, /normalizeSmartMediaNodeLayout\(pendingNode\)/);
 });
 
-test('failed and cancelled empty slots expose an in-node retry using the saved request snapshot', () => {
+test('failed and cancelled empty slots rerun from current node state through the normal generation path', () => {
     assert.match(jsSource, /data-smart-retry=/);
     assert.match(jsSource, /runSmartNodeRetry\(btn\.dataset\.smartRetry \|\| id\)/);
     assert.match(cssSource, /\.smart-run-terminal\s*\{/);
     assert.match(cssSource, /\.smart-run-retry\s*\{/);
-    assert.match(cssSource, /\.empty-node:is\(\.node-run-failed,\.node-run-cancelled\) \.node-body\s*\{[^}]*padding:0;[^}]*border-radius:0 0 15px 15px;/);
+    assert.match(cssSource, /\.terminal-node \.node-body\s*\{[^}]*width:100%;[^}]*height:100%;[^}]*padding:0;[^}]*border-radius:15px;/);
     assert.match(cssSource, /\.smart-run-terminal\s*\{[^}]*border:0;[^}]*border-radius:0;/);
+    assert.match(cssSource, /\.smart-run-terminal\s*\{[^}]*width:100%;[^}]*height:100%;/);
+    assert.doesNotMatch(extractFunction('smartTerminalRunBodyHtml'), /style="width:/);
+    assert.match(jsSource, /\$\{isTerminalEmpty \? '' : `<div class="node-head">/);
+    assert.match(jsSource, /\$\{isTerminalEmpty \? 'terminal-node' : ''\}/);
     const sandbox = vm.createContext({
         nodes:[{id:'node-1', runRetrySnapshot:{prompt:'saved', settings:{engine:'api'}}}],
         smartNodeRunDisabled:() => false,
-        cloneSmartRetrySnapshot:value => structuredClone(value),
         runGeneration:(_event, options) => options
     });
     vm.runInContext(`
+        ${extractFunction('runSmartNodeQuick')}
         ${extractFunction('runSmartNodeRetry')}
         globalThis.options = runSmartNodeRetry('node-1');
     `, sandbox);
     assert.equal(sandbox.options.nodeId, 'node-1');
-    assert.equal(sandbox.options.retrySnapshot.prompt, 'saved');
+    assert.equal('retrySnapshot' in sandbox.options, false);
+    assert.match(extractFunction('runSmartNodeRetry'), /return runSmartNodeQuick\(nodeId\)/);
+});
+
+test('failed single-output runs keep the live card geometry and position', () => {
+    const sandbox = vm.createContext({
+        MEDIA_NODE_DEFAULT_SCALE:2,
+        EMPTY_UPLOAD_NODE_WIDTH:260,
+        EMPTY_UPLOAD_NODE_HEIGHT:178,
+        runningHubProgressTasks:() => [],
+        nodeHasLiveRunState:node => Boolean(node.pending || node.running || node.queued),
+        mediaNodeDefaultScale:node => Number(node.scale) || 2,
+        smartNodeRunTokens:new Map(),
+        smartPendingTasks:() => [],
+        nowMs:() => 2000,
+        tr:key => key,
+        smartRunErrorMessage:error => String(error || '')
+    });
+    vm.runInContext(`
+        ${extractFunction('clearSmartNodePreRunBox')}
+        ${extractFunction('imageLayout')}
+        ${extractFunction('markSmartNodeRunFailed')}
+        const node = {
+            id:'node-1', type:'smart-image', x:420, y:260,
+            images:[], pending:1, scale:2, w:520, h:360,
+            runStartedAt:1000,
+            _undoPreRunBox:{hasW:false, hasH:false}
+        };
+        globalThis.before = {...imageLayout(node.images, node.scale, node), x:node.x, y:node.y};
+        markSmartNodeRunFailed(node, {error:'failed'});
+        globalThis.after = {...imageLayout(node.images, node.scale, node), x:node.x, y:node.y};
+        globalThis.node = node;
+    `, sandbox);
+    assert.deepEqual(
+        {x:sandbox.after.x, y:sandbox.after.y, width:sandbox.after.width, height:sandbox.after.height},
+        {x:sandbox.before.x, y:sandbox.before.y, width:sandbox.before.width, height:sandbox.before.height}
+    );
+    assert.equal(sandbox.node.w, 520);
+    assert.equal(sandbox.node.h, 360);
+    assert.equal('_undoPreRunBox' in sandbox.node, false);
+    const runGeneration = extractFunction('runGeneration');
+    assert.doesNotMatch(runGeneration, /clearSmartNodePreRunBox\(pendingNode, true\);[\s\S]{0,120}markSmartNodeRunFailed/);
+    assert.doesNotMatch(extractFunction('applyJimengQueryResult'), /clearSmartNodePreRunBox\(node, true\);[\s\S]{0,120}markSmartNodeRunFailed/);
 });
 
 test('history keeps its original flat grid and only marks media from the previous run', () => {
