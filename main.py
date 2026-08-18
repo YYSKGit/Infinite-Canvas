@@ -9977,7 +9977,7 @@ def venice_outerface_request_id():
 VENICE_OUTERFACE_MAX_EDGE = 1344
 VENICE_OUTERFACE_MAX_PIXELS = 1_500_000
 
-def venice_outerface_clamp_size(width: int, height: int) -> tuple:
+def venice_outerface_clamp_size(width: int, height: int, divisor: int = 1) -> tuple:
     """Scale down width/height to satisfy outerface limits while preserving ratio."""
     w, h = float(width), float(height)
     if h > VENICE_OUTERFACE_MAX_EDGE:
@@ -9989,10 +9989,74 @@ def venice_outerface_clamp_size(width: int, height: int) -> tuple:
     if w * h > VENICE_OUTERFACE_MAX_PIXELS:
         scale = math.sqrt(VENICE_OUTERFACE_MAX_PIXELS / (w * h))
         w, h = w * scale, h * scale
-    return max(1, round(w)), max(1, round(h))
+    # Never round a boundary value back above the provider limit. For example,
+    # a square request scales to ~1224.745px per edge; round() would produce
+    # 1225 x 1225 = 1,500,625 pixels and Outerface rejects it.
+    divisor = max(1, int(divisor or 1))
+    width = max(divisor, math.floor(w) // divisor * divisor)
+    height = max(divisor, math.floor(h) // divisor * divisor)
+    return width, height
+
+def venice_outerface_size_divisor(model, provider=None) -> int:
+    item = venice_catalog_model(provider, model, ("image", "inpaint"))
+    settings = item.get("settings") if isinstance(item, dict) else {}
+    try:
+        return max(1, int((settings or {}).get("widthHeightDivisor") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+def venice_outerface_validation_dimensions(model, resolved, provider=None) -> tuple:
+    """Resolve valid width/height fields required by the private image schema.
+
+    Pixel models use these as generation dimensions. Aspect- or resolution-led
+    model adapters may ignore them, but Outerface still validates their presence
+    and bounds. Catalog mappings keep those schema fields aligned with the user's
+    requested shape when possible; they are not treated as output-size proof.
+    """
+    item = venice_catalog_model(provider, model, ("image", "inpaint"))
+    settings = item.get("settings") if isinstance(item, dict) else {}
+    settings = settings if isinstance(settings, dict) else {}
+    aspect_settings = settings.get("aspectRatio") if isinstance(settings.get("aspectRatio"), dict) else {}
+    resolution_settings = settings.get("resolution") if isinstance(settings.get("resolution"), dict) else {}
+    aspect_ratio = normalized_image_aspect_ratio(
+        resolved.get("aspect_ratio") or aspect_settings.get("default"),
+        "1:1",
+    )
+    resolution = image_resolution_tier(
+        resolved.get("resolution") or resolution_settings.get("default"),
+        "1K",
+    )
+
+    custom_mapping = settings.get("customSizeMapping")
+    if isinstance(custom_mapping, dict):
+        mapping_by_key = {str(key).strip().upper(): value for key, value in custom_mapping.items()}
+        candidate = mapping_by_key.get(resolution)
+        if isinstance(candidate, dict) and not {"width", "height"}.issubset(candidate):
+            candidate = {
+                str(key).strip().lower(): value for key, value in candidate.items()
+            }.get(aspect_ratio.lower())
+        if not isinstance(candidate, dict):
+            candidate = {
+                str(key).strip().lower(): value for key, value in custom_mapping.items()
+            }.get(aspect_ratio.lower())
+        if isinstance(candidate, dict):
+            try:
+                width = int(candidate.get("width") or 0)
+                height = int(candidate.get("height") or 0)
+            except (TypeError, ValueError):
+                width, height = 0, 0
+            if width > 0 and height > 0:
+                return width, height
+
+    width = int(resolved.get("width") or 0)
+    height = int(resolved.get("height") or 0)
+    if width > 0 and height > 0:
+        return width, height
+    return IMAGE_SIZE_PRESETS.get(aspect_ratio, {}).get(resolution, (1024, 1024))
 
 def venice_outerface_image_body(prompt, size, model, user_id, size_spec=None, provider=None, quality="auto"):
-    compiled_size = compile_venice_image_size(size, model, size_spec, provider, clamp_pixels=True)
+    compiled_size = compile_venice_image_size(size, model, size_spec, provider)
+    resolved = resolve_image_size_spec(size, size_spec)
     mode = compiled_size["sizing_mode"]
     body = {
         "type": "image",
@@ -10011,13 +10075,20 @@ def venice_outerface_image_body(prompt, size, model, user_id, size_spec=None, pr
         "clientProcessingTime": 1,
         "variants": 1,
     }
-    if mode == "pixel":
-        if "width" in compiled_size and "height" in compiled_size:
-            body.update({"width": compiled_size["width"], "height": compiled_size["height"]})
-    elif mode == "aspect":
+    width, height = venice_outerface_validation_dimensions(model, resolved, provider)
+    # These are globally required schema fields. They are the real generation
+    # dimensions for pixel models, while aspect/resolution-led adapters may
+    # ignore their values and use the capability fields below instead.
+    width, height = venice_outerface_clamp_size(
+        width,
+        height,
+        venice_outerface_size_divisor(model, provider),
+    )
+    body.update({"width": width, "height": height})
+    if mode == "aspect":
         if compiled_size.get("aspect_ratio"):
             body["aspectRatio"] = compiled_size["aspect_ratio"]
-    else:
+    elif mode != "pixel":
         if compiled_size.get("aspect_ratio"):
             body["aspectRatio"] = compiled_size["aspect_ratio"]
         if compiled_size.get("resolution"):

@@ -207,9 +207,24 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
                     "resolution": {"options": ["1K", "2K", "4K"]},
                     "quality": {"options": ["low", "medium", "high"]},
                 }},
-                {"id": "qwen-image-2", "settings": {"aspectRatio": {"options": ["auto", "3:2"]}}},
+                {"id": "qwen-image-2", "settings": {
+                    "aspectRatio": {"default": "1:1", "options": ["auto", "1:1", "3:2"]},
+                    "customSizeMapping": {
+                        "1:1": {"width": 2048, "height": 2048},
+                        "3:2": {"width": 2508, "height": 1672},
+                    },
+                }},
+                {"id": "krea-2-turbo", "settings": {
+                    "aspectRatio": {"default": "1:1", "options": ["1:1", "3:2"]},
+                    "resolution": {"default": "1K", "options": ["1K", "2K"]},
+                    "customSizeMapping": {
+                        "1K": {"1:1": {"width": 1024, "height": 1024}},
+                        "2K": {"1:1": {"width": 2048, "height": 2048}},
+                    },
+                }},
                 {"id": "qwen-image", "settings": {"widthHeightDivisor": 8}},
                 {"id": "z-image-turbo", "settings": {"widthHeightDivisor": 8}},
+                {"id": "stable-image", "settings": {"widthHeightDivisor": 16}},
             ]},
             "inpaint": {"models": [{"id": "gpt-image-2-edit", "settings": {
                 "aspectRatio": {"options": ["auto", "3:2"]},
@@ -226,30 +241,82 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
     def tearDown(self):
         main.VENICE_MODEL_CATALOGS.pop(self.cache_key, None)
 
-    def test_resolution_model_keeps_selected_tier_and_standard_ratio(self):
+    def assert_outerface_validation_dimensions(self, body, divisor=1):
+        width, height = body.get("width", 0), body.get("height", 0)
+        self.assertGreater(width, 0)
+        self.assertGreater(height, 0)
+        self.assertLessEqual(width, main.VENICE_OUTERFACE_MAX_EDGE)
+        self.assertLessEqual(height, main.VENICE_OUTERFACE_MAX_EDGE)
+        self.assertLessEqual(width * height, main.VENICE_OUTERFACE_MAX_PIXELS)
+        self.assertEqual(width % divisor, 0)
+        self.assertEqual(height % divisor, 0)
+
+    def test_resolution_model_keeps_controls_and_supplies_valid_schema_dimensions(self):
         body = main.venice_outerface_image_body(
             "prompt", "2048x1360", "gpt-image-2", "user", self.spec, self.provider,
         )
         self.assertEqual(body["aspectRatio"], "3:2")
         self.assertEqual(body["resolution"], "2K")
-        self.assertNotIn("width", body)
-        self.assertNotIn("height", body)
+        self.assert_outerface_validation_dimensions(body)
 
-    def test_aspect_model_only_receives_aspect(self):
+    def test_aspect_model_keeps_control_and_supplies_valid_schema_dimensions(self):
         body = main.venice_outerface_image_body(
             "prompt", "2048x1360", "qwen-image-2", "user", self.spec, self.provider,
         )
         self.assertEqual(body["aspectRatio"], "3:2")
         self.assertNotIn("resolution", body)
-        self.assertNotIn("width", body)
+        self.assert_outerface_validation_dimensions(body)
+
+    def test_krea_2k_square_keeps_controls_and_supplies_valid_schema_dimensions(self):
+        body = main.venice_outerface_image_body(
+            "prompt",
+            "2048x2048",
+            "krea-2-turbo",
+            "user",
+            {"mode": "preset", "aspect_ratio": "1:1", "resolution": "2K"},
+            self.provider,
+        )
+
+        self.assertEqual(body["aspectRatio"], "1:1")
+        self.assertEqual(body["resolution"], "2K")
+        self.assert_outerface_validation_dimensions(body)
 
     def test_pixel_model_only_receives_clamped_pixels(self):
         body = main.venice_outerface_image_body(
             "prompt", "2048x1360", "qwen-image", "user", self.spec, self.provider,
         )
-        self.assertEqual((body["width"], body["height"]), (1344, 892))
+        self.assertEqual((body["width"], body["height"]), (1344, 888))
+        self.assertEqual(body["width"] % 8, 0)
+        self.assertEqual(body["height"] % 8, 0)
         self.assertNotIn("aspectRatio", body)
         self.assertNotIn("resolution", body)
+
+    def test_pixel_model_dimensions_follow_catalog_divisor_after_clamping(self):
+        body = main.venice_outerface_image_body(
+            "prompt", "2048x1360", "stable-image", "user", self.spec, self.provider,
+        )
+
+        self.assertEqual((body["width"], body["height"]), (1344, 880))
+        self.assertEqual(body["width"] % 16, 0)
+        self.assertEqual(body["height"] % 16, 0)
+
+    def test_z_image_2k_square_never_rounds_above_outerface_pixel_limit(self):
+        body = main.venice_outerface_image_body(
+            "prompt",
+            "2048x2048",
+            "z-image-turbo",
+            "user",
+            {"mode": "preset", "aspect_ratio": "1:1", "resolution": "2K"},
+            self.provider,
+        )
+        width, height = body["width"], body["height"]
+
+        self.assertEqual((width, height), (1224, 1224))
+        self.assertEqual(width % 8, 0)
+        self.assertEqual(height % 8, 0)
+        self.assertLessEqual(width, main.VENICE_OUTERFACE_MAX_EDGE)
+        self.assertLessEqual(height, main.VENICE_OUTERFACE_MAX_EDGE)
+        self.assertLessEqual(width * height, main.VENICE_OUTERFACE_MAX_PIXELS)
 
     def test_all_resolution_presets_survive_venice_compilation(self):
         for aspect_ratio, tiers in main.IMAGE_SIZE_PRESETS.items():
@@ -261,6 +328,7 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
                     )
                     self.assertEqual(body["aspectRatio"], aspect_ratio)
                     self.assertEqual(body["resolution"], resolution)
+                    self.assert_outerface_validation_dimensions(body)
 
     def test_retired_provider_metadata_cannot_override_catalog(self):
         retired_field = "_".join(("image", "capabilities"))
@@ -273,8 +341,8 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         body = main.venice_outerface_image_body(
             "prompt", "2048x1360", "gpt-image-2", "user", self.spec, provider,
         )
-        self.assertNotIn("width", body)
         self.assertEqual(body["resolution"], "2K")
+        self.assert_outerface_validation_dimensions(body)
 
     def test_native_venice_body_uses_same_structured_contract(self):
         body = main.venice_image_request_body(
@@ -297,10 +365,11 @@ class VeniceImageCapabilityCompilerTests(unittest.TestCase):
         )
         self.assertNotIn("aspectRatio", resolution_body)
         self.assertEqual(resolution_body["resolution"], "2K")
+        self.assert_outerface_validation_dimensions(resolution_body)
         self.assertNotIn("aspectRatio", aspect_body)
         self.assertNotIn("resolution", aspect_body)
-        self.assertNotIn("width", pixel_body)
-        self.assertNotIn("height", pixel_body)
+        self.assert_outerface_validation_dimensions(aspect_body)
+        self.assertEqual((pixel_body["width"], pixel_body["height"]), (1224, 1224))
 
     def test_quality_is_sent_only_for_models_that_declare_the_selected_option(self):
         supported = main.venice_outerface_image_body(

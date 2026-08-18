@@ -126,6 +126,12 @@ test('timer and cancel corner controls do not overlap, and the composer run butt
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*pointer-events:auto;[^}]*cursor:default;/);
     assert.match(cssSource, /body\.smart-node-drag \.image-node:hover \.floating-node-actions,\s*body\.smart-node-drag \.image-node:hover \.run-time-pill,\s*body\.smart-node-drag \.image-node:hover \.rh-progress-node-badge\.image-resolution-badge,[\s\S]*?\{\s*opacity:0 !important;\s*pointer-events:none !important;/);
     assert.doesNotMatch(cssSource, /body\.smart-node-drag \.image-node \.(?:run-time-pill|rh-progress-node-badge)/);
+    assert.match(cssSource, /\.composer\.node-drag-transitioning\s*\{[^}]*transition:opacity \.14s ease, visibility \.14s ease !important;/);
+    assert.match(cssSource, /body\.smart-node-drag-transitioning \.smart-node-floating-menu\s*\{[^}]*transition:opacity \.14s ease !important;/);
+    assert.match(cssSource, /\.composer\.node-drag-hidden\s*\{[^}]*opacity:0 !important;[^}]*visibility:hidden !important;[^}]*pointer-events:none !important;/);
+    assert.match(jsSource, /function activatePendingSmartNodeDrag\(\)[\s\S]*?setNodeDragChromeHidden\(true\);/);
+    assert.match(jsSource, /function setNodeDragChromeHidden\(hidden\)[\s\S]*?smart-node-drag-transitioning[\s\S]*?classList\.toggle\('smart-node-drag', shouldHide\)[\s\S]*?classList\.toggle\('node-drag-hidden', shouldHide\)/);
+    assert.match(jsSource, /window\.onmouseup = e => \{\s*stopSmartEdgePan\(\);\s*setNodeDragChromeHidden\(false\);/);
     assert.match(jsSource, /querySelectorAll\('\.run-time-pill'\)[\s\S]*?\['pointerdown', 'mousedown', 'click', 'dblclick'\][\s\S]*?stopImmediatePropagation\(\)/);
     assert.match(cssSource, /\.run-time-pill\.done\s*\{[^}]*background:rgba\(6,95,70,\.86\);/);
     assert.match(cssSource, /\.image-node:has\(\.node-port:is\(:hover,\.is-magnetic,\.is-active,\.is-caught\)\) \.run-time-pill:is\(\.done,\.failed,\.cancelled\)\s*\{\s*opacity:0;/);
@@ -159,8 +165,30 @@ test('composer run controls do not replay intermediate states while selection ch
     assert.match(syncSelection, /settleSmartComposerControls\(\)[\s\S]*?syncRunButtonState\(\)/);
     assert.match(jsSource, /function settleSmartComposerControls\(\)[\s\S]*?smart-composer-controls-settling[\s\S]*?requestAnimationFrame[\s\S]*?requestAnimationFrame/);
     assert.match(cssSource, /body\.smart-composer-controls-settling \.composer-action-buttons \.run-btn,\s*body\.smart-composer-controls-settling \.kind-toggle button\s*\{\s*transition:none !important;/);
+    assert.match(cssSource, /\.smart-node-floating-menu\s*\{[^}]*transition:none;/);
+    assert.match(cssSource, /\.smart-node-floating-menu\s*\{[^}]*background:var\(--card\);/);
+    assert.doesNotMatch(cssSource, /\.smart-node-floating-menu\s*\{[^}]*background:[^;}]*transparent/);
+    assert.match(cssSource, /body\.smart-node-selection-transitioning \.smart-node-floating-menu\s*\{\s*transition:opacity \.14s ease, transform \.14s ease;/);
+    assert.match(cssSource, /\.composer\s*\{[^}]*transform:translateY\(3px\)[^}]*transition:opacity \.14s ease, transform \.14s ease, visibility \.14s ease;/);
+    assert.match(jsSource, /function setSmartNodeSelectionTransitioning\(transitioning\)[\s\S]*?smart-node-selection-transitioning[\s\S]*?setTimeout[\s\S]*?180/);
+    assert.match(syncSelection, /const isDirectNodeSwitch = ids\.length === 1[\s\S]*?const isSingleNodeVisibilityChange[\s\S]*?if\(isDirectNodeSwitch\) setSmartNodeSelectionTransitioning\(false\)[\s\S]*?else if\(isSingleNodeVisibilityChange\) setSmartNodeSelectionTransitioning\(true\)/);
+    assert.match(jsSource, /selectedConnectionKey = '';\s*clearSelection\(\);\s*syncSelectionUi\(\);\s*updateComposer\(\);/);
     assert.doesNotMatch(updateComposer, /if\(cascadeRunBtn\) cascadeRunBtn\.style\.display = 'none'/);
     assert.match(updateComposer, /if\(switchedNode\)\{[\s\S]*?settings = smartSettingsForNode\(subject\);[\s\S]*?\}\s*syncRunButtonState\(node\);/);
+});
+
+test('preview navigation resets zoom only when the decoded replacement is committed', () => {
+    const openEditor = extractFunction('openImageEditor');
+    const refreshStart = jsSource.indexOf('function refreshComparePanel(');
+    const refreshEnd = jsSource.indexOf('function togglePreviewCompare(', refreshStart);
+    assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
+    const refreshPreview = jsSource.slice(refreshStart, refreshEnd);
+    const commitReset = extractFunction('commitPreviewNavigationTransformReset');
+    assert.match(openEditor, /if\(switchingVisibleMedia\) imageEditModal\.dataset\.previewTransformResetPending = '1';/);
+    assert.match(openEditor, /if\(previewFrame && !switchingVisibleMedia\)[\s\S]*?if\(!switchingVisibleMedia\) resetPreviewTransform\(\);/);
+    assert.match(commitReset, /previewTransformResetPending !== '1'[\s\S]*?frame\.style\.width = ''[\s\S]*?resetPreviewTransform\(\)/);
+    assert.match(refreshPreview, /live\.replaceWith\(loaded\);\s*commitPreviewNavigationTransformReset\(\);/);
+    assert.match(refreshPreview, /commitPreviewNavigationTransformReset\(\);\s*syncPreviewFrameSize\(\);/);
 });
 
 test('every completed node-group type exposes a far-right node delete action', () => {
@@ -1130,15 +1158,19 @@ test('Venice image and video tasks reuse the border with stable asymptotic estim
         globalThis.atHalf = veniceProgressFraction(7500, 15000);
         globalThis.atEstimate = veniceProgressFraction(15000, 15000);
         globalThis.overtime = veniceProgressFraction(30000, 15000);
-        globalThis.beforeSlowZone = veniceProgressFraction(11985, 15000);
-        globalThis.atSlowZone = veniceProgressFraction(12000, 15000);
-        globalThis.afterSlowZone = veniceProgressFraction(12015, 15000);
+        globalThis.beforeSlowZone = veniceProgressFraction(11910, 15000);
+        globalThis.atSlowZone = veniceProgressFraction(11925, 15000);
+        globalThis.afterSlowZone = veniceProgressFraction(11940, 15000);
         globalThis.beforeEstimate = veniceProgressFraction(14985, 15000);
         globalThis.afterEstimate = veniceProgressFraction(15015, 15000);
+        globalThis.fastAtEstimate = veniceProgressFraction(2000, 2000);
+        globalThis.fastAtFourEstimates = veniceProgressFraction(8000, 2000);
     `, sandbox);
     assert.equal(sandbox.atHalf, 0.5);
-    assert.ok(sandbox.atEstimate > 0.95 && sandbox.atEstimate < 1);
+    assert.ok(sandbox.atEstimate > 0.929 && sandbox.atEstimate < 0.931);
     assert.ok(sandbox.overtime > sandbox.atEstimate && sandbox.overtime < 1);
+    assert.ok(sandbox.fastAtEstimate > 0.65 && sandbox.fastAtEstimate < 0.68);
+    assert.ok(sandbox.fastAtFourEstimates > sandbox.fastAtEstimate && sandbox.fastAtFourEstimates < 0.97);
     assert.ok(Math.abs(
         (sandbox.atSlowZone - sandbox.beforeSlowZone)
         - (sandbox.afterSlowZone - sandbox.atSlowZone)
@@ -1155,6 +1187,7 @@ test('Venice image and video tasks reuse the border with stable asymptotic estim
     assert.match(jsSource, /execution_duration/);
     assert.match(jsSource, /veniceCatalogAverageExecutionTime/);
     assert.match(jsSource, /const next = veniceProgressFraction\(localElapsed, task\.estimateMs\)/);
+    assert.match(jsSource, /Math\.abs\(monotonic - previous\) >= \.0005/);
     assert.match(backendSource, /@app\.get\("\/api\/venice\/video\/progress\/\{progress_id\}"\)/);
     assert.doesNotMatch(backendSource, /average_execution_time=\(raw or \{\}\)\.get\("average_execution_time"\)/);
     assert.match(backendSource, /execution_duration=\(raw or \{\}\)\.get\("execution_duration"\)/);

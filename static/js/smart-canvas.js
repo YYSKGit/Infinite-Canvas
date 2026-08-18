@@ -4102,9 +4102,31 @@ function clearImageClickTimer(){
         imageClickTimer = null;
     }
 }
+let smartNodeSelectionTransitionTimer = null;
+function setSmartNodeSelectionTransitioning(transitioning){
+    if(smartNodeSelectionTransitionTimer){
+        clearTimeout(smartNodeSelectionTransitionTimer);
+        smartNodeSelectionTransitionTimer = null;
+    }
+    document.body.classList.toggle('smart-node-selection-transitioning', Boolean(transitioning));
+    if(transitioning){
+        smartNodeSelectionTransitionTimer = setTimeout(() => {
+            document.body.classList.remove('smart-node-selection-transitioning');
+            smartNodeSelectionTransitionTimer = null;
+        }, 180);
+    }
+}
 function syncSelectionUi(){
     settleSmartComposerControls();
     const ids = selectedNodeIds();
+    const visibleSelectedIds = [...world.querySelectorAll('.image-node.selected')]
+        .map(el => el.dataset.id || '')
+        .filter(Boolean);
+    const isDirectNodeSwitch = ids.length === 1 && visibleSelectedIds.length === 1 && ids[0] !== visibleSelectedIds[0];
+    const isSingleNodeVisibilityChange = (ids.length === 1 && visibleSelectedIds.length === 0)
+        || (ids.length === 0 && visibleSelectedIds.length === 1);
+    if(isDirectNodeSwitch) setSmartNodeSelectionTransitioning(false);
+    else if(isSingleNodeVisibilityChange) setSmartNodeSelectionTransitioning(true);
     const selectedGroupMembers = selectedSmartGroupMemberIds();
     world.classList.toggle('smart-multi-selected', ids.length > 1);
     smartArrangeBtn?.classList.toggle('visible', ids.length > 0);
@@ -14744,7 +14766,7 @@ function activatePendingSmartNodeDrag(){
     // instead of emerging from behind a stale source.dragging element.
     syncSmartNodeDraggingClasses(dragState);
     if(!dragState.altCopy) suspendSmartCanvasVideosForNodeDrag(dragState);
-    document.body.classList.add('smart-node-drag');
+    setNodeDragChromeHidden(true);
     // duplicateForAltDrag records its own undo entry. Normal movement starts
     // an undo transaction only after the pointer has crossed the drag threshold.
     if(!dragState.altCopy) capturePendingUndo();
@@ -16063,6 +16085,13 @@ function resetPreviewTransform(){
     document.getElementById('previewStage')?.style.setProperty('--compare-pos', `${previewComparePos}%`);
     applyPreviewTransform();
 }
+function commitPreviewNavigationTransformReset(){
+    if(imageEditModal.dataset.previewTransformResetPending !== '1') return;
+    delete imageEditModal.dataset.previewTransformResetPending;
+    const frame = document.getElementById('previewFrame');
+    if(frame){ frame.style.width = ''; frame.style.height = ''; }
+    resetPreviewTransform();
+}
 function panoramaRatioValue(){
     const preset = PANORAMA_RATIO_PRESETS[panoramaState.ratio];
     if(preset) return preset;
@@ -16558,6 +16587,7 @@ function refreshComparePanel(){
             currentImg.style.visibility = '';
         }
         if(currentImg.dataset.previewQuick !== '1') rememberPreviewImageResolution();
+        commitPreviewNavigationTransformReset();
         syncPreviewFrameSize();
         updatePreviewMetaHint();
         revealPreparedImageEditor();
@@ -16696,6 +16726,7 @@ function refreshComparePanel(){
         if(isOriginal) loaded.dataset.previewOriginalSrc = originalPreviewSrc;
         else delete loaded.dataset.previewOriginalSrc;
         live.replaceWith(loaded);
+        commitPreviewNavigationTransformReset();
         if(isOriginal) rememberPreviewImageResolution();
         syncPreviewFrameSize();
         updatePreviewMetaHint();
@@ -17992,6 +18023,8 @@ function openImageEditor(nodeId, imageIndex=0){
     imageEditModal.dataset.openRequestAt = String(openRequestAt);
     const switchingVisibleMedia = imageEditModal.classList.contains('open')
         && !imageEditModal.classList.contains('media-preparing');
+    if(switchingVisibleMedia) imageEditModal.dataset.previewTransformResetPending = '1';
+    else delete imageEditModal.dataset.previewTransformResetPending;
     selectedId = nodeId;
     selectedImage = {nodeId, index:imageIndex};
     previewNavState = {nodeId, index:imageIndex, count:(node.images || []).filter(img => img?.url).length};
@@ -18053,7 +18086,7 @@ function openImageEditor(nodeId, imageIndex=0){
         delete compareImg.dataset.compareSourceKey;
     }
     previewStage?.classList.remove('compare-on');
-    if(previewFrame){ previewFrame.style.width = ''; previewFrame.style.height = ''; }
+    if(previewFrame && !switchingVisibleMedia){ previewFrame.style.width = ''; previewFrame.style.height = ''; }
     img.style.width = ''; img.style.height = ''; img.style.maxWidth = ''; img.style.maxHeight = '';
     imageEditModal.classList.add('open');
     // On the first open, keep the whole modal hidden until the media is ready.
@@ -18068,7 +18101,7 @@ function openImageEditor(nodeId, imageIndex=0){
     previewCompareLoadToken++;
     previewComparePendingKey = '';
     disposePanoramaPreview();
-    resetPreviewTransform();
+    if(!switchingVisibleMedia) resetPreviewTransform();
     if(kind === 'video'){
         img.onload = null;
         img.onerror = null;
@@ -18145,6 +18178,7 @@ function closeImageEditor(){
     imageEditModal.classList.remove('open', 'media-preparing');
     delete imageEditModal.dataset.openRequestKey;
     delete imageEditModal.dataset.openRequestAt;
+    delete imageEditModal.dataset.previewTransformResetPending;
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
     const img = document.getElementById('cropImage');
     const previewVideo = document.getElementById('previewCurrentVideo');
@@ -19161,6 +19195,28 @@ function setComposerOpen(open){
     composer.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
     if('inert' in composer) composer.inert = !isOpen;
     if(!isOpen && composerExpanded) setComposerExpanded(false);
+}
+let nodeDragChromeTransitionTimer = null;
+function setNodeDragChromeHidden(hidden){
+    const shouldHide = Boolean(hidden);
+    const wasHidden = document.body.classList.contains('smart-node-drag')
+        || Boolean(composer?.classList.contains('node-drag-hidden'));
+    if(!shouldHide && !wasHidden) return;
+    if(nodeDragChromeTransitionTimer){
+        clearTimeout(nodeDragChromeTransitionTimer);
+        nodeDragChromeTransitionTimer = null;
+    }
+    document.body.classList.add('smart-node-drag-transitioning');
+    document.body.classList.toggle('smart-node-drag', shouldHide);
+    composer?.classList.add('node-drag-transitioning');
+    composer?.classList.toggle('node-drag-hidden', shouldHide);
+    if(!shouldHide){
+        nodeDragChromeTransitionTimer = setTimeout(() => {
+            nodeDragChromeTransitionTimer = null;
+            document.body.classList.remove('smart-node-drag-transitioning');
+            composer?.classList.remove('node-drag-transitioning');
+        }, 180);
+    }
 }
 function updateComposer(){
     const node = selectedNode();
@@ -25345,23 +25401,22 @@ function startRunningHubProgressMonitor(context, taskId, index, nodeMap={}, useW
 function veniceProgressFraction(elapsedMs, estimateMs){
     const elapsed = Math.max(0, Number(elapsedMs) || 0);
     const estimate = Math.max(1, Number(estimateMs) || 1);
-    const ratio = elapsed / estimate;
-    if(ratio <= .8) return Math.max(0, ratio);
-    if(ratio <= 1){
-        // Cubic Hermite bridge: both ends have an explicitly matched velocity,
-        // so entering the slow zone and reaching the estimate have no speed kink.
-        const t = (ratio - .8) / .2;
-        const t2 = t * t;
-        const t3 = t2 * t;
-        const h00 = 2 * t3 - 3 * t2 + 1;
-        const h10 = t3 - 2 * t2 + t;
-        const h01 = -2 * t3 + 3 * t2;
-        const h11 = t3 - t2;
-        return h00 * .8 + h10 * .2 + h01 * .955 + h11 * .06;
-    }
-    // Match the bridge ending velocity (0.3) and then asymptotically approach
-    // 99.5%; only the actual result is allowed to complete the border.
-    return Math.min(.995, .955 + .04 * (1 - Math.exp(-(ratio - 1) * 7.5)));
+    const cap = .995;
+    const baseSpeed = 1 / estimate;
+    const desiredSlowdownMs = 3000;
+    const slowdownDistance = Math.min(cap, baseSpeed * desiredSlowdownMs);
+    const slowdownStart = cap - slowdownDistance;
+    const linearProgress = elapsed * baseSpeed;
+    if(linearProgress <= slowdownStart) return Math.max(0, linearProgress);
+
+    // Choose the entry point from the incoming speed, then match position,
+    // velocity, and zero acceleration there. Faster estimates therefore begin
+    // easing earlier without a visible braking kink. The reciprocal quadratic
+    // tail keeps moving toward 99.5% until a real result completes the border.
+    const slowdownStartedAt = slowdownStart / baseSpeed;
+    const slowdownTimeScale = slowdownDistance / baseSpeed;
+    const x = Math.max(0, (elapsed - slowdownStartedAt) / slowdownTimeScale);
+    return cap - slowdownDistance / (1 + x + x * x);
 }
 function ensureVeniceProgress(context, {kind='image', total=1, estimateMs=null}={}){
     const node = runningHubProgressNodeForContext(context);
@@ -26503,7 +26558,8 @@ shell.onclick = e => {
     closeCreateMenu();
     selectedConnectionKey = '';
     clearSelection();
-    render();
+    syncSelectionUi();
+    updateComposer();
 };
 minimap?.addEventListener('mousedown', e => {
     if(e.button !== 0) return;
@@ -26831,7 +26887,7 @@ window.onmousemove = e => {
 };
 window.onmouseup = e => {
     stopSmartEdgePan();
-    document.body.classList.remove('smart-node-drag');
+    setNodeDragChromeHidden(false);
     document.body.classList.remove('smart-node-resize', 'smart-node-box-resize');
     if(portDragState){
         const drag = portDragState;
@@ -26934,7 +26990,6 @@ window.onmouseup = e => {
             stopAndDeselectSmartDragVideos(dragState);
             dragState = null;
             finishSmartVideoAltCopyDrag();
-            document.body.classList.remove('smart-node-drag');
             render();
             void saveSmartWorkflowToAssetLibrary(workflowNodeIds).catch(err => toast(err.message || '保存工作流失败'));
             return;
@@ -26952,7 +27007,6 @@ window.onmouseup = e => {
             stopAndDeselectSmartDragVideos(dragState);
             dragState = null;
             finishSmartVideoAltCopyDrag();
-            document.body.classList.remove('smart-node-drag');
             render();
             scheduleSave();
             return;
