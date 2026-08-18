@@ -9495,7 +9495,6 @@ function renderGenerationModeControl(){
         generationModeBtn?.setAttribute('aria-expanded', 'false');
     }
     const selected = subject ? generationPromptModeForNode(subject) : null;
-    generationModeBtn?.classList.toggle('active', Boolean(selected));
     promptEditor?.setInlinePrefix?.(selected ? {
         id:selected.id,
         label:selected.name,

@@ -19,12 +19,12 @@ test('Smart Canvas exposes generation mode as a bottom parameter control', () =>
   assert.match(html, /class="smart-pill generation-mode-btn"/);
   assert.doesNotMatch(html, /id="generationModeBtn"[^>]*title="生成模式"/);
   assert.match(html, /class="smart-popover generation-mode-panel"/);
-  assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*width:auto[^}]*height:var\(--ctrl-height\)[^}]*color:var\(--muted\)[^}]*font-weight:500/);
+  assert.match(css, /\.smart-pill\.generation-mode-btn\s*\{[^}]*width:auto[^}]*height:var\(--ctrl-height\)[^}]*color:var\(--text\)[^}]*font-weight:500/);
   assert.match(css, /\.generation-mode-control \.generation-mode-btn:hover,\.generation-mode-btn:focus-visible\s*\{[^}]*color:var\(--text\)[^}]*background:var\(--card\)[^}]*border-color:var\(--line\)/);
-  assert.match(css, /\.smart-control\.generation-mode-control:hover \.generation-mode-btn:not\(\.active\),\.smart-control\.generation-mode-control:focus-within \.generation-mode-btn:not\(\.active\)\s*\{[^}]*color:var\(--text\)/);
-  assert.match(css, /\.parameter-settings-pill > i,\.parameter-settings-pill > svg,\.generation-mode-btn:not\(\.active\) > i,\.generation-mode-btn:not\(\.active\) > svg\s*\{[^}]*color:var\(--text\)/);
+  assert.match(css, /\.smart-control\.generation-mode-control:hover \.generation-mode-btn,\.smart-control\.generation-mode-control:focus-within \.generation-mode-btn\s*\{[^}]*color:var\(--text\)/);
+  assert.match(css, /\.parameter-settings-pill > i,\.parameter-settings-pill > svg,\.generation-mode-btn > i,\.generation-mode-btn > svg\s*\{[^}]*color:var\(--text\)/);
   assert.match(css, /\.composer \.dynamic-params :is\(\.provider-control,\.model-control\):is\(:hover,:focus-within\) > \.smart-pill \.sub,[\s\S]*?\.parameter-settings-control:is\(:hover,:focus-within\) > \.smart-pill\s*\{ color:var\(--text\); \}/);
-  assert.match(css, /\.composer \.dynamic-params :is\(\.provider-control,\.model-control\)\.pinned > \.smart-pill \.sub,[\s\S]*?\.generation-mode-control\.pinned > \.generation-mode-btn:not\(\.active\)\s*\{ color:var\(--text\); \}/);
+  assert.match(css, /\.composer \.dynamic-params :is\(\.provider-control,\.model-control\)\.pinned > \.smart-pill \.sub,[\s\S]*?\.generation-mode-control\.pinned > \.generation-mode-btn\s*\{ color:var\(--text\); \}/);
   assert.doesNotMatch(css, /\.dynamic-params[^}]*\.pinned[^}]*font-weight:700/);
   assert.match(css, /\.generation-mode-control\s*\{[^}]*z-index:90/);
   assert.match(css, /\.smart-popover\.generation-mode-panel\s*\{[^}]*width:min\(500px[^}]*max-height:min\(620px/);
@@ -271,13 +271,24 @@ test('composer fade-out keeps the saved prompt mounted instead of flashing an em
   assert.match(js, /Keep the saved draft mounted while the composer fades out/);
 });
 
-test('generation-mode accents reuse the canvas blue theme token', () => {
+test('generation-mode accents stay inside the editor capsule and picker', () => {
   assert.doesNotMatch(css, /#a855f7/i);
   assert.match(css, /smart-prompt-inline-prefix-chip[^}]*var\(--connection-flow\)/);
-  assert.match(css, /generation-mode-btn\.active\s*\{[^}]*color:color-mix\(in srgb, var\(--connection-flow\) 76%, var\(--text\)\)[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 36%, var\(--line\)\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--connection-flow\) 24%, transparent\)/);
-  assert.match(css, /smart-control\.generation-mode-control:hover \.generation-mode-btn\.active,\.smart-control\.generation-mode-control:focus-within \.generation-mode-btn\.active\s*\{[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 36%, var\(--line\)\)[^}]*box-shadow:0 0 0 1px color-mix\(in srgb, var\(--connection-flow\) 24%, transparent\)/);
-  assert.match(css, /smart-control\.generation-mode-control\.pinned \.generation-mode-btn\.active\s*\{[^}]*border-color:color-mix\(in srgb, var\(--connection-flow\) 62%, var\(--line\)\)[^}]*box-shadow:0 0 0 2px color-mix\(in srgb, var\(--connection-flow\) 34%, transparent\)/);
+  assert.doesNotMatch(css, /generation-mode-btn\.active/);
+  assert.doesNotMatch(js, /generationModeBtn\?\.classList\.toggle\('active'/);
   assert.match(css, /generation-mode-option\.active[^}]*var\(--connection-flow\)/);
+});
+
+test('resting prompt media capsules use a slightly clearer outer border', () => {
+  assert.match(css, /\.mention-image-token\s*\{[^}]*border:1px solid color-mix\(in srgb, var\(--text\) 20%, var\(--line\)\)/);
+  assert.match(css, /\.mention-image-token:hover\s*\{[^}]*border-color:var\(--strong\)/);
+});
+
+test('unavailable Venice parameters keep the warning color without a status border or background', () => {
+  const pillRule = css.match(/\.venice-capability-error-pill\s*\{[^}]*\}/)?.[0] || '';
+  assert.match(pillRule, /color:#f59e0b !important/);
+  assert.doesNotMatch(pillRule, /(?:border|background)/);
+  assert.match(css, /\.venice-capability-error-control:not\(\.is-pending\):is\(:hover,:focus-within,\.pinned,\.interacting,\.is-open\) > \.venice-capability-error-pill\s*\{[^}]*border-color:color-mix\(in srgb, #f59e0b 42%, transparent\) !important[^}]*background:color-mix\(in srgb, #f59e0b 8%, transparent\) !important/);
 });
 
 test('generation-mode clear label is optically raised without moving its button', () => {
@@ -458,9 +469,10 @@ test('image and video parameter controls share the same visual sizing', () => {
   const videoControl = js.match(/function renderVideoSettingsControl\(\)[\s\S]*?\n\}/)?.[0] || '';
   assert.doesNotMatch(imageControl, /pill-caret/);
   assert.doesNotMatch(videoControl, /pill-caret/);
-  assert.match(css, /\.smart-pill\.parameter-settings-pill\s*\{[^}]*color:var\(--muted\)/);
+  assert.match(css, /\.smart-pill\.parameter-settings-pill\s*\{[^}]*color:var\(--text\)/);
   assert.match(css, /\.image-settings-pill \.image-settings-summary\s*\{[^}]*color:inherit[^}]*font-weight:500/);
   assert.match(css, /\.video-settings-pill \.video-settings-summary\s*\{[^}]*color:inherit[^}]*font-weight:500/);
+  assert.match(css, /\.video-settings-pill \.video-settings-audio-icon\s*\{[^}]*opacity:1/);
   assert.match(css, /\.video-aspect-option\s*\{[^}]*height:48px[^}]*grid-template-rows:22px 12px[^}]*font-size:9\.5px[^}]*line-height:12px/);
   assert.match(css, /\.video-resolution-grid button\s*\{[^}]*height:32px[^}]*border-radius:9px[^}]*font-size:10\.5px/);
   assert.match(css, /\.video-segmented button\s*\{[^}]*height:32px[^}]*border-radius:9px[^}]*font-size:10\.5px/);
@@ -473,6 +485,28 @@ test('Smart Canvas video resolution always requires an explicit supported value'
   assert.doesNotMatch(videoControl, /videoResAuto/);
   assert.doesNotMatch(videoControl, /\['',\s*\.\.\.caps\.resolutions\]/);
   assert.match(videoControl, /const resolutionOptions = caps\.catalogControlled[\s\S]*?\['480p','720p','1080p','4k'\][\s\S]*?: caps\.resolutions/);
+});
+
+test('image and video bottom controls match the top control contrast without flattening semantic states', () => {
+  const imageProvider = js.match(/function renderProviderControl\(providers\)[\s\S]*?\n\}/)?.[0] || '';
+  const imageModel = js.match(/function renderModelControl\(models\)[\s\S]*?\n\}/)?.[0] || '';
+  const videoProvider = js.match(/function renderVideoProviderControl\(providers\)[\s\S]*?\n\}/)?.[0] || '';
+  const videoModel = js.match(/function renderVideoModelControl\(models\)[\s\S]*?\n\}/)?.[0] || '';
+  [imageProvider, imageModel, videoProvider, videoModel].forEach(source => {
+    assert.match(source, /class="smart-control (?:provider|model)-control"/);
+    assert.match(source, /class="sub"/);
+  });
+  assert.match(css, /\.smart-pill \.sub\s*\{[^}]*color:var\(--text\)/);
+  assert.match(css, /\.composer \.dynamic-params > \.smart-control > \.smart-pill > :is\(i,svg\):not\(\.pill-caret\)\s*\{[^}]*color:currentColor[^}]*opacity:1/);
+  assert.match(css, /\.venice-quote-count-icon\s*\{[^}]*color:currentColor[^}]*opacity:1/);
+  assert.match(css, /\.venice-image-quote\.is-ready\s*\{ color:var\(--text\); \}/);
+  assert.match(css, /\.venice-video-quote\.is-ready\s*\{ color:var\(--text\); \}/);
+  assert.match(css, /\.venice-image-quote\.is-free\s*\{ color:#22c55e; \}/);
+  assert.match(css, /\.venice-video-quote\.is-free\s*\{ color:#22c55e; \}/);
+  assert.match(css, /\.venice-image-quote\.is-error\s*\{ color:#f59e0b; \}/);
+  assert.match(css, /\.venice-video-quote\.is-error\s*\{ color:#f59e0b; \}/);
+  assert.match(css, /\.venice-capability-error-pill\s*\{ color:#f59e0b !important; \}/);
+  assert.match(css, /\.venice-capability-error-control\.is-pending \.venice-capability-error-pill\s*\{[^}]*color:var\(--muted\) !important/);
 });
 
 test('background catalog and config refreshes defer an active hover popover rebuild until leave', () => {
@@ -521,7 +555,7 @@ test('clearing a generation mode only closes hover-opened or inline panels', () 
   assert.match(clearMode, /closeGenerationModePanel\(\)[\s\S]*?renderDynamicParams\(\);[\s\S]*?renderGenerationModeControl\(\)/);
   assert.match(js, /function generationModeShouldBeOpen\([\s\S]*?!ctrl\.classList\.contains\('hover-dismissed'\)/);
   assert.match(js, /ctrl\.onmouseleave = \(\) => \{[\s\S]*?classList\.remove\('interacting', 'hover-armed', 'hover-dismissed'\)/);
-  assert.match(css, /\.smart-control\.generation-mode-control\.hover-dismissed \.generation-mode-btn:not\(\.active\)\s*\{[^}]*background:transparent[^}]*border-color:transparent[^}]*box-shadow:none/);
+  assert.match(css, /\.smart-control\.generation-mode-control\.hover-dismissed \.generation-mode-btn\s*\{[^}]*background:transparent[^}]*border-color:transparent[^}]*box-shadow:none/);
 });
 
 test('generation catalog reads the API response wrapper used by the backend', () => {
