@@ -157,6 +157,8 @@ let isRKeyDown = false;
 let selectionJustFinished = false;
 let resizeState = null;
 let nodeChromeSettleRaf = 0;
+const nodeGeometryTransitions = new Map();
+const queuedNodeGeometryTransitions = new Map();
 let llmInstructionResizeState = null;
 let llmSystemResizeState = null;
 let promptSplitResizeState = null;
@@ -3496,6 +3498,8 @@ function resetSmartCanvasTransientStateForSwitch(){
     dragState = null;
     selectionState = null;
     resizeState = null;
+    [...nodeGeometryTransitions.keys()].forEach(cancelNodeGeometryTransition);
+    queuedNodeGeometryTransitions.clear();
     document.body.classList.remove('smart-node-resize', 'smart-node-box-resize', 'smart-llm-instr-resize', 'smart-llm-system-resize', 'smart-prompt-split-resize');
     resetMagneticPort();
     thumbDragState = null;
@@ -4930,9 +4934,13 @@ function fitSmartLoopNode(node){
     node.w = smartLoopWidth(node);
     node.h = smartLoopHeight(node);
 }
-function nodeRect(node){
+function logicalNodeRect(node){
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     return {x:node.x || 0, y:node.y || 0, width:layout.width, height:layout.height};
+}
+function nodeRect(node){
+    const transitionRect = nodeGeometryTransitions.get(node?.id)?.visualRect;
+    return transitionRect ? {...transitionRect} : logicalNodeRect(node);
 }
 function nodeConnectionRect(node){
     const rect = nodeRect(node);
@@ -13912,6 +13920,31 @@ function hideRunTimerForNode(node){
     scheduleSave();
     return true;
 }
+function syncGeneratingNodeCornerChrome(root=world){
+    const nodeEls = root?.matches?.('.image-node')
+        ? [root]
+        : [...(root?.querySelectorAll?.('.image-node.node-generating') || [])];
+    nodeEls.forEach(nodeEl => {
+        const timer = nodeEl.querySelector(':scope > .run-time-pill');
+        const badge = nodeEl.querySelector(':scope > .rh-progress-border-host > .rh-progress-node-badge');
+        const cancel = nodeEl.querySelector(':scope > .floating-node-actions .smart-task-cancel');
+        if(!nodeEl.classList.contains('node-generating') || !timer || !badge || !cancel){
+            nodeEl.classList.remove('generation-timer-suppressed');
+            return;
+        }
+        const wasSuppressed = nodeEl.classList.contains('generation-timer-suppressed');
+        if(wasSuppressed){
+            timer.style.setProperty('visibility', 'hidden', 'important');
+            nodeEl.classList.remove('generation-timer-suppressed');
+        }
+        // Measure the badge's real rendered constraint instead of estimating the
+        // gap between controls. Its own max-width can clip the label even when
+        // the geometric gap to the timer appears large enough.
+        const shouldSuppress = badge.scrollWidth > badge.clientWidth + 1;
+        nodeEl.classList.toggle('generation-timer-suppressed', shouldSuppress);
+        if(wasSuppressed) timer.style.removeProperty('visibility');
+    });
+}
 function refreshRunTimerPills(){
     const active = nodes.some(n => n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.jimengPending || n.runFinishedAt));
     document.querySelectorAll('[data-run-timer]').forEach(el => {
@@ -13925,6 +13958,7 @@ function refreshRunTimerPills(){
         el.classList.toggle('done', finished && !node.runFailed);
         el.classList.toggle('failed', finished && node.runFailed === true);
     });
+    syncGeneratingNodeCornerChrome();
     if(active && !runTimerInterval) runTimerInterval = setInterval(refreshRunTimerPills, 1000);
     if(!active && runTimerInterval){ clearInterval(runTimerInterval); runTimerInterval = null; }
 }
@@ -13956,6 +13990,8 @@ function refreshSmartGenerationSurfaceVisibility(root=world){
     surfaces.forEach(surface => smartGenerationSurfaceObserver.observe(surface));
 }
 function render(){
+    preserveNodeGeometryTransitionsForRender();
+    prepareQueuedNodeGeometryTransitionsForRender();
     if(canvasReferencePickState && !nodes.some(node => node.id === canvasReferencePickState.targetNodeId)) finishCanvasReferencePick();
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
     rememberInlineVideoActivations();
@@ -14092,6 +14128,7 @@ function render(){
     refreshRunTimerPills();
     scheduleSmartVideoResetFrameRefresh();
     scheduleSmartImageLodRefresh();
+    flushQueuedNodeGeometryTransitions();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -14151,6 +14188,9 @@ function measureSmartNodeImages(){
             loadSmartOriginalImageDimensions(originalSrc).then(size => {
                 image._naturalSizeLoading = false;
                 if(!size || image.natural_w || image.natural_h) return;
+                const transitionFrom = !isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h
+                    ? captureNodeGeometryTransition(node.id)
+                    : null;
                 image.natural_w = size.w;
                 image.natural_h = size.h;
                 delete image.layout_w;
@@ -14164,6 +14204,7 @@ function measureSmartNodeImages(){
                 }
                 if(isSmartGroupNode(node) && node._singleMediaCell) fitSmartGroupToPreservedSingleMedia(node, node._singleMediaCell);
                 updateNodeElementDuringResize(node);
+                if(transitionFrom) animateNodeGeometryTransition(node.id, transitionFrom, {duration:260, reason:'media-metadata'});
                 if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
                 if(isNodeSelected(node.id)) updateComposer();
                 scheduleSave();
@@ -14176,8 +14217,11 @@ function measureSmartNodeImages(){
             if(w <= 0 || h <= 0 || image.natural_w || image.natural_h) return;
             const prevW = Number(image.layout_w || 0);
             const prevH = Number(image.layout_h || 0);
+            if(isPreview && prevW === w && prevH === h) return;
+            const transitionFrom = !isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h
+                ? captureNodeGeometryTransition(node.id)
+                : null;
             if(isPreview){
-                if(prevW === w && prevH === h) return;
                 image.layout_w = w;
                 image.layout_h = h;
             } else {
@@ -14195,6 +14239,7 @@ function measureSmartNodeImages(){
             }
             if(isSmartGroupNode(node) && node._singleMediaCell) fitSmartGroupToPreservedSingleMedia(node, node._singleMediaCell);
             updateNodeElementDuringResize(node);
+            if(transitionFrom) animateNodeGeometryTransition(node.id, transitionFrom, {duration:260, reason:'media-metadata'});
             if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
             if(isNodeSelected(node.id)) updateComposer();
             scheduleSave();
@@ -20232,38 +20277,231 @@ function pendingBoxSize(count, options={}){
         h:visibleRows * cell - 8 + pad + MEDIA_GROUP_SUMMARY_SPACE
     };
 }
-function animateFirstPendingNode(nodeId, fromSize){
-    // Visual enhancement only: it must never interrupt generation or leave a node busy.
+function nodeGeometryTransitionReducedMotion(){
+    return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+}
+function currentNodeGeometryRect(nodeId){
+    if(!nodeId) return null;
+    const el = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+    if(!el) return null;
+    const node = nodes.find(item => item.id === nodeId);
+    const rect = node ? nodeRect(node) : null;
+    if(!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+    return {x:Number(rect.x) || 0, y:Number(rect.y) || 0, width:rect.width, height:rect.height};
+}
+function cancelNodeGeometryTransition(nodeId){
+    const entry = nodeGeometryTransitions.get(nodeId);
+    if(!entry) return;
+    nodeGeometryTransitions.delete(nodeId);
+    if(entry.frame) cancelAnimationFrame(entry.frame);
+    entry.finished = true;
+    try { entry.animation?.cancel(); } catch(_error){}
+    entry.el?.classList.remove('node-geometry-transition', 'node-geometry-content-fade');
+}
+function captureNodeGeometryTransition(nodeId){
+    const size = currentNodeGeometryRect(nodeId);
+    cancelNodeGeometryTransition(nodeId);
+    return size;
+}
+function captureNodeHistoryStack(node, nodeRectBefore){
+    if(!node || !nodeRectBefore) return null;
+    const group = historyGroupForNode(node);
+    if(!group) return null;
+    const groupRect = nodeRect(group);
+    const nodeCenter = nodeRectBefore.x + nodeRectBefore.width / 2;
+    const groupCenter = groupRect.x + groupRect.width / 2;
+    const centerOffset = groupCenter - nodeCenter;
+    const rawGap = groupRect.y - (nodeRectBefore.y + nodeRectBefore.height);
+    const centerTolerance = Math.max(48, Math.min(nodeRectBefore.width, groupRect.width) * .2);
+    const followsStack = Math.abs(centerOffset) <= centerTolerance
+        && groupRect.y >= nodeRectBefore.y + 40
+        && rawGap <= 180;
+    return {
+        id:group.id,
+        rect:{...groupRect},
+        centerOffset,
+        gap:Math.max(56, rawGap),
+        followsStack
+    };
+}
+function queueNodeGeometryTransition(nodeId, options={}){
+    if(!nodeId) return null;
+    const fromSize = captureNodeGeometryTransition(nodeId);
+    if(!fromSize) return null;
+    const queuedOptions = {...options};
+    if(queuedOptions.syncHistoryStack){
+        queuedOptions.historyStack = captureNodeHistoryStack(nodes.find(item => item.id === nodeId), fromSize);
+    }
+    queuedNodeGeometryTransitions.set(nodeId, {fromSize, options:queuedOptions});
+    return fromSize;
+}
+function prepareQueuedNodeGeometryTransitionsForRender(){
+    [...queuedNodeGeometryTransitions.entries()].forEach(([nodeId, transition]) => {
+        const node = nodes.find(item => item.id === nodeId);
+        const fromRect = transition?.fromSize;
+        const options = transition?.options || {};
+        if(!node || !fromRect || options.anchor !== 'top-center') return;
+        const unanchored = logicalNodeRect(node);
+        node.x = fromRect.x + (fromRect.width - unanchored.width) / 2;
+        node.y = fromRect.y;
+        if(!options.syncHistoryStack) return;
+        const targetRect = logicalNodeRect(node);
+        const stack = options.historyStack;
+        const group = stack?.id
+            ? nodes.find(item => item.id === stack.id && isHistoryGroupNode(item) && item.historyFor === node.id)
+            : historyGroupForNode(node);
+        if(!group) return;
+        const groupRect = logicalNodeRect(group);
+        const queueHistoryMove = reason => {
+            if(queuedNodeGeometryTransitions.has(group.id)) return;
+            queuedNodeGeometryTransitions.set(group.id, {
+                fromSize:{...(stack?.rect || groupRect)},
+                options:{duration:options.duration, reason}
+            });
+        };
+        if(stack?.followsStack){
+            queueHistoryMove('history-stack-follow');
+            group.x = targetRect.x + targetRect.width / 2 + stack.centerOffset - groupRect.width / 2;
+            group.y = targetRect.y + targetRect.height + stack.gap;
+        } else if(stack){
+            // A deliberately offset history group remains where the user put it.
+            // Only resolve a real overlap, using the smallest vertical move and
+            // preserving its horizontal offset.
+            const horizontalOverlap = Math.min(targetRect.x + targetRect.width, groupRect.x + groupRect.width)
+                - Math.max(targetRect.x, groupRect.x);
+            const safeY = targetRect.y + targetRect.height + 56;
+            const isBelowNodeTop = groupRect.y >= targetRect.y + 40;
+            if(horizontalOverlap > 24 && isBelowNodeTop && groupRect.y < safeY){
+                queueHistoryMove('history-collision-avoidance');
+                group.y = safeY;
+            }
+        } else if(!stack){
+            // A history group created by this run has no previous visual box.
+            // Place it directly on the same center line below the pending node.
+            group.x = targetRect.x + targetRect.width / 2 - groupRect.width / 2;
+            group.y = targetRect.y + targetRect.height + 56;
+        }
+    });
+}
+function animateNodeGeometryTransition(nodeId, fromSize, options={}){
+    // Geometry animation is visual-only. Model dimensions are already final,
+    // while nodeRect() reads the live visual override for connections, minimap,
+    // hit testing, and any render that interrupts this transition.
     try {
-        const prefersReducedMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
-        if(prefersReducedMotion || !nodeId || !fromSize) return;
+        if(nodeGeometryTransitionReducedMotion() || !nodeId || !fromSize) return false;
         const el = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
-        if(!el || !el.classList.contains('node-pending') || typeof el.animate !== 'function') return;
-        const toWidth = Math.max(1, el.getBoundingClientRect().width);
-        const toHeight = Math.max(1, el.getBoundingClientRect().height);
+        if(!el || typeof el.animate !== 'function') return false;
+        cancelNodeGeometryTransition(nodeId);
+        const node = nodes.find(item => item.id === nodeId);
+        if(!node) return false;
+        const targetRect = logicalNodeRect(node);
+        const toWidth = Math.max(1, targetRect.width);
+        const toHeight = Math.max(1, targetRect.height);
         const fromWidth = Math.max(1, Number(fromSize.width) || toWidth);
         const fromHeight = Math.max(1, Number(fromSize.height) || toHeight);
         const scaleX = Math.max(.08, Math.min(8, fromWidth / toWidth));
         const scaleY = Math.max(.08, Math.min(8, fromHeight / toHeight));
-        el.classList.add('first-pending-transition');
-        const animation = el.animate([
-            {transform:`scale(${scaleX}, ${scaleY})`, opacity:.88},
-            {transform:'scale(1.012, 1.012)', opacity:1, offset:.82},
-            {transform:'scale(1, 1)', opacity:1}
-        ], {duration:360, easing:'cubic-bezier(.22, 1, .36, 1)', fill:'both'});
+        const translateX = (Number(fromSize.x) || 0) - targetRect.x;
+        const translateY = (Number(fromSize.y) || 0) - targetRect.y;
+        if(Math.abs(scaleX - 1) < .002 && Math.abs(scaleY - 1) < .002
+            && Math.abs(translateX) < .25 && Math.abs(translateY) < .25) return false;
+        const duration = Math.max(80, Number(options.duration) || (options.contentFade ? 360 : 300));
+        const contentFade = options.contentFade === true;
+        const fromTransform = `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`;
+        const frames = contentFade
+            ? [
+                {transform:fromTransform, opacity:.9},
+                {transform:'scale(1.008, 1.008)', opacity:1, offset:.84},
+                {transform:'scale(1, 1)', opacity:1}
+            ]
+            : [
+                {transform:fromTransform},
+                {transform:'scale(1.006, 1.006)', offset:.86},
+                {transform:'scale(1, 1)'}
+            ];
+        el.classList.add('node-geometry-transition');
+        el.classList.toggle('node-geometry-content-fade', contentFade);
+        const animation = el.animate(frames, {duration, easing:'cubic-bezier(.22, 1, .36, 1)', fill:'both'});
+        const entry = {
+            nodeId,
+            el,
+            animation,
+            frame:0,
+            finished:false,
+            endsAt:performance.now() + duration,
+            options:{...options, duration},
+            visualRect:{
+                x:Number.isFinite(Number(fromSize.x)) ? Number(fromSize.x) : targetRect.x,
+                y:Number.isFinite(Number(fromSize.y)) ? Number(fromSize.y) : targetRect.y,
+                width:fromWidth,
+                height:fromHeight
+            }
+        };
+        nodeGeometryTransitions.set(nodeId, entry);
+        const syncVisualGeometry = () => {
+            if(entry.finished || nodeGeometryTransitions.get(nodeId) !== entry) return;
+            const liveEl = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+            if(liveEl !== entry.el){
+                cancelNodeGeometryTransition(nodeId);
+                return;
+            }
+            const transform = getComputedStyle(entry.el).transform;
+            if(transform && transform !== 'none' && typeof DOMMatrixReadOnly === 'function'){
+                const matrix = new DOMMatrixReadOnly(transform);
+                entry.visualRect = {
+                    x:targetRect.x + matrix.e,
+                    y:targetRect.y + matrix.f,
+                    width:targetRect.width * Math.abs(matrix.a),
+                    height:targetRect.height * Math.abs(matrix.d)
+                };
+            } else {
+                entry.visualRect = {...targetRect};
+            }
+            if(selectedId === nodeId) positionComposerForNode(node);
+            scheduleInteractionLayerRefresh();
+            entry.frame = requestAnimationFrame(syncVisualGeometry);
+        };
         const finish = () => {
-            el.classList.remove('first-pending-transition');
-            scheduleConnectionLayerRefresh();
+            if(entry.finished) return;
+            entry.finished = true;
+            if(entry.frame) cancelAnimationFrame(entry.frame);
+            if(nodeGeometryTransitions.get(nodeId) === entry) nodeGeometryTransitions.delete(nodeId);
+            entry.el.classList.remove('node-geometry-transition', 'node-geometry-content-fade');
+            try { entry.animation.cancel(); } catch(_error){}
+            if(selectedId === nodeId) positionComposerForNode(node);
+            if(runningHubProgressTasks(node).length) scheduleRunningHubProgressRefresh(node);
+            scheduleInteractionLayerRefresh();
         };
         animation.addEventListener('finish', finish, {once:true});
         animation.addEventListener('cancel', finish, {once:true});
+        syncVisualGeometry();
+        return true;
     } catch(error) {
-        console.warn('First pending node transition skipped:', error);
+        console.warn('Node geometry transition skipped:', error);
+        cancelNodeGeometryTransition(nodeId);
+        return false;
     }
 }
-function firstPendingTransitionActive(nodeId){
-    if(!nodeId) return false;
-    return Boolean(world.querySelector(`.image-node.first-pending-transition[data-id="${CSS.escape(nodeId)}"]`));
+function preserveNodeGeometryTransitionsForRender(){
+    [...nodeGeometryTransitions.entries()].forEach(([nodeId, entry]) => {
+        const fromSize = currentNodeGeometryRect(nodeId);
+        const remaining = Math.max(80, Number(entry.endsAt || 0) - performance.now());
+        const options = {...entry.options, duration:remaining};
+        cancelNodeGeometryTransition(nodeId);
+        if(fromSize && !queuedNodeGeometryTransitions.has(nodeId)){
+            queuedNodeGeometryTransitions.set(nodeId, {fromSize, options});
+        }
+    });
+}
+function flushQueuedNodeGeometryTransitions(){
+    const queued = [...queuedNodeGeometryTransitions.entries()];
+    queuedNodeGeometryTransitions.clear();
+    queued.forEach(([nodeId, transition]) => {
+        animateNodeGeometryTransition(nodeId, transition.fromSize, transition.options);
+    });
+}
+function nodeGeometryTransitionActive(nodeId){
+    return Boolean(nodeId && nodeGeometryTransitions.has(nodeId));
 }
 function mentionOptionMediaHtml(img){
     const kind = mediaKindForItem(img);
@@ -22025,6 +22263,11 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
         const itemKind = (typeof item === 'object' && item.kind) || kind;
         return copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true});
     }).filter(img => img.url));
+    if(imgs.length === 1) queueNodeGeometryTransition(pendingNode.id, {
+        anchor:'top-center',
+        syncHistoryStack:true,
+        reason:'single-result'
+    });
     replaceOutputsToNodeWithHistory(pendingNode, imgs, kind, meta);
     delete pendingNode._replaceExistingOutputsOnNextResult;
     const metaTarget = pendingNode._runMetaTargetId ? nodes.find(n => n.id === pendingNode._runMetaTargetId) : pendingNode;
@@ -23729,8 +23972,6 @@ async function runGeneration(event=null, options={}){
         return {status:'skipped', error};
     }
     const wasEmptyFirstRun = isSmartImageNode(node) && !(node.images || []).length && !node.pending && !node.queued && !node.jimengPending;
-    const emptyNodeEl = wasEmptyFirstRun ? world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`) : null;
-    const emptyNodeRect = emptyNodeEl?.getBoundingClientRect();
     if(smartNodeInFlight(node)){
         const error = new Error('节点正在运行');
         if(options.throwOnError) throw error;
@@ -23830,6 +24071,12 @@ async function runGeneration(event=null, options={}){
     else delete pendingNode.runBackdropInputRefs;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
+        queueNodeGeometryTransition(pendingNode.id, {
+            anchor:'top-center',
+            syncHistoryStack:true,
+            contentFade:wasEmptyFirstRun,
+            reason:'pending'
+        });
         const currentOutputs = cleanHistoryImages(pendingNode.images || []);
         rememberSmartNodePreRunBox(pendingNode);
         const pendingBox = pendingBoxSize(Math.max(1, Number(expectedCount) || 1), {sourceNode:node, refs, settings:activeSettings});
@@ -23872,9 +24119,6 @@ async function runGeneration(event=null, options={}){
     const runSignal = runContext.controller.signal;
     render();
     scheduleSave();
-    if(wasEmptyFirstRun && !branchNode && (logKind === 'image' || logKind === 'video')){
-        animateFirstPendingNode(pendingNode.id, emptyNodeRect && {width:emptyNodeRect.width, height:emptyNodeRect.height});
-    }
     try {
         if(activeSettings.engine === 'comfy'){
             await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta, activeSettings, {...options, signal:runSignal, runContext});
@@ -23952,9 +24196,9 @@ async function runGeneration(event=null, options={}){
             pendingNode.runTimerHidden = false;
             pendingNode.running = false;
             // Fast async APIs (for example Venice) return task IDs while the
-            // first-size transition is still playing. The current DOM already
+            // pending-size transition is still playing. The current DOM already
             // represents the same pending state, so do not replace it mid-animation.
-            if(!firstPendingTransitionActive(pendingNode.id)) render();
+            if(!nodeGeometryTransitionActive(pendingNode.id)) render();
             else refreshRunTimerPills();
             scheduleSave();
             await saveCanvas();
@@ -25212,9 +25456,14 @@ function scheduleRunningHubProgressRefresh(node){
         const current = nodes.find(item => item.id === node.id);
         const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
         if(!current || !nodeEl) return;
+        // Progress SVG geometry must always describe the final logical node
+        // box. nodeRect() intentionally exposes the visual FLIP frame to
+        // connections and hit testing, which would leave a mid-transition
+        // viewBox/radius behind after the parent transform completes.
+        const logicalLayout = logicalNodeRect(current);
         const currentHost = nodeEl.querySelector(':scope > .rh-progress-border-host');
         const currentGrid = nodeEl.querySelector(':scope > .node-body .smart-progress-task-grid');
-        const html = runningHubProgressBorderHtml(current);
+        const html = runningHubProgressBorderHtml(current, logicalLayout);
         if(!html){
             currentHost?.remove();
         } else {
@@ -25226,7 +25475,8 @@ function scheduleRunningHubProgressRefresh(node){
                 else nodeEl.prepend(fresh);
             }
         }
-        const gridHtml = smartProgressTaskGridHtml(current);
+        syncGeneratingNodeCornerChrome(nodeEl);
+        const gridHtml = smartProgressTaskGridHtml(current, logicalLayout);
         if(!gridHtml){
             if(currentGrid) render();
             return;
@@ -25680,6 +25930,11 @@ async function cancelSmartNodeGeneration(nodeId, options=null){
             status:'cancelled'
         });
     }
+    queueNodeGeometryTransition(node.id, {
+        anchor:'top-center',
+        syncHistoryStack:true,
+        reason:'cancel-restore'
+    });
     clearSmartNodeBusyState(node);
     clearSmartNodePreRunBox(node, true);
     node.runFinishedAt = nowMs();
@@ -25984,10 +26239,21 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image', options={}
     if(!node || !taskId) return [];
     const taskMeta = smartPendingTasks(node).find(task => task.taskId === taskId) || null;
     const taskProviderId = String(taskMeta?.providerId || taskMeta?.provider_id || '');
+    const mediaItems = resultMediaUrls(images);
+    const currentItems = cleanHistoryImages(node.images || []);
+    const incomingUrls = new Set(mediaItems.map(item => typeof item === 'string' ? item : item?.url || '').filter(Boolean));
+    const completesAsSingleMedia = currentItems.length === 0
+        && incomingUrls.size === 1
+        && smartPendingTasks(node).length <= 1
+        && Number(node.pending || 0) <= 1;
+    if(completesAsSingleMedia) queueNodeGeometryTransition(node.id, {
+        anchor:'top-center',
+        syncHistoryStack:true,
+        reason:'single-result'
+    });
     node.pendingTasks = smartPendingTasks(node).filter(task => task.taskId !== taskId);
     node.pending = Math.max(0, Number(node.pending || 0) - 1);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
-    const mediaItems = resultMediaUrls(images);
     const existing = cleanHistoryImages(node.images || []);
     const seen = new Set(existing.map(img => `${img.kind || ''}|${img.url || ''}`));
     const additions = cleanHistoryImages((mediaItems || []).map((item, i) => {
@@ -26063,7 +26329,7 @@ async function resumeSmartPendingNode(node, logContext={}){
         keepRecoverableTasks:true,
         error:tasks.find(task => task.failed)?.error
     });
-    if(!firstPendingTransitionActive(node.id)) render();
+    if(!nodeGeometryTransitionActive(node.id)) render();
     else refreshRunTimerPills();
     const failures = [];
     await Promise.all(tasks.map(async (task, index) => {

@@ -120,6 +120,8 @@ test('generation nodes expose a dedicated cancel control and cancelled log style
 test('timer and cancel corner controls do not overlap, and the composer run button becomes stop', () => {
     assert.match(cssSource, /\.image-node\.node-generating \.run-time-pill\s*\{[^}]*right:39px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
     assert.match(cssSource, /\.image-node\.node-generating \.run-time-pill::after\s*\{[^}]*left:100%;[^}]*width:6px;[^}]*background:transparent;[^}]*pointer-events:auto;[^}]*cursor:default;/);
+    assert.match(cssSource, /\.image-node\.node-generating\.generation-timer-suppressed \.run-time-pill\s*\{[^}]*display:none !important;/);
+    assert.match(cssSource, /\.image-node\.node-generating\.generation-timer-suppressed \.rh-progress-node-badge\.image-resolution-badge\s*\{[^}]*max-width:calc\(100% - 46px\);/);
     assert.match(cssSource, /\.smart-task-cancel\s*\{[^}]*width:26px;[^}]*height:26px;[^}]*border-radius:10px;/);
     assert.match(cssSource, /\.smart-task-cancel i,\.smart-task-cancel svg\s*\{[^}]*width:11px;[^}]*height:11px;/);
     assert.match(cssSource, /\.run-time-pill\s*\{[^}]*right:7px;[^}]*top:7px;[^}]*min-width:26px;[^}]*height:26px;[^}]*padding:0 5px;[^}]*border-radius:10px;/);
@@ -133,6 +135,13 @@ test('timer and cancel corner controls do not overlap, and the composer run butt
     assert.match(jsSource, /function setNodeDragChromeHidden\(hidden\)[\s\S]*?smart-node-drag-transitioning[\s\S]*?classList\.toggle\('smart-node-drag', shouldHide\)[\s\S]*?classList\.toggle\('node-drag-hidden', shouldHide\)/);
     assert.match(jsSource, /window\.onmouseup = e => \{\s*stopSmartEdgePan\(\);\s*setNodeDragChromeHidden\(false\);/);
     assert.match(jsSource, /querySelectorAll\('\.run-time-pill'\)[\s\S]*?\['pointerdown', 'mousedown', 'click', 'dblclick'\][\s\S]*?stopImmediatePropagation\(\)/);
+    const syncCornerChrome = extractFunction('syncGeneratingNodeCornerChrome');
+    assert.match(syncCornerChrome, /badge\.scrollWidth/);
+    assert.match(syncCornerChrome, /badge\.scrollWidth > badge\.clientWidth \+ 1/);
+    assert.doesNotMatch(syncCornerChrome, /availableWithTimer/);
+    assert.match(syncCornerChrome, /classList\.toggle\('generation-timer-suppressed', shouldSuppress\)/);
+    assert.match(extractFunction('refreshRunTimerPills'), /syncGeneratingNodeCornerChrome\(\)/);
+    assert.match(extractFunction('scheduleRunningHubProgressRefresh'), /syncGeneratingNodeCornerChrome\(nodeEl\)/);
     assert.match(cssSource, /\.run-time-pill\.done\s*\{[^}]*background:rgba\(6,95,70,\.86\);/);
     assert.match(cssSource, /\.image-node:has\(\.node-port:is\(:hover,\.is-magnetic,\.is-active,\.is-caught\)\) \.run-time-pill:is\(\.done,\.failed,\.cancelled\)\s*\{\s*opacity:0;/);
     assert.match(cssSource, /\.run-btn\.is-stop\s*\{/);
@@ -155,6 +164,97 @@ test('generated nodes expose a quick run button that reuses single-node generati
     const quickRun = extractFunction('runSmartNodeQuick');
     assert.match(quickRun, /runGeneration\(null,\s*\{nodeId\}\)/);
     assert.match(cssSource, /\.mini-x\.smart-node-run-btn\s*\{/);
+});
+
+test('node geometry transitions stay synchronized and cover the supported size changes', () => {
+    assert.match(cssSource, /\.image-node\.node-geometry-transition\s*\{[^}]*transform-origin:top left;[^}]*will-change:transform,opacity;[^}]*pointer-events:none;/);
+    assert.match(cssSource, /\.node-geometry-transition\.node-geometry-content-fade/);
+    assert.match(cssSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.image-node\.node-geometry-transition/);
+    assert.doesNotMatch(cssSource, /\.image-node\.first-pending-transition/);
+
+    const animateGeometry = extractFunction('animateNodeGeometryTransition');
+    assert.match(animateGeometry, /nodeGeometryTransitionReducedMotion\(\)/);
+    assert.match(animateGeometry, /nodeGeometryTransitions\.set\(nodeId, entry\)/);
+    assert.match(animateGeometry, /entry\.visualRect\s*=\s*\{/);
+    assert.match(animateGeometry, /translate\(\$\{translateX\}px, \$\{translateY\}px\) scale/);
+    assert.match(animateGeometry, /scheduleInteractionLayerRefresh\(\)/);
+    assert.match(animateGeometry, /runningHubProgressTasks\(node\)\.length\)[\s\S]*scheduleRunningHubProgressRefresh\(node\)/);
+    assert.match(animateGeometry, /animation\.addEventListener\('finish', finish/);
+    assert.match(extractFunction('nodeRect'), /nodeGeometryTransitions\.get\(node\?\.id\)\?\.visualRect[\s\S]*logicalNodeRect\(node\)/);
+    assert.match(extractFunction('render'), /preserveNodeGeometryTransitionsForRender\(\)[\s\S]*prepareQueuedNodeGeometryTransitionsForRender\(\)[\s\S]*flushQueuedNodeGeometryTransitions\(\)/);
+
+    const prepareGeometry = extractFunction('prepareQueuedNodeGeometryTransitionsForRender');
+    assert.match(prepareGeometry, /options\.anchor !== 'top-center'/);
+    assert.match(prepareGeometry, /node\.x = fromRect\.x \+ \(fromRect\.width - unanchored\.width\) \/ 2/);
+    assert.match(prepareGeometry, /queueHistoryMove\('history-stack-follow'\)/);
+    assert.match(prepareGeometry, /group\.y = targetRect\.y \+ targetRect\.height \+ stack\.gap/);
+    assert.match(prepareGeometry, /horizontalOverlap > 24[\s\S]*queueHistoryMove\('history-collision-avoidance'\)[\s\S]*group\.y = safeY/);
+    assert.doesNotMatch(extractFunction('queueNodeGeometryTransition'), /nodeGeometryTransitionReducedMotion/);
+
+    const stackNode = {id:'node-1', type:'smart-image', x:100, y:50, w:200, h:400};
+    const stackGroup = {id:'history-1', type:'smart-image', historyFor:'node-1', x:150, y:306, w:300, h:180};
+    const queuedGeometry = new Map([['node-1', {
+        fromSize:{x:100, y:50, width:400, height:200},
+        options:{
+            anchor:'top-center',
+            syncHistoryStack:true,
+            historyStack:{id:'history-1', rect:{x:150, y:306, width:300, height:180}, centerOffset:0, gap:56, followsStack:true}
+        }
+    }]]);
+    const geometrySandbox = vm.createContext({
+        nodes:[stackNode, stackGroup],
+        queuedNodeGeometryTransitions:queuedGeometry,
+        logicalNodeRect:node => ({x:node.x, y:node.y, width:node.w, height:node.h}),
+        isHistoryGroupNode:node => Boolean(node?.historyFor),
+        historyGroupForNode:() => null
+    });
+    vm.runInContext(`${prepareGeometry}; prepareQueuedNodeGeometryTransitionsForRender();`, geometrySandbox);
+    assert.equal(stackNode.x, 200, 'the generation node keeps its old horizontal center');
+    assert.equal(stackNode.y, 50, 'the generation node keeps its top edge');
+    assert.equal(stackGroup.x, 150, 'the centered history group stays on the shared axis');
+    assert.equal(stackGroup.y, 506, 'the history group follows the new bottom edge with a safe gap');
+    assert.equal(queuedGeometry.get('history-1')?.options?.reason, 'history-stack-follow');
+
+    const collisionNode = {id:'node-2', type:'smart-image', x:100, y:50, w:200, h:400};
+    const collisionGroup = {id:'history-2', type:'smart-image', historyFor:'node-2', x:300, y:306, w:300, h:180};
+    const farNode = {id:'node-3', type:'smart-image', x:100, y:50, w:200, h:400};
+    const farGroup = {id:'history-3', type:'smart-image', historyFor:'node-3', x:300, y:700, w:300, h:180};
+    const offsetGeometry = new Map([
+        ['node-2', {
+            fromSize:{x:100, y:50, width:400, height:200},
+            options:{anchor:'top-center', syncHistoryStack:true, historyStack:{id:'history-2', rect:{x:300, y:306, width:300, height:180}, followsStack:false}}
+        }],
+        ['node-3', {
+            fromSize:{x:100, y:50, width:400, height:200},
+            options:{anchor:'top-center', syncHistoryStack:true, historyStack:{id:'history-3', rect:{x:300, y:700, width:300, height:180}, followsStack:false}}
+        }]
+    ]);
+    const offsetSandbox = vm.createContext({
+        nodes:[collisionNode, collisionGroup, farNode, farGroup],
+        queuedNodeGeometryTransitions:offsetGeometry,
+        logicalNodeRect:node => ({x:node.x, y:node.y, width:node.w, height:node.h}),
+        isHistoryGroupNode:node => Boolean(node?.historyFor),
+        historyGroupForNode:() => null
+    });
+    vm.runInContext(`${prepareGeometry}; prepareQueuedNodeGeometryTransitionsForRender();`, offsetSandbox);
+    assert.equal(collisionGroup.x, 300, 'collision avoidance preserves a deliberate horizontal offset');
+    assert.equal(collisionGroup.y, 506, 'an offset history group moves down only when the new node would overlap it');
+    assert.equal(offsetGeometry.get('history-2')?.options?.reason, 'history-collision-avoidance');
+    assert.equal(farGroup.y, 700, 'a safely distant history group remains untouched');
+    assert.equal(offsetGeometry.has('history-3'), false);
+
+    const progressRefresh = extractFunction('scheduleRunningHubProgressRefresh');
+    assert.match(progressRefresh, /const logicalLayout = logicalNodeRect\(current\)/);
+    assert.match(progressRefresh, /runningHubProgressBorderHtml\(current, logicalLayout\)/);
+    assert.match(progressRefresh, /smartProgressTaskGridHtml\(current, logicalLayout\)/);
+
+    const runGeneration = extractFunction('runGeneration');
+    assert.match(runGeneration, /queueNodeGeometryTransition\(pendingNode\.id, \{[\s\S]*anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'pending'/);
+    assert.match(extractFunction('finalizePendingNode'), /imgs\.length === 1[\s\S]*anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'single-result'/);
+    assert.match(extractFunction('finalizeSmartPendingTask'), /completesAsSingleMedia[\s\S]*anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'single-result'/);
+    assert.match(extractFunction('cancelSmartNodeGeneration'), /anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'cancel-restore'[\s\S]*clearSmartNodePreRunBox\(node, true\)/);
+    assert.match(extractFunction('measureSmartNodeImages'), /captureNodeGeometryTransition\(node\.id\)[\s\S]*reason:'media-metadata'/);
+    assert.doesNotMatch(extractFunction('bindPromptNodeControls'), /queueNodeGeometryTransition|reason:'prompt-layout'/);
 });
 
 test('failed generation nodes show friendly known errors and send uncommon details to logs', () => {
