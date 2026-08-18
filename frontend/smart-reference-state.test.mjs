@@ -104,6 +104,97 @@ test('reference controls keep canvas picker first, media in the middle, and popu
     assert.match(smartCanvasCss, /\.composer-card > \.mention-picker \{ z-index:130; \}/);
 });
 
+test('shortcut trigger toggles the shortcut panel from the same button', () => {
+    assert.match(smartCanvasHtml, /id="smartShortcutToggle"[^>]*onclick="toggleSmartCanvasShortcuts\(\)"/);
+    const toggleSource = extractFunction('toggleSmartCanvasShortcuts');
+    assert.match(toggleSource, /classList\.contains\('open'\)[\s\S]*?closeSmartCanvasShortcuts\(\)[\s\S]*?openSmartCanvasShortcuts\(\)/);
+});
+
+test('input hover titles identify and number every media-producing group shape', () => {
+    const owner = {id:'image-2', type:'smart-image', images:[{url:'/current.png', generatedResult:true}]};
+    const history = {id:'history-2', type:'smart-image', historyFor:owner.id, isHistoryGroup:true, images:[
+        {url:'/old-a.png', generatedResult:true},
+        {url:'/old-b.mp4', kind:'video', generatedResult:true}
+    ]};
+    const mediaGroup = {id:'media-group', type:'smart-image', images:[
+        {url:'/group-a.png', generatedResult:true},
+        {url:'/group-b.mp4', kind:'video', generatedResult:true}
+    ]};
+    const smartGroup = {id:'smart-group', type:'smart-group', images:[
+        {url:'/smart-a.png'},
+        {url:'/smart-b.mp4', kind:'video'}
+    ]};
+    const smartGroupMember = {id:'smart-group-member', type:'smart-image', images:[
+        {url:'/smart-c.mp3', kind:'audio'}
+    ]};
+    const progressGroup = {id:'progress-group', type:'smart-image', images:[]};
+    const snapshotGroup = {id:'snapshot-group', type:'smart-image', images:[], runStatus:'running', runExpectedCount:2};
+    const nodes = [
+        {id:'image-1', type:'smart-image', images:[{url:'/first.png', generatedResult:true}]},
+        owner,
+        history,
+        mediaGroup,
+        smartGroup,
+        progressGroup,
+        snapshotGroup,
+        smartGroupMember
+    ];
+    const {inputThumbHoverTitle} = loadProductionFunctions(
+        ['inputMediaTypeLabel', 'inputGroupMediaNumber', 'smartGroupInputLabel', 'inputThumbHoverTitle'],
+        {
+            nodes,
+            tr:key => key === 'smart.inputNum' ? '输入 {n}' : key,
+            isHistoryGroupNode:node => Boolean(node?.historyFor || node?.isHistoryGroup),
+            isSmartGroupNode:node => node?.type === 'smart-group',
+            imageNameLabel:(_image, _fallback, node) => `图片节点 ${nodes.filter(item => !item.isHistoryGroup && item.type !== 'smart-group').indexOf(node) + 1}`,
+            mediaKindForItem:image => image?.kind || 'image',
+            runningHubProgressTasks:node => node?.id === progressGroup.id ? [{index:0}, {index:1}] : [],
+            isHistoricalRunningSnapshotGroupNode:node => node?.id === snapshotGroup.id,
+            isSelfReferenceForNode:() => false
+        }
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:history.id, imageIndex:0}, 0),
+        '图片节点 2 的历史分组图片 1 输入'
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:history.id, imageIndex:1}, 1),
+        '图片节点 2 的历史分组视频 2 输入'
+    );
+    history.historyFor = 'missing-owner';
+    assert.equal(inputThumbHoverTitle({id:'target'}, {nodeId:history.id, imageIndex:0}, 0), '历史分组图片 1 输入');
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:mediaGroup.id, imageIndex:1}, 1),
+        '图片节点 3 的分组视频 2 输入'
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:smartGroup.id, imageIndex:1, groupNodeId:smartGroup.id, groupImageIndex:1}, 1),
+        '智能分组 1 的视频 2 输入'
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:smartGroupMember.id, imageIndex:0, groupNodeId:smartGroup.id, groupImageIndex:2}, 2),
+        '智能分组 1 的音频 3 输入'
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:progressGroup.id, imageIndex:1, url:'/progress.mp4', kind:'video'}, 1),
+        '图片节点 4 的任务分组视频 2 输入'
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:snapshotGroup.id, imageIndex:0, url:'/snapshot.png'}, 0),
+        '图片节点 5 的运行历史快照分组图片 1 输入'
+    );
+    assert.equal(
+        inputThumbHoverTitle({id:'target'}, {nodeId:owner.id, imageIndex:0}, 0),
+        '图片节点 2 输入'
+    );
+});
+
+test('node media toolbar only reserves the larger top gap when an outside label exists', () => {
+    assert.match(smartCanvasCss, /\.smart-node-floating-menu \{[^}]*top:-40px;/);
+    assert.match(smartCanvasCss, /\.image-node:has\(\.image-name-badge-outside\) > \.smart-node-floating-menu \{ top:-66px; \}/);
+    assert.doesNotMatch(smartCanvasCss, /@media \(max-width: 760px\)\{[\s\S]*?\.smart-node-floating-menu \{[^}]*top:-66px;/);
+});
+
 test('canvas picker resolves one stable media item and preserves smart-group ownership', () => {
     const {canvasReferencePickCandidateForNode} = loadProductionFunctions(
         ['canvasReferencePickCandidateForNode'],

@@ -923,7 +923,8 @@ body.smart-prompt-split-resize .prompt-node-llm .prompt-node-select-control { po
 .image-node:has(.run-time-pill.cancelled):is(:hover,.selected) .run-time-pill.cancelled,
 .image-node.port-hover .run-time-pill:is(.done,.failed,.cancelled),
 .image-node:has(.node-port:is(:hover,.is-magnetic,.is-active,.is-caught)) .run-time-pill:is(.done,.failed,.cancelled) { opacity:0; transition:opacity .14s ease; }
-.smart-node-floating-menu { position:absolute; left:50%; top:-66px; z-index:18; display:inline-flex; align-items:center; gap:4px; height:30px; max-width:min(760px, calc(100vw - 48px)); padding:3px 5px; border-radius:12px; border:1px solid var(--line); background:var(--card); box-shadow:0 14px 34px var(--shadow); transform-origin:50% 100%; transform:translateX(-50%) translateY(3px) scale(var(--canvas-counter-scale, 1)) scale(1.1); opacity:0; pointer-events:none; white-space:nowrap; cursor:default; transition:none; }
+.smart-node-floating-menu { position:absolute; left:50%; top:-40px; z-index:18; display:inline-flex; align-items:center; gap:4px; height:30px; max-width:min(760px, calc(100vw - 48px)); padding:3px 5px; border-radius:12px; border:1px solid var(--line); background:var(--card); box-shadow:0 14px 34px var(--shadow); transform-origin:50% 100%; transform:translateX(-50%) translateY(3px) scale(var(--canvas-counter-scale, 1)) scale(1.1); opacity:0; pointer-events:none; white-space:nowrap; cursor:default; transition:none; }
+.image-node:has(.image-name-badge-outside) > .smart-node-floating-menu { top:-66px; }
 .image-node.selected .smart-node-floating-menu { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0) scale(var(--canvas-counter-scale, 1)) scale(1.1); }
 body.smart-node-selection-transitioning .smart-node-floating-menu { transition:opacity .14s ease, transform .14s ease; }
 body.smart-node-drag-transitioning .smart-node-floating-menu { transition:opacity .14s ease !important; }
@@ -938,7 +939,7 @@ body.smart-node-drag .smart-node-floating-menu,
 body.smart-node-resize .smart-node-floating-menu,
 .image-node.dragging .smart-node-floating-menu { opacity:0 !important; pointer-events:none !important; }
 @media (max-width: 760px){
-    .smart-node-floating-menu { top:-66px; overflow-x:auto; scrollbar-width:none; }
+    .smart-node-floating-menu { overflow-x:auto; scrollbar-width:none; }
     .smart-node-floating-menu::-webkit-scrollbar { display:none; }
     .smart-node-floating-menu button span { display:none; }
     .smart-node-floating-menu button { width:30px; padding:0; }

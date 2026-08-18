@@ -13010,6 +13010,13 @@ function closeSmartCanvasLog(){
     smartLogModal.classList.remove('open');
     scheduleReleaseInactiveSmartVideoSystemPauses();
 }
+function toggleSmartCanvasShortcuts(){
+    if(smartShortcutModal?.classList.contains('open')){
+        closeSmartCanvasShortcuts();
+        return;
+    }
+    openSmartCanvasShortcuts();
+}
 function openSmartCanvasShortcuts(){
     closeVeniceCreditsPanel();
     toggleAssetLibrary(false);
@@ -19367,10 +19374,62 @@ function renderInputPromptPreview(node){
         ? `<div class="input-prompt-preview-label">${escapeHtml(tr('smart.inputUpstream'))}</div><div class="input-prompt-preview-text">${escapeHtml(text)}</div>`
         : '';
 }
+function inputMediaTypeLabel(item){
+    const kind = mediaKindForItem(item);
+    if(kind === 'video') return '视频';
+    if(kind === 'audio') return '音频';
+    if(kind === 'text') return '文本';
+    if(kind === 'file') return '文件';
+    return '图片';
+}
+function inputGroupMediaNumber(img, fallbackIndex=0){
+    const preferred = img?.groupImageIndex !== undefined && img?.groupImageIndex !== ''
+        ? Number(img.groupImageIndex)
+        : Number(img?.imageIndex);
+    return Number.isInteger(preferred) && preferred >= 0
+        ? preferred + 1
+        : Math.max(1, Number(fallbackIndex) + 1 || 1);
+}
+function smartGroupInputLabel(group){
+    const peers = nodes.filter(isSmartGroupNode);
+    const index = peers.findIndex(candidate => candidate.id === group?.id);
+    return `智能分组 ${index >= 0 ? index + 1 : 1}`;
+}
 function inputThumbHoverTitle(currentNode, img, index=0){
     const fallback = tr('smart.inputNum').replace('{n}', String(index + 1));
     const sourceNode = img?.nodeId ? nodes.find(candidate => candidate.id === img.nodeId) : null;
     const sourceImage = sourceNode?.images?.[Number(img?.imageIndex)] || img;
+    const mediaType = inputMediaTypeLabel(sourceImage);
+    const groupNumber = inputGroupMediaNumber(img, index);
+    const smartGroup = img?.groupNodeId
+        ? nodes.find(candidate => candidate.id === img.groupNodeId && isSmartGroupNode(candidate))
+        : (isSmartGroupNode(sourceNode) ? sourceNode : null);
+    if(smartGroup){
+        return `${smartGroupInputLabel(smartGroup)} 的${mediaType} ${groupNumber} 输入`;
+    }
+    if(isHistoryGroupNode(sourceNode)){
+        const historyInputName = `历史分组${mediaType} ${groupNumber} 输入`;
+        const ownerNode = sourceNode.historyFor
+            ? nodes.find(candidate => candidate.id === sourceNode.historyFor)
+            : null;
+        if(ownerNode){
+            const ownerImage = ownerNode.images?.find(item => item?.url) || sourceImage;
+            const ownerName = imageNameLabel(ownerImage, fallback, ownerNode);
+            return `${ownerName} 的${historyInputName}`;
+        }
+        return historyInputName;
+    }
+    const sourceImages = (sourceNode?.images || []).filter(item => item?.url);
+    if(sourceNode && sourceImages.length > 1){
+        const ownerName = imageNameLabel(sourceImages[0], fallback, sourceNode);
+        return `${ownerName} 的分组${mediaType} ${groupNumber} 输入`;
+    }
+    const progressGroup = sourceNode && runningHubProgressTasks(sourceNode).length > 1;
+    if(progressGroup || isHistoricalRunningSnapshotGroupNode(sourceNode)){
+        const ownerName = imageNameLabel(sourceImage, fallback, sourceNode);
+        const groupType = isHistoricalRunningSnapshotGroupNode(sourceNode) ? '运行历史快照分组' : '任务分组';
+        return `${ownerName} 的${groupType}${mediaType} ${groupNumber} 输入`;
+    }
     const mediaName = imageNameLabel(sourceImage, fallback, sourceNode);
     if(currentNode && isSelfReferenceForNode(currentNode, img)) return `${mediaName} · ${tr('smart.inputSelf')}`;
     return `${mediaName} 输入`;
