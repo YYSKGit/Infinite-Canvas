@@ -4617,6 +4617,12 @@ function singleImageLayout(image, node, scale){
     }
     return {cols:1, rows:1, width:Math.round(260*scale), height:Math.round(180*scale), thumb:Math.round(96*scale), single:true};
 }
+function applySingleMediaMetadataLayout(node, image){
+    const layout = singleImageLayout(image, node, mediaNodeDefaultScale(node));
+    node.w = layout.width;
+    node.h = layout.height;
+    return layout;
+}
 function groupImageGridLayout(count, explicitW, explicitH, maxThumb, pad=32, gap=8, maxVisibleRows=MEDIA_GROUP_MAX_VISIBLE_ROWS){
     let best = null;
     for(let cols = 1; cols <= count; cols++){
@@ -14195,7 +14201,12 @@ function measureSmartNodeImages(){
                 image._naturalSizeLoading = false;
                 if(!size || image.natural_w || image.natural_h) return;
                 const transitionFrom = !isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h
-                    ? captureNodeGeometryTransition(node.id)
+                    ? queueNodeGeometryTransition(node.id, {
+                        anchor:'top-center',
+                        syncHistoryStack:true,
+                        duration:260,
+                        reason:'media-metadata'
+                    })
                     : null;
                 image.natural_w = size.w;
                 image.natural_h = size.h;
@@ -14204,15 +14215,15 @@ function measureSmartNodeImages(){
                 applyThumbDisplaySizeToElement(itemEl, image, Math.max(itemEl?.clientWidth || 0, itemEl?.clientHeight || 0));
                 updateImageResolutionBadgeElement(itemEl, image);
                 if(!isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h){
-                    const layout = singleImageLayout(image, node, mediaNodeDefaultScale(node));
-                    node.w = layout.width;
-                    node.h = layout.height;
+                    applySingleMediaMetadataLayout(node, image);
                 }
                 if(isSmartGroupNode(node) && node._singleMediaCell) fitSmartGroupToPreservedSingleMedia(node, node._singleMediaCell);
-                updateNodeElementDuringResize(node);
-                if(transitionFrom) animateNodeGeometryTransition(node.id, transitionFrom, {duration:260, reason:'media-metadata'});
-                if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
-                if(isNodeSelected(node.id)) updateComposer();
+                if(transitionFrom) render();
+                else {
+                    updateNodeElementDuringResize(node);
+                    if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
+                    if(isNodeSelected(node.id)) updateComposer();
+                }
                 scheduleSave();
             });
         }
@@ -14225,7 +14236,12 @@ function measureSmartNodeImages(){
             const prevH = Number(image.layout_h || 0);
             if(isPreview && prevW === w && prevH === h) return;
             const transitionFrom = !isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h
-                ? captureNodeGeometryTransition(node.id)
+                ? queueNodeGeometryTransition(node.id, {
+                    anchor:'top-center',
+                    syncHistoryStack:true,
+                    duration:260,
+                    reason:'media-metadata'
+                })
                 : null;
             if(isPreview){
                 image.layout_w = w;
@@ -14239,15 +14255,15 @@ function measureSmartNodeImages(){
             applyThumbDisplaySizeToElement(itemEl, image, Math.max(itemEl?.clientWidth || 0, itemEl?.clientHeight || 0));
             updateImageResolutionBadgeElement(itemEl, image);
             if(!isSmartGroupNode(node) && (node.images || []).length === 1 && !node.w && !node.h){
-                const layout = singleImageLayout(image, node, mediaNodeDefaultScale(node));
-                node.w = layout.width;
-                node.h = layout.height;
+                applySingleMediaMetadataLayout(node, image);
             }
             if(isSmartGroupNode(node) && node._singleMediaCell) fitSmartGroupToPreservedSingleMedia(node, node._singleMediaCell);
-            updateNodeElementDuringResize(node);
-            if(transitionFrom) animateNodeGeometryTransition(node.id, transitionFrom, {duration:260, reason:'media-metadata'});
-            if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
-            if(isNodeSelected(node.id)) updateComposer();
+            if(transitionFrom) render();
+            else {
+                updateNodeElementDuringResize(node);
+                if(containerNode && containerNode.id !== node.id) updateNodeElementDuringResize(containerNode);
+                if(isNodeSelected(node.id)) updateComposer();
+            }
             scheduleSave();
         };
         const isVideo = imgEl.tagName?.toLowerCase() === 'video';

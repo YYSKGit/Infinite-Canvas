@@ -253,8 +253,54 @@ test('node geometry transitions stay synchronized and cover the supported size c
     assert.match(extractFunction('finalizePendingNode'), /imgs\.length === 1[\s\S]*anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'single-result'/);
     assert.match(extractFunction('finalizeSmartPendingTask'), /completesAsSingleMedia[\s\S]*anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'single-result'/);
     assert.match(extractFunction('cancelSmartNodeGeneration'), /anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'cancel-restore'[\s\S]*clearSmartNodePreRunBox\(node, true\)/);
-    assert.match(extractFunction('measureSmartNodeImages'), /captureNodeGeometryTransition\(node\.id\)[\s\S]*reason:'media-metadata'/);
+    const measureNodeMedia = extractFunction('measureSmartNodeImages');
+    assert.match(measureNodeMedia, /queueNodeGeometryTransition\(node\.id, \{[\s\S]*anchor:'top-center',[\s\S]*syncHistoryStack:true,[\s\S]*reason:'media-metadata'/);
+    assert.match(measureNodeMedia, /applySingleMediaMetadataLayout\(node, image\)/);
+    assert.doesNotMatch(measureNodeMedia, /animateNodeGeometryTransition\(node\.id, transitionFrom/);
     assert.doesNotMatch(extractFunction('bindPromptNodeControls'), /queueNodeGeometryTransition|reason:'prompt-layout'/);
+});
+
+test('late single-video metadata keeps its anchor and moves a one-item history node below it', () => {
+    const node = {id:'node-1', x:870, y:76, w:520, h:292, images:[{kind:'video'}]};
+    const history = {id:'history-1', historyFor:'node-1', x:984, y:424, w:292, h:164, images:[{kind:'video'}]};
+    const queuedGeometry = new Map([['node-1', {
+        fromSize:{x:870, y:76, width:520, height:292},
+        options:{
+            anchor:'top-center',
+            syncHistoryStack:true,
+            historyStack:{
+                id:'history-1',
+                rect:{x:984, y:424, width:292, height:164},
+                centerOffset:0,
+                gap:56,
+                followsStack:true
+            }
+        }
+    }]]);
+    const sandbox = vm.createContext({
+        nodes:[node, history],
+        queuedNodeGeometryTransitions:queuedGeometry,
+        singleImageLayout:() => ({width:292, height:520}),
+        mediaNodeDefaultScale:() => 2,
+        logicalNodeRect:item => ({x:item.x, y:item.y, width:item.w, height:item.h}),
+        isHistoryGroupNode:item => Boolean(item?.historyFor && item.images?.length === 1),
+        historyGroupForNode:() => null
+    });
+    sandbox.image = {kind:'video', natural_w:720, natural_h:1280};
+    vm.runInContext(`
+        ${extractFunction('applySingleMediaMetadataLayout')}
+        ${extractFunction('prepareQueuedNodeGeometryTransitionsForRender')}
+        applySingleMediaMetadataLayout(nodes[0], image);
+        prepareQueuedNodeGeometryTransitionsForRender();
+    `, sandbox);
+
+    assert.equal(node.x, 984, 'portrait metadata re-centers inside the previous completed/pending box');
+    assert.equal(node.y, 76, 'metadata does not change the top anchor');
+    assert.equal(node.w, 292);
+    assert.equal(node.h, 520);
+    assert.equal(history.x, 984, 'a one-item history node remains on the shared center line');
+    assert.equal(history.y, 652, 'a one-item history node moves below the final portrait height');
+    assert.equal(queuedGeometry.get('history-1')?.options?.reason, 'history-stack-follow');
 });
 
 test('failed generation nodes show friendly known errors and send uncommon details to logs', () => {
