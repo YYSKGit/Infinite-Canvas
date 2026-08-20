@@ -119,13 +119,13 @@
         menu.style.bottom = openAbove ? `${viewportHeight - localRect.top + gap}px` : 'auto';
         menu.classList.toggle('above', openAbove);
     }
-    function focusOption(index){
+    function focusOption(index, block='nearest'){
         const options = [...menu.querySelectorAll('.app-select-option:not(:disabled)')];
         if(!options.length) return;
         const target = options[Math.max(0, Math.min(options.length - 1, index))];
         options.forEach(item => item.classList.toggle('is-focused', item === target));
         target.focus({preventScroll:true});
-        target.scrollIntoView({block:'nearest'});
+        target.scrollIntoView({block});
     }
     function buildMenu(controller){
         menu.replaceChildren();
@@ -177,7 +177,7 @@
             menu.classList.add('open');
             const enabled = [...menu.querySelectorAll('.app-select-option:not(:disabled)')];
             const selectedIndex = enabled.findIndex(item => item.classList.contains('is-selected'));
-            focusOption(selectedIndex < 0 ? 0 : selectedIndex);
+            focusOption(selectedIndex < 0 ? 0 : selectedIndex, 'end');
         });
     }
     function choose(value){

@@ -41,6 +41,12 @@ test('custom select positioning separates viewport and transformed-body coordina
   assert.match(appSelectSource, /left:rect\.left,[\s\S]*top:rect\.top,[\s\S]*bottom:rect\.bottom/);
 });
 
+test('custom select initially aligns a late selected option with the menu end', () => {
+  assert.match(appSelectSource, /function focusOption\(index, block='nearest'\)/);
+  assert.match(appSelectSource, /target\.scrollIntoView\(\{block\}\)/);
+  assert.match(appSelectSource, /focusOption\(selectedIndex < 0 \? 0 : selectedIndex, 'end'\)/);
+});
+
 test('secret previews stay separate from writable secret fields', () => {
   assert.match(source, /item\.venice_client_preview/);
   assert.doesNotMatch(source, /item\.__client\s*\|\|/);
