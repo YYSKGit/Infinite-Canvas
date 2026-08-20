@@ -8863,30 +8863,39 @@ function rememberPickerScroll(list){
     list._hasRememberedScroll = true;
     pickerScrollMemory.set(memoryKey, {top:list.scrollTop || 0, left:list.scrollLeft || 0});
 }
+function pickerLayoutOffsetTop(el){
+    let top = 0;
+    for(let node = el; node; node = node.offsetParent) top += Number(node.offsetTop) || 0;
+    return top;
+}
 function visiblePickerOptionScrollTop(list, active){
-    const listRect = list.getBoundingClientRect();
-    const activeRect = active.getBoundingClientRect();
     const maxTop = Math.max(0, list.scrollHeight - list.clientHeight);
     const clampTop = value => Math.min(maxTop, Math.max(0, value));
     const style = getComputedStyle(list);
-    const scaleY = list.offsetHeight > 0 ? Math.max(.01, listRect.height / list.offsetHeight) : 1;
-    const paddingTop = (Number.parseFloat(style.paddingTop) || 0) * scaleY;
-    const paddingBottom = (Number.parseFloat(style.paddingBottom) || 0) * scaleY;
-    const viewportTop = listRect.top + paddingTop;
-    const viewportBottom = listRect.bottom - paddingBottom;
+    const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
     const currentTop = list.scrollTop;
-    const toScrollDistance = viewportDistance => viewportDistance / scaleY;
+    // offsetTop/offsetHeight are untransformed layout coordinates. Using them
+    // keeps the initial scroll independent of the composer's screen position,
+    // canvas scale and transformed overflow clipping phase.
+    const activeTop = pickerLayoutOffsetTop(active) - pickerLayoutOffsetTop(list) - (list.clientTop || 0);
+    const activeHeight = active.offsetHeight;
+    const activeBottom = activeTop + activeHeight;
+    const viewportTop = currentTop + paddingTop;
+    const viewportBottom = currentTop + list.clientHeight - paddingBottom;
 
     // Explorer-style positioning: keep the current viewport whenever possible and
     // scroll only the minimum distance needed to reveal the complete active option.
-    if(activeRect.height > viewportBottom - viewportTop){
-        return clampTop(currentTop + toScrollDistance(activeRect.top - viewportTop));
+    if(activeHeight > viewportBottom - viewportTop){
+        return clampTop(Math.floor(activeTop - paddingTop));
     }
-    if(activeRect.top < viewportTop){
-        return clampTop(currentTop + toScrollDistance(activeRect.top - viewportTop));
+    if(activeTop < viewportTop){
+        return clampTop(Math.floor(activeTop - paddingTop));
     }
-    if(activeRect.bottom > viewportBottom){
-        return clampTop(currentTop + toScrollDistance(activeRect.bottom - viewportBottom));
+    if(activeBottom > viewportBottom){
+        // Round toward more scrolling so a fractional padding/layout value can
+        // never leave a rasterized sliver of the following option visible.
+        return clampTop(Math.ceil(activeBottom - list.clientHeight + paddingBottom));
     }
     return currentTop;
 }

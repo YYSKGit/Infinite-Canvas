@@ -279,20 +279,47 @@ test('generation-mode accents stay inside the editor capsule and picker', () => 
   assert.match(css, /generation-mode-option\.active[^}]*var\(--connection-flow\)/);
 });
 
-test('initial picker positioning converts scaled geometry into local scroll distance', () => {
+test('initial picker positioning uses transform-independent layout coordinates', () => {
+  const offsetSource = js.match(/function pickerLayoutOffsetTop\(el\)[\s\S]*?\n\}/)?.[0] || '';
   const source = js.match(/function visiblePickerOptionScrollTop\(list, active\)[\s\S]*?\n\}/)?.[0] || '';
-  assert.match(source, /listRect\.height \/ list\.offsetHeight/);
-  assert.match(source, /viewportDistance \/ scaleY/);
-  const calculate = new Function('getComputedStyle', `return (${source});`)(() => ({paddingTop:'3px', paddingBottom:'0px'}));
+  assert.doesNotMatch(source, /getBoundingClientRect|scaleY/);
+  assert.match(source, /pickerLayoutOffsetTop\(active\) - pickerLayoutOffsetTop\(list\)/);
+  assert.match(source, /Math\.ceil\(activeBottom - list\.clientHeight \+ paddingBottom\)/);
+  const calculate = new Function('getComputedStyle', `${offsetSource}; return (${source});`)(() => ({paddingTop:'3px', paddingBottom:'0px'}));
+  const root = {offsetTop:0, offsetParent:null};
   const list = {
     scrollHeight:391,
     clientHeight:262,
-    offsetHeight:262,
+    clientTop:0,
     scrollTop:0,
-    getBoundingClientRect:() => ({top:427.92, bottom:716.12, height:288.2})
+    offsetTop:128,
+    offsetParent:root
   };
-  const active = {getBoundingClientRect:() => ({top:803.02, bottom:829.42, height:26.4})};
-  assert.ok(Math.abs(calculate(list, active) - 103) < 0.01);
+  const active = {offsetTop:469, offsetHeight:24, offsetParent:root};
+  assert.equal(calculate(list, active), 103);
+
+  // Moving the complete composer to another screen/layout position must not
+  // affect the internal picker target.
+  root.offsetTop = 217;
+  assert.equal(calculate(list, active), 103);
+
+  // The calculation also remains correct if the list itself later becomes the
+  // option's offset parent.
+  active.offsetTop = 341;
+  active.offsetParent = list;
+  assert.equal(calculate(list, active), 103);
+
+  list.scrollTop = 100;
+  assert.equal(calculate(list, active), 103);
+  list.scrollTop = 120;
+  assert.equal(calculate(list, active), 120);
+  active.offsetTop = 100;
+  assert.equal(calculate(list, active), 97);
+
+  list.scrollTop = 0;
+  active.offsetTop = 341;
+  const calculateWithFractionalPadding = new Function('getComputedStyle', `${offsetSource}; return (${source});`)(() => ({paddingTop:'3px', paddingBottom:'.4px'}));
+  assert.equal(calculateWithFractionalPadding(list, active), 104);
 });
 
 test('resting prompt media capsules use a slightly clearer outer border', () => {
