@@ -8,6 +8,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import os
+import stat
 import re
 import random
 import sys
@@ -1462,6 +1463,34 @@ def api_providers_revision():
     with GLOBAL_CONFIG_LOCK:
         return api_providers_revision_unlocked()
 
+def prepare_api_providers_replacement(temp_path):
+    """Keep atomic replacement from turning the shared config into a private 0600 file."""
+    target_stat = None
+    directory_stat = None
+    try:
+        target_stat = os.stat(API_PROVIDERS_FILE)
+    except OSError:
+        pass
+    try:
+        directory_stat = os.stat(DATA_DIR)
+    except OSError:
+        pass
+
+    existing_mode = stat.S_IMODE(target_stat.st_mode) if target_stat is not None else 0
+    replacement_mode = existing_mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH
+    owner_stat = target_stat
+    # mkstemp previously produced 0600 files. When repairing one of those, prefer
+    # the shared data directory owner instead of preserving the accidental owner.
+    if owner_stat is None or not (existing_mode & (stat.S_IRGRP | stat.S_IROTH)):
+        owner_stat = directory_stat or owner_stat
+    chown = getattr(os, "chown", None)
+    if chown is not None and owner_stat is not None:
+        try:
+            chown(temp_path, owner_stat.st_uid, owner_stat.st_gid)
+        except (AttributeError, OSError):
+            pass
+    os.chmod(temp_path, replacement_mode)
+
 def save_api_providers(providers, expected_revision=None):
     os.makedirs(DATA_DIR, exist_ok=True)
     with GLOBAL_CONFIG_LOCK:
@@ -1475,6 +1504,7 @@ def save_api_providers(providers, expected_revision=None):
                 f.write(serialized)
                 f.flush()
                 os.fsync(f.fileno())
+            prepare_api_providers_replacement(temp_path)
             os.replace(temp_path, API_PROVIDERS_FILE)
         finally:
             if os.path.exists(temp_path):

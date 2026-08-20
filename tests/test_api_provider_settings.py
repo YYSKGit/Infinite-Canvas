@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import stat
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -454,10 +455,12 @@ class ApiProviderPersistenceTests(unittest.TestCase):
     def test_provider_config_write_is_atomic_and_revision_guarded(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = os.path.join(tmp, "api_providers.json")
-            with patch.object(main, "DATA_DIR", tmp), patch.object(main, "API_PROVIDERS_FILE", config_path):
+            with patch.object(main, "DATA_DIR", tmp), patch.object(main, "API_PROVIDERS_FILE", config_path), patch.object(main.os, "chmod", wraps=os.chmod) as chmod:
                 first = [{"id": "one", "image_models": ["a"]}]
                 first_revision = main.save_api_providers(first, expected_revision="missing")
                 self.assertEqual(first_revision, main.api_providers_revision())
+                replacement_mode = chmod.call_args.args[1]
+                self.assertEqual(replacement_mode & 0o644, 0o644)
                 with open(config_path, "r", encoding="utf-8") as handle:
                     self.assertEqual(json.load(handle), first)
                 self.assertFalse(any(name.endswith(".json.tmp") for name in os.listdir(tmp)))
@@ -467,6 +470,16 @@ class ApiProviderPersistenceTests(unittest.TestCase):
                 self.assertEqual(conflict.exception.status_code, 409)
                 with open(config_path, "r", encoding="utf-8") as handle:
                     self.assertEqual(json.load(handle), first)
+
+    def test_private_atomic_file_permissions_are_repaired_for_shared_data(self):
+        private_file = Mock(st_mode=stat.S_IFREG | 0o600, st_uid=0, st_gid=0)
+        shared_directory = Mock(st_mode=stat.S_IFDIR | 0o775, st_uid=1000, st_gid=1000)
+        with patch.object(main.os, "stat", side_effect=[private_file, shared_directory]), \
+                patch.object(main.os, "chmod") as chmod, \
+                patch.object(main.os, "chown", create=True) as chown:
+            main.prepare_api_providers_replacement("replacement.tmp")
+        chown.assert_called_once_with("replacement.tmp", 1000, 1000)
+        chmod.assert_called_once_with("replacement.tmp", 0o644)
 
 
 if __name__ == "__main__":
