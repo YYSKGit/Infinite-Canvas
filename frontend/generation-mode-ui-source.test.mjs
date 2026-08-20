@@ -279,6 +279,22 @@ test('generation-mode accents stay inside the editor capsule and picker', () => 
   assert.match(css, /generation-mode-option\.active[^}]*var\(--connection-flow\)/);
 });
 
+test('initial picker positioning converts scaled geometry into local scroll distance', () => {
+  const source = js.match(/function visiblePickerOptionScrollTop\(list, active\)[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(source, /listRect\.height \/ list\.offsetHeight/);
+  assert.match(source, /viewportDistance \/ scaleY/);
+  const calculate = new Function('getComputedStyle', `return (${source});`)(() => ({paddingTop:'3px', paddingBottom:'0px'}));
+  const list = {
+    scrollHeight:391,
+    clientHeight:262,
+    offsetHeight:262,
+    scrollTop:0,
+    getBoundingClientRect:() => ({top:427.92, bottom:716.12, height:288.2})
+  };
+  const active = {getBoundingClientRect:() => ({top:803.02, bottom:829.42, height:26.4})};
+  assert.ok(Math.abs(calculate(list, active) - 103) < 0.01);
+});
+
 test('resting prompt media capsules use a slightly clearer outer border', () => {
   assert.match(css, /\.mention-image-token\s*\{[^}]*border:1px solid color-mix\(in srgb, var\(--text\) 20%, var\(--line\)\)/);
   assert.match(css, /\.mention-image-token:hover\s*\{[^}]*border-color:var\(--strong\)/);

@@ -8869,22 +8869,24 @@ function visiblePickerOptionScrollTop(list, active){
     const maxTop = Math.max(0, list.scrollHeight - list.clientHeight);
     const clampTop = value => Math.min(maxTop, Math.max(0, value));
     const style = getComputedStyle(list);
-    const paddingTop = Number.parseFloat(style.paddingTop) || 0;
-    const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+    const scaleY = list.offsetHeight > 0 ? Math.max(.01, listRect.height / list.offsetHeight) : 1;
+    const paddingTop = (Number.parseFloat(style.paddingTop) || 0) * scaleY;
+    const paddingBottom = (Number.parseFloat(style.paddingBottom) || 0) * scaleY;
     const viewportTop = listRect.top + paddingTop;
     const viewportBottom = listRect.bottom - paddingBottom;
     const currentTop = list.scrollTop;
+    const toScrollDistance = viewportDistance => viewportDistance / scaleY;
 
     // Explorer-style positioning: keep the current viewport whenever possible and
     // scroll only the minimum distance needed to reveal the complete active option.
     if(activeRect.height > viewportBottom - viewportTop){
-        return clampTop(currentTop + activeRect.top - viewportTop);
+        return clampTop(currentTop + toScrollDistance(activeRect.top - viewportTop));
     }
     if(activeRect.top < viewportTop){
-        return clampTop(currentTop + activeRect.top - viewportTop);
+        return clampTop(currentTop + toScrollDistance(activeRect.top - viewportTop));
     }
     if(activeRect.bottom > viewportBottom){
-        return clampTop(currentTop + activeRect.bottom - viewportBottom);
+        return clampTop(currentTop + toScrollDistance(activeRect.bottom - viewportBottom));
     }
     return currentTop;
 }
