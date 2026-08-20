@@ -1,5 +1,8 @@
 let providers = [];
 let selectedId = '';
+let providersRevision = '';
+let providersSaveInFlight = false;
+let modelDraftSequence = 0;
 const providerList = document.getElementById('providerList');
 const editorTitle = document.getElementById('editorTitle');
 const statusEl = document.getElementById('status');
@@ -133,6 +136,8 @@ function applyCliProtocolDefaults(item, protocol){
     if(!item) return;
     const value = String(protocol || item.protocol || '').toLowerCase();
     if(!CLI_PROTOCOLS.has(value)) return;
+    const hadDrafts = Boolean(item._modelDrafts);
+    if(hadDrafts) materializeModelDrafts(item);
     item.base_url = '';
     item.protocol = value;
     if(value === 'jimeng'){
@@ -148,6 +153,7 @@ function applyCliProtocolDefaults(item, protocol){
         item.chat_models = unique([...(item.chat_models || []), ...GEMINI_CLI_DEFAULT_CHAT_MODELS]);
         item.video_models = [];
     }
+    if(hadDrafts) invalidateModelDrafts(item);
 }
 let rhWorkflowEditorState = { open:false, index:-1, entry:null, config:null, expanded:{}, activeNodeId:'', graph:{ k:1, x:0, y:0, w:0, h:0 }, pan:null, bound:false, previewParams:{}, previewRunning:false, previewStatus:'', previewOutputs:[] };
 let rhWorkflowEditorScrollLock = null;
@@ -713,6 +719,8 @@ async function saveOnboardingRunningHubKey(){
 function applyProviderOnboardingDefaults(id){
     const item = providers.find(provider => provider.id === id);
     if(!item) return;
+    materializeModelDrafts(item);
+    invalidateModelDrafts(item);
     if(id === 'modelscope'){
         item.base_url = MS_DEFAULT_BASE_URL;
         item.protocol = 'openai';
@@ -794,24 +802,27 @@ function syncEditor(){
     item.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
     item.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
     const key = keyInput.value.trim();
-    if(key) item.api_key = key;
+    if(key){
+        item.api_key = key;
+        item._clearKey = false;
+    }
     if(item.id === 'runninghub'){
         const freeKey = rhFreeKeyInput?.value.trim() || '';
         const walletKey = rhWalletKeyInput?.value.trim() || '';
-        if(freeKey) item.api_key = freeKey;
-        if(walletKey) item.wallet_api_key = walletKey;
+        if(freeKey){ item.api_key = freeKey; item._clearKey = false; }
+        if(walletKey){ item.wallet_api_key = walletKey; item._clearWalletKey = false; }
     }
     if(item.id === 'volcengine'){
         const ak = volcAkInput?.value.trim() || '';
         const sk = volcSkInput?.value.trim() || '';
-        if(ak) item.volcengine_access_key_id = ak;
-        if(sk) item.volcengine_secret_access_key = sk;
+        if(ak){ item.volcengine_access_key_id = ak; item._clearVolcengineAccessKey = false; }
+        if(sk){ item.volcengine_secret_access_key = sk; item._clearVolcengineSecretKey = false; }
         item.volcengine_project_name = (volcProjectInput?.value.trim() || VOLCENGINE_DEFAULT_PROJECT_NAME);
         item.volcengine_region = (volcRegionInput?.value.trim() || VOLCENGINE_DEFAULT_REGION);
     }
     if(selectedProtocol === 'venice'){
         const clientCookie = veniceClientInput?.value.trim() || '';
-        if(clientCookie) item.venice_client = clientCookie;
+        if(clientCookie){ item.venice_client = clientCookie; item._clearVeniceClient = false; }
     }
 }
 function ensureRunningHubLists(item){
@@ -2349,6 +2360,8 @@ function renderRecommendApi(){
 function recommendedProviderForApi(api){
     let item = providers.find(provider => String(provider.name || '').toLowerCase() === api.name.toLowerCase());
     if(item){
+        materializeModelDrafts(item);
+        invalidateModelDrafts(item);
         item.base_url = api.base_url || item.base_url || '';
         item.protocol = api.protocol || item.protocol || 'openai';
         item.image_request_mode = normalizeImageRequestMode(api.image_request_mode || item.image_request_mode);
@@ -2524,7 +2537,7 @@ function handleProviderDrop(event, targetId){
     const adjustedTargetIndex = providers.findIndex(item => item.id === targetId);
     providers.splice(adjustedTargetIndex, 0, moved);
     renderProviderList();
-    saveProviders();
+    setStatus('平台顺序已调整，点击保存后写入配置');
 }
 function handleProviderDragEnd(){
     providerDragId = '';
@@ -2604,10 +2617,7 @@ function renderEditor(){
         if(volcRegionInput) volcRegionInput.value = item.volcengine_region || VOLCENGINE_DEFAULT_REGION;
     }
     if(isJimeng){
-        item.base_url = '';
-        item.protocol = 'jimeng';
-        item.image_models = unique([...(item.image_models || []).filter(model => !JIMENG_LEGACY_IMAGE_MODELS.has(String(model || '').trim())), ...JIMENG_DEFAULT_IMAGE_MODELS]);
-        item.video_models = unique([...(item.video_models || []).filter(model => !JIMENG_LEGACY_VIDEO_MODELS.has(String(model || '').trim())), ...JIMENG_DEFAULT_VIDEO_MODELS]);
+        applyCliProtocolDefaults(item, 'jimeng');
         keyInput.placeholder = '即梦 CLI 使用本机 dreamina login，无需 API Key';
         keyHint.textContent = '请先在终端安装 dreamina CLI，并执行 dreamina login';
     }
@@ -2985,6 +2995,8 @@ function applyDetectedProtocol(protocol){
         return false;
     }
     if(String(protocolInput.value || '').toLowerCase() === detected && String(item.protocol || '').toLowerCase() === detected) return false;
+    materializeModelDrafts(item);
+    invalidateModelDrafts(item);
     protocolInput.value = detected;
     item.protocol = detected;
     item.base_url = CLI_PROTOCOLS.has(detected) ? '' : (baseInput?.value.trim() || item.base_url || '');
@@ -3343,6 +3355,8 @@ function applyModelPicker(){
         else if(cat === 'video') video.push(id);
         else chat.push(id);
     });
+    materializeModelDrafts(item);
+    invalidateModelDrafts(item);
     item.image_models = image;
     item.chat_models = chat;
     item.video_models = video;
@@ -3366,8 +3380,8 @@ async function clearKeyOnly(){
     if(!item.has_key && !keyInput.value){ return; }
     if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
     item._clearKey = true;
-    const ok = await saveProviders();
-    if(ok) keyInput.value = '';
+    if(keyInput) keyInput.value = '';
+    setStatus('已标记清除 Key，点击保存后生效');
 }
 async function saveVeniceClientOnly(){
     const item = provider();
@@ -3384,8 +3398,8 @@ async function clearVeniceClientOnly(){
     if(!item.has_venice_client && !veniceClientInput?.value){ return; }
     if(!confirm('确认清除 Venice 的 __client Cookie？')) return;
     item._clearVeniceClient = true;
-    const ok = await saveProviders();
-    if(ok && veniceClientInput) veniceClientInput.value = '';
+    if(veniceClientInput) veniceClientInput.value = '';
+    setStatus('已标记清除 __client Cookie，点击保存后生效');
 }
 const FIXED_PROTOCOL_PROVIDER_IDS = new Set(['modelscope', 'volcengine', 'runninghub', 'venice']);
 function providerSupportsModelProtocol(item){
@@ -3393,10 +3407,96 @@ function providerSupportsModelProtocol(item){
         && String(item.protocol || '').toLowerCase() !== 'venice'
         && !FIXED_PROTOCOL_PROVIDER_IDS.has(item.id);
 }
-function modelProtocolSelectHtml(kind, index, model, item){
+function modelListKey(kind){
+    return kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
+}
+function createModelDraft(kind, model, item){
+    const id = String(model || '');
+    const normalizedId = id.trim();
+    const routeName = veniceModelRouteName(kind);
+    const aliases = (item?.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
+    const protocols = (item?.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {};
+    const routes = (item?.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {};
+    return {
+        rowId:`model-draft-${++modelDraftSequence}`,
+        originalId:normalizedId,
+        id,
+        idDirty:false,
+        alias:String(aliases[normalizedId] || ''),
+        aliasDirty:false,
+        protocol:String(protocols[normalizedId] || ''),
+        protocolDirty:false,
+        route:routeName ? String(routes[normalizedId]?.[routeName] || '') : '',
+        routeDirty:false,
+        error:''
+    };
+}
+function ensureModelDrafts(item){
+    if(!item) return {image:[], chat:[], video:[]};
+    if(!item._modelDrafts){
+        item._modelDrafts = {};
+        item._modelDraftOriginalIds = new Set();
+        for(const kind of ['image', 'chat', 'video']){
+            const drafts = (Array.isArray(item[modelListKey(kind)]) ? item[modelListKey(kind)] : []).map(model => createModelDraft(kind, model, item));
+            item._modelDrafts[kind] = drafts;
+            drafts.forEach(draft => { if(draft.originalId) item._modelDraftOriginalIds.add(draft.originalId); });
+        }
+    }
+    return item._modelDrafts;
+}
+function invalidateModelDrafts(item){
+    if(!item) return;
+    delete item._modelDrafts;
+    delete item._modelDraftOriginalIds;
+}
+function modelDrafts(item, kind){
+    return ensureModelDrafts(item)[kind] || [];
+}
+function syncModelDraftArrays(item){
+    if(!item?._modelDrafts) return;
+    for(const kind of ['image', 'chat', 'video']) item[modelListKey(kind)] = modelDrafts(item, kind).map(draft => draft.id);
+}
+function materializeModelDrafts(item){
+    if(!item?._modelDrafts) return;
+    syncModelDraftArrays(item);
+    const originalIds = item._modelDraftOriginalIds instanceof Set ? item._modelDraftOriginalIds : new Set();
+    const sourceAliases = (item.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
+    const sourceProtocols = (item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {};
+    const sourceRoutes = (item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {};
+    const aliases = {};
+    const protocols = {};
+    const routes = {};
+    for(const [key, value] of Object.entries(sourceAliases)) if(!originalIds.has(key)) aliases[key] = value;
+    for(const [key, value] of Object.entries(sourceProtocols)) if(!originalIds.has(key)) protocols[key] = value;
+    for(const [key, value] of Object.entries(sourceRoutes)) if(!originalIds.has(key)) routes[key] = value;
+    for(const kind of ['image', 'chat', 'video']){
+        const routeName = veniceModelRouteName(kind);
+        for(const draft of modelDrafts(item, kind)){
+            const id = String(draft.id || '').trim();
+            if(!id) continue;
+            const originalId = String(draft.originalId || '').trim();
+            const keepsOriginalId = Boolean(originalId) && id === originalId;
+            const alias = String(keepsOriginalId && !draft.aliasDirty ? sourceAliases[originalId] : draft.alias || '').trim();
+            const protocol = String(keepsOriginalId && !draft.protocolDirty ? sourceProtocols[originalId] : draft.protocol || '').trim().toLowerCase();
+            const originalRoute = sourceRoutes[originalId] && typeof sourceRoutes[originalId] === 'object'
+                ? sourceRoutes[originalId][routeName]
+                : '';
+            const route = String(keepsOriginalId && !draft.routeDirty ? originalRoute : draft.route || '').trim();
+            if(alias) aliases[id] = alias;
+            if(protocol === 'openai' || protocol === 'gemini') protocols[id] = protocol;
+            if(routeName && route) routes[id] = {...(routes[id] || {}), [routeName]:route};
+        }
+    }
+    item.model_aliases = aliases;
+    item.model_protocols = protocols;
+    item.model_routes = routes;
+}
+function materializeAllModelDrafts(){
+    providers.forEach(materializeModelDrafts);
+}
+function modelProtocolSelectHtml(kind, index, draft, item){
     if(kind === 'video' || !providerSupportsModelProtocol(item)) return '';
-    const map = (item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {};
-    const current = String(map[String(model || '').trim()] || '').toLowerCase();
+    const current = String(draft?.protocol || '').toLowerCase();
     const opt = (val, label) => `<option value="${val}" ${current === val ? 'selected' : ''}>${label}</option>`;
     return `<select class="model-protocol-select" title="该模型使用的协议，默认跟随平台全局协议" onchange="updateModelProtocol('${kind}', ${index}, this.value)">
         <option value="" ${current === '' ? 'selected' : ''}>默认</option>
@@ -3411,13 +3511,11 @@ function modelDragHandleHtml(label, fieldTitle, kind, index){
     const dragTitle = tr('api.dragModelRow') || '拖拽调整模型顺序';
     return `<span class="model-drag-handle" draggable="true" title="${escapeAttr(`${fieldTitle} · ${dragTitle}`)}" aria-label="${escapeAttr(dragTitle)}" ondragstart="startModelRowDrag(event, '${kind}', ${index})">${label}</span>`;
 }
-function veniceModelRouteHtml(kind, index, model, item){
+function veniceModelRouteHtml(kind, index, draft, item){
     if(String(item?.protocol || '').toLowerCase() !== 'venice') return '';
     const routeName = veniceModelRouteName(kind);
     if(!routeName) return '';
-    const source = String(model || '').trim();
-    const routes = (item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {};
-    const target = String(routes[source]?.[routeName] || '');
+    const target = String(draft?.route || '');
     const label = routeName === 'image_edit' ? 'I2I' : 'T2V';
     const fieldLabel = tr(routeName === 'image_edit' ? 'api.veniceImageRouteLabel' : 'api.veniceVideoRouteLabel');
     const placeholder = tr(routeName === 'image_edit' ? 'api.veniceImageRoutePlaceholder' : 'api.veniceVideoRoutePlaceholder');
@@ -3427,20 +3525,24 @@ function veniceModelRouteHtml(kind, index, model, item){
         <input value="${escapeAttr(target)}" placeholder="${escapeAttr(placeholder)}" oninput="updateVeniceModelRoute('${kind}', ${index}, this)">
     </div>`;
 }
-function veniceModelFieldsHtml(kind, index, model, alias, item){
+function veniceModelFieldsHtml(kind, index, draft, item){
+    const model = String(draft?.id || '');
+    const alias = String(draft?.alias || '');
     const idMissing = String(model || '').trim() ? '' : ' is-missing';
     const nameMissing = String(alias || '').trim() ? '' : ' is-missing';
     return `<div class="model-prefixed-field venice-model-field venice-model-id-field${idMissing}">
         ${modelDragHandleHtml('ID', tr('api.currentModelId'), kind, index)}
         <input class="model-id-input" value="${escapeAttr(model)}" placeholder="Model ID" oninput="updateModel('${kind}', ${index}, this.value); syncModelFieldMissing(this); syncPendingVeniceModelFields('${kind}', ${index}, this)">
     </div>
-    ${veniceModelRouteHtml(kind, index, model, item)}
+    ${veniceModelRouteHtml(kind, index, draft, item)}
     <div class="model-prefixed-field venice-model-field venice-model-name-field${nameMissing}">
         ${modelDragHandleHtml('NM', tr('api.modelDisplayName'), kind, index)}
         <input class="model-alias-input" value="${escapeAttr(alias)}" placeholder="${escapeAttr(tr('api.modelAliasPlaceholder'))}" oninput="updateModelAlias('${kind}', ${index}, this.value); syncModelFieldMissing(this)">
     </div>`;
 }
-function standardModelFieldsHtml(kind, index, model, alias, item){
+function standardModelFieldsHtml(kind, index, draft, item){
+    const model = String(draft?.id || '');
+    const alias = String(draft?.alias || '');
     const usePrefixes = kind === 'chat'
         || item?.id === 'runninghub'
         || String(item?.protocol || '').toLowerCase() === 'runninghub';
@@ -3463,25 +3565,22 @@ function standardModelFieldsHtml(kind, index, model, alias, item){
 }
 function renderModels(kind){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
     const list = kind === 'image' ? imageModelList : kind === 'video' ? videoModelList : chatModelList;
-    const models = item?.[key] || [];
-    if(!models.length){
+    const drafts = modelDrafts(item, kind);
+    if(!drafts.length){
         list.innerHTML = `<div class="empty">${tr('api.noModels')}</div>`;
         return;
     }
     const showProtocol = kind !== 'video' && providerSupportsModelProtocol(item);
     const showVeniceRoute = Boolean(veniceModelRouteName(kind)) && String(item?.protocol || '').toLowerCase() === 'venice';
-    const aliases = (item?.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {};
-    const rowsHtml = models.map((model, index) => {
-        const alias = String(aliases[String(model || '').trim()] || '');
+    const rowsHtml = drafts.map((draft, index) => {
         const fieldsHtml = showVeniceRoute
-            ? veniceModelFieldsHtml(kind, index, model, alias, item)
-            : standardModelFieldsHtml(kind, index, model, alias, item);
+            ? veniceModelFieldsHtml(kind, index, draft, item)
+            : standardModelFieldsHtml(kind, index, draft, item);
         return `
-        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}" data-model-kind="${kind}" data-model-index="${index}" ondragover="dragModelRowOver(event, '${kind}', ${index})" ondrop="dropModelRow(event, '${kind}', ${index})" ondragend="finishModelRowDrag()">
+        <div class="model-row${showProtocol ? ' has-protocol' : ''}${showVeniceRoute ? ' has-venice-route' : ''}${draft.error ? ' has-error' : ''}" data-model-kind="${kind}" data-model-index="${index}" data-model-row-id="${escapeAttr(draft.rowId)}" title="${escapeAttr(draft.error || '')}" ondragover="dragModelRowOver(event, '${kind}', ${index})" ondrop="dropModelRow(event, '${kind}', ${index})" ondragend="finishModelRowDrag()">
             ${fieldsHtml}
-            ${modelProtocolSelectHtml(kind, index, model, item)}
+            ${modelProtocolSelectHtml(kind, index, draft, item)}
             <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
         </div>
     `}).join('');
@@ -3611,6 +3710,8 @@ async function addCliProvider(kind){
         };
         providers.push(item);
     }
+    materializeModelDrafts(item);
+    invalidateModelDrafts(item);
     item.id = preset.id;
     item.name = item.name || preset.name;
     item.base_url = '';
@@ -3626,13 +3727,7 @@ async function addCliProvider(kind){
     renderProviderList();
     renderEditor();
     if(protocolInput) protocolInput.value = preset.protocol;
-    const ok = await saveProviders();
-    if(ok){
-        selectedId = item.id;
-        renderEditor();
-        if(protocolInput) protocolInput.value = preset.protocol;
-        setStatus(`${preset.name} 已添加，使用本机登录态，无需填写 API Key。`);
-    }
+    setStatus(`${preset.name} 已加入草稿，点击保存后写入配置。`);
 }
 function deleteProvider(){
     const item = provider();
@@ -3642,7 +3737,7 @@ function deleteProvider(){
     providers = providers.filter(p => p.id !== item.id);
     selectedId = providers[0]?.id || '';
     renderEditor();
-    saveProviders();
+    setStatus('平台已从草稿中删除，点击保存后写入配置');
 }
 async function saveRhKeyOnly(kind){
     const item = provider();
@@ -3660,11 +3755,9 @@ async function clearRhKeyOnly(kind){
     if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
     if(kind === 'wallet') item._clearWalletKey = true;
     else item._clearKey = true;
-    const ok = await saveProviders();
-    if(ok){
-        if(kind === 'wallet' && rhWalletKeyInput) rhWalletKeyInput.value = '';
-        if(kind !== 'wallet' && rhFreeKeyInput) rhFreeKeyInput.value = '';
-    }
+    if(kind === 'wallet' && rhWalletKeyInput) rhWalletKeyInput.value = '';
+    if(kind !== 'wallet' && rhFreeKeyInput) rhFreeKeyInput.value = '';
+    setStatus('已标记清除 Key，点击保存后生效');
 }
 async function saveVolcengineAssetKeys(){
     const item = provider();
@@ -3685,16 +3778,14 @@ async function clearVolcengineAssetKeys(){
     if(!confirm('确认清除火山素材库 AK/SK？')) return;
     item._clearVolcengineAccessKey = true;
     item._clearVolcengineSecretKey = true;
-    const ok = await saveProviders();
-    if(ok){
-        if(volcAkInput) volcAkInput.value = '';
-        if(volcSkInput) volcSkInput.value = '';
-    }
+    if(volcAkInput) volcAkInput.value = '';
+    if(volcSkInput) volcSkInput.value = '';
+    setStatus('已标记清除火山素材库密钥，点击保存后生效');
 }
 function addModel(kind){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
-    item[key] = [...(item[key] || []), ''];
+    modelDrafts(item, kind).push(createModelDraft(kind, '', item));
+    syncModelDraftArrays(item);
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
 }
@@ -3723,14 +3814,14 @@ function dragModelRowOver(event, kind, index){
 }
 function reorderModel(kind, fromIndex, insertionIndex){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
-    const models = item?.[key];
-    if(!Array.isArray(models) || fromIndex < 0 || fromIndex >= models.length) return false;
-    let target = Math.max(0, Math.min(models.length, insertionIndex));
+    const drafts = modelDrafts(item, kind);
+    if(fromIndex < 0 || fromIndex >= drafts.length) return false;
+    let target = Math.max(0, Math.min(drafts.length, insertionIndex));
     if(fromIndex < target) target -= 1;
     if(target === fromIndex) return false;
-    const [model] = models.splice(fromIndex, 1);
-    models.splice(target, 0, model);
+    const [draft] = drafts.splice(fromIndex, 1);
+    drafts.splice(target, 0, draft);
+    syncModelDraftArrays(item);
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
     return true;
@@ -3749,67 +3840,32 @@ function finishModelRowDrag(){
     clearModelRowDropMarkers();
     modelRowDragState = null;
 }
-function modelProtocolStillUsed(item, name){
-    if(!item || !name) return false;
-    const lists = ['image_models', 'chat_models', 'video_models'];
-    return lists.some(k => Array.isArray(item[k]) && item[k].includes(name));
-}
 function updateModel(kind, index, value){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
-    const oldName = String(item[key][index] || '').trim();
-    const newName = String(value || '').trim();
-    item[key][index] = value;
-    // 重命名时迁移该模型的协议覆盖
-    if(item.model_protocols && typeof item.model_protocols === 'object' && oldName && oldName !== newName){
-        if(Object.prototype.hasOwnProperty.call(item.model_protocols, oldName)){
-            const proto = item.model_protocols[oldName];
-            // 旧名称在其他列表里不再使用时才删除旧键
-            const stillUsedElsewhere = (() => {
-                const lists = ['image_models', 'chat_models', 'video_models'];
-                return lists.some(k => Array.isArray(item[k]) && item[k].some((m, i) => !(k === key && i === index) && String(m || '').trim() === oldName));
-            })();
-            if(!stillUsedElsewhere) delete item.model_protocols[oldName];
-            if(newName) item.model_protocols[newName] = proto;
-        }
-    }
-    // 重命名时迁移该模型的显示名称别名
-    if(item.model_aliases && typeof item.model_aliases === 'object' && oldName && oldName !== newName){
-        if(Object.prototype.hasOwnProperty.call(item.model_aliases, oldName)){
-            const alias = item.model_aliases[oldName];
-            const stillUsedElsewhere = (() => {
-                const lists = ['image_models', 'chat_models', 'video_models'];
-                return lists.some(k => Array.isArray(item[k]) && item[k].some((m, i) => !(k === key && i === index) && String(m || '').trim() === oldName));
-            })();
-            if(!stillUsedElsewhere) delete item.model_aliases[oldName];
-            if(newName) item.model_aliases[newName] = alias;
-        }
-    }
-    if(item.model_routes && typeof item.model_routes === 'object' && oldName && oldName !== newName && Object.prototype.hasOwnProperty.call(item.model_routes, oldName)){
-        const routes = item.model_routes[oldName];
-        delete item.model_routes[oldName];
-        if(newName) item.model_routes[newName] = routes;
-    }
+    const draft = modelDrafts(item, kind)[index];
+    if(!draft) return;
+    const oldId = String(draft.id || '').trim();
+    if(oldId && item._modelDraftOriginalIds instanceof Set) item._modelDraftOriginalIds.add(oldId);
+    draft.id = value;
+    draft.idDirty = true;
+    draft.error = '';
+    syncModelDraftArrays(item);
     if(kind === 'image') renderMsLoras();
 }
-function updateVeniceModelRoute(kind, index, input){
+function updateVeniceModelRoute(kind, index, input, markDirty=true){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : '';
     const routeName = veniceModelRouteName(kind);
-    const source = String(item?.[key]?.[index] || '').trim();
     const target = String(input?.value ?? input ?? '').trim();
     const routeControl = input?.closest?.('.venice-model-route');
     if(routeControl){
         routeControl.classList.toggle('is-missing', !target);
         routeControl.title = tr(routeName === 'image_edit' ? 'api.veniceImageRouteLabel' : 'api.veniceVideoRouteLabel');
     }
-    if(!item || String(item.protocol || '').toLowerCase() !== 'venice' || !source || !routeName) return;
-    if(!item.model_routes || typeof item.model_routes !== 'object') item.model_routes = {};
-    if(target){
-        item.model_routes[source] = {...(item.model_routes[source] || {}), [routeName]:target};
-    } else if(item.model_routes[source]){
-        delete item.model_routes[source][routeName];
-        if(!Object.keys(item.model_routes[source]).length) delete item.model_routes[source];
+    if(!item || String(item.protocol || '').toLowerCase() !== 'venice' || !routeName) return;
+    const draft = modelDrafts(item, kind)[index];
+    if(draft){
+        draft.route = target;
+        if(markDirty) draft.routeDirty = true;
     }
 }
 function syncModelFieldMissing(input){
@@ -3820,59 +3876,139 @@ function syncPendingVeniceModelFields(kind, index, input){
     if(!row) return;
     const routeInput = row.querySelector('.venice-model-route input');
     const aliasInput = row.querySelector('.venice-model-name-field input');
-    if(routeInput) updateVeniceModelRoute(kind, index, routeInput);
-    if(aliasInput) updateModelAlias(kind, index, aliasInput.value);
+    if(routeInput) updateVeniceModelRoute(kind, index, routeInput, false);
+    if(aliasInput) updateModelAlias(kind, index, aliasInput.value, false);
 }
-function updateModelAlias(kind, index, value){
+function updateModelAlias(kind, index, value, markDirty=true){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
-    const name = String(item[key]?.[index] || '').trim();
-    if(!name) return;
-    if(!item.model_aliases || typeof item.model_aliases !== 'object') item.model_aliases = {};
+    const draft = modelDrafts(item, kind)[index];
+    if(!draft) return;
     const alias = String(value || '').trim();
-    if(alias){
-        item.model_aliases[name] = alias;
-    } else {
-        delete item.model_aliases[name];
+    draft.alias = alias;
+    if(markDirty) draft.aliasDirty = true;
+    const id = String(draft.id || '').trim();
+    if(id){
+        for(const draftKind of ['image', 'chat', 'video']){
+            for(const peer of modelDrafts(item, draftKind)) if(peer !== draft && String(peer.id || '').trim() === id){
+                peer.alias = alias;
+                if(markDirty) peer.aliasDirty = true;
+            }
+        }
     }
 }
 function updateModelProtocol(kind, index, value){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
-    const name = String(item[key]?.[index] || '').trim();
-    if(!name) return;
-    if(!item.model_protocols || typeof item.model_protocols !== 'object') item.model_protocols = {};
+    const draft = modelDrafts(item, kind)[index];
+    if(!draft) return;
     const proto = String(value || '').trim().toLowerCase();
-    if(proto === 'openai' || proto === 'gemini'){
-        item.model_protocols[name] = proto;
-    } else {
-        delete item.model_protocols[name];
+    draft.protocol = proto === 'openai' || proto === 'gemini' ? proto : '';
+    draft.protocolDirty = true;
+    const id = String(draft.id || '').trim();
+    if(id){
+        for(const draftKind of ['image', 'chat']){
+            for(const peer of modelDrafts(item, draftKind)) if(peer !== draft && String(peer.id || '').trim() === id){
+                peer.protocol = draft.protocol;
+                peer.protocolDirty = true;
+            }
+        }
     }
 }
 function removeModel(kind, index){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : 'chat_models';
-    const removed = String(item[key][index] || '').trim();
-    item[key].splice(index, 1);
-    // 清理不再使用的协议覆盖
-    if(removed && item.model_protocols && typeof item.model_protocols === 'object' && !modelProtocolStillUsed(item, removed)){
-        delete item.model_protocols[removed];
-    }
-    // 清理不再使用的显示名称别名
-    if(removed && item.model_aliases && typeof item.model_aliases === 'object' && !modelProtocolStillUsed(item, removed)){
-        delete item.model_aliases[removed];
-    }
-    if(removed && item.model_routes && typeof item.model_routes === 'object' && !modelProtocolStillUsed(item, removed)){
-        delete item.model_routes[removed];
-    }
+    modelDrafts(item, kind).splice(index, 1);
+    syncModelDraftArrays(item);
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
+}
+function validateModelDraftsForSave(){
+    let firstInvalid = null;
+    const kindLabels = {image:'生图模型', chat:'聊天模型', video:'视频模型'};
+    for(const item of providers){
+        const draftsByKind = ensureModelDrafts(item);
+        for(const kind of ['image', 'chat', 'video']){
+            const seen = new Map();
+            draftsByKind[kind].forEach((draft, index) => {
+                draft.error = '';
+                const id = String(draft.id || '').trim();
+                draft.id = id;
+                if(!id) draft.error = `${kindLabels[kind]}第 ${index + 1} 行缺少模型 ID`;
+                else if(seen.has(id)){
+                    draft.error = `${kindLabels[kind]}第 ${index + 1} 行与第 ${seen.get(id) + 1} 行的模型 ID 重复：${id}`;
+                    draftsByKind[kind][seen.get(id)].error ||= `模型 ID 重复：${id}`;
+                } else seen.set(id, index);
+                if(draft.error && !firstInvalid) firstInvalid = {item, kind, draft};
+            });
+        }
+    }
+    if(!firstInvalid) return true;
+    selectedId = firstInvalid.item.id;
+    renderEditor();
+    const input = document.querySelector(`[data-model-row-id="${CSS.escape(firstInvalid.draft.rowId)}"] .model-id-input`);
+    input?.focus();
+    input?.scrollIntoView?.({block:'center', behavior:'smooth'});
+    setStatus(firstInvalid.draft.error);
+    alert(firstInvalid.draft.error + '。请修正后再保存，系统不会静默删除任何行。');
+    return false;
+}
+function providerSavePayload(item){
+    return {
+        id:item.id,
+        name:item.name,
+        base_url:item.base_url,
+        protocol:(item.id === 'modelscope') ? 'openai' : item.id === 'runninghub' ? 'runninghub' : item.id === 'volcengine' ? 'volcengine' : (item.protocol || 'openai'),
+        image_request_mode:item.image_request_mode || 'openai',
+        image_edit_route:item.image_edit_route || 'general',
+        image_generation_endpoint:item.image_generation_endpoint || '',
+        image_edit_endpoint:item.image_edit_endpoint || '',
+        enabled:item.enabled !== false,
+        primary:false,
+        image_models:item.image_models || [],
+        chat_models:item.chat_models || [],
+        video_models:item.video_models || [],
+        model_protocols:(item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {},
+        model_aliases:(item.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {},
+        model_routes:(item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {},
+        ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
+        ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
+        rh_apps:item.id === 'runninghub' ? (item.rh_apps || []) : [],
+        rh_workflows:item.id === 'runninghub' ? (item.rh_workflows || []) : [],
+        volcengine_project_name:item.id === 'volcengine' ? (item.volcengine_project_name || VOLCENGINE_DEFAULT_PROJECT_NAME) : '',
+        volcengine_region:item.id === 'volcengine' ? (item.volcengine_region || VOLCENGINE_DEFAULT_REGION) : '',
+        volcengine_access_key_id:item.volcengine_access_key_id || undefined,
+        volcengine_secret_access_key:item.volcengine_secret_access_key || undefined,
+        api_key:item.api_key || undefined,
+        wallet_api_key:item.wallet_api_key || undefined,
+        __client:item.venice_client || undefined,
+        clear_key:item._clearKey === true,
+        clear_wallet_key:item._clearWalletKey === true,
+        clear__client:item._clearVeniceClient === true,
+        clear_volcengine_access_key_id:item._clearVolcengineAccessKey === true,
+        clear_volcengine_secret_access_key:item._clearVolcengineSecretKey === true
+    };
+}
+function stableProviderSnapshotValue(value){
+    if(Array.isArray(value)) return value.map(stableProviderSnapshotValue);
+    if(value && typeof value === 'object'){
+        return Object.keys(value).sort().reduce((result, key) => {
+            result[key] = stableProviderSnapshotValue(value[key]);
+            return result;
+        }, {});
+    }
+    return value;
+}
+function providersDraftSnapshot(){
+    return JSON.stringify(stableProviderSnapshotValue(providers.map(providerSavePayload)));
+}
+function setProvidersSaveBusy(busy){
+    providersSaveInFlight = busy;
+    document.querySelectorAll('.api-page-save-btn').forEach(button => { button.disabled = busy; });
 }
 async function loadProviders(){
     setStatus(tr('api.loading'));
     try {
         const data = await fetch('/api/providers').then(r => r.json());
         providers = data.providers || [];
+        providersRevision = String(data.revision || '');
         selectedId = sortedProviders()[0]?.id || '';
         renderEditor();
         openRecommendApi();
@@ -3882,7 +4018,13 @@ async function loadProviders(){
     }
 }
 async function saveProviders(){
+    if(providersSaveInFlight){
+        setStatus('正在保存，请等待当前请求完成');
+        return false;
+    }
     syncEditor();
+    if(!validateModelDraftsForSave()) return false;
+    materializeAllModelDrafts();
     providers.forEach(item => {
         item.id = normalizeId(item.id);
         applyLockedRecommendedProtocol(item);
@@ -3929,70 +4071,49 @@ async function saveProviders(){
         alert(tr('api.duplicateId'));
         return false;
     }
+    const requestPayload = providers.map(providerSavePayload);
+    const requestBody = JSON.stringify(requestPayload);
+    const requestSnapshot = JSON.stringify(stableProviderSnapshotValue(requestPayload));
     setStatus(tr('api.saving'));
+    setProvidersSaveBusy(true);
     try {
         const res = await fetch('/api/providers', {
             method:'PUT',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(providers.map(item => ({
-                id:item.id,
-                name:item.name,
-                base_url:item.base_url,
-                protocol:(item.id === 'modelscope') ? 'openai' : item.id === 'runninghub' ? 'runninghub' : item.id === 'volcengine' ? 'volcengine' : (item.protocol || 'openai'),
-                image_request_mode:item.image_request_mode || 'openai',
-                image_edit_route:item.image_edit_route || 'general',
-                image_generation_endpoint:item.image_generation_endpoint || '',
-                image_edit_endpoint:item.image_edit_endpoint || '',
-                enabled:item.enabled !== false,
-                primary:false,
-                image_models:item.image_models || [],
-                chat_models:item.chat_models || [],
-                video_models:item.video_models || [],
-                model_protocols:(item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {},
-                model_aliases:(item.model_aliases && typeof item.model_aliases === 'object') ? item.model_aliases : {},
-                model_routes:(item.model_routes && typeof item.model_routes === 'object') ? item.model_routes : {},
-                ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
-                ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
-                rh_apps:item.id === 'runninghub' ? (item.rh_apps || []) : [],
-                rh_workflows:item.id === 'runninghub' ? (item.rh_workflows || []) : [],
-                volcengine_project_name:item.id === 'volcengine' ? (item.volcengine_project_name || VOLCENGINE_DEFAULT_PROJECT_NAME) : '',
-                volcengine_region:item.id === 'volcengine' ? (item.volcengine_region || VOLCENGINE_DEFAULT_REGION) : '',
-                volcengine_access_key_id:item.volcengine_access_key_id || undefined,
-                volcengine_secret_access_key:item.volcengine_secret_access_key || undefined,
-                api_key:item.api_key || undefined,
-                wallet_api_key:item.wallet_api_key || undefined,
-                __client:item.venice_client || undefined,
-                clear_key:item._clearKey === true,
-                clear_wallet_key:item._clearWalletKey === true,
-                clear__client:item._clearVeniceClient === true,
-                clear_volcengine_access_key_id:item._clearVolcengineAccessKey === true,
-                clear_volcengine_secret_access_key:item._clearVolcengineSecretKey === true
-            })))
+            headers:{'Content-Type':'application/json', 'X-Provider-Revision':providersRevision},
+            body:requestBody
         });
         if(!res.ok) throw new Error((await res.json()).detail || tr('api.saveFailed'));
         const data = await res.json();
-        providers = data.providers || providers;
-        providers.forEach(item => {
-            delete item.api_key;
-            delete item.wallet_api_key;
-            delete item.volcengine_access_key_id;
-            delete item.volcengine_secret_access_key;
-            delete item.venice_client;
-            delete item._clearKey;
-            delete item._clearWalletKey;
-            delete item._clearVeniceClient;
-            delete item._clearVolcengineAccessKey;
-            delete item._clearVolcengineSecretKey;
-        });
+        providersRevision = String(data.revision || providersRevision);
+        syncEditor();
+        materializeAllModelDrafts();
+        const changedDuringSave = providersDraftSnapshot() !== requestSnapshot;
+        if(!changedDuringSave){
+            providers = data.providers || providers;
+            providers.forEach(item => {
+                delete item.api_key;
+                delete item.wallet_api_key;
+                delete item.volcengine_access_key_id;
+                delete item.volcengine_secret_access_key;
+                delete item.venice_client;
+                delete item._clearKey;
+                delete item._clearWalletKey;
+                delete item._clearVeniceClient;
+                delete item._clearVolcengineAccessKey;
+                delete item._clearVolcengineSecretKey;
+            });
+        }
         selectedId = provider()?.id || providers[0]?.id || '';
-        renderEditor();
-        setStatus(tr('api.saved'));
+        if(!changedDuringSave) renderEditor();
+        setStatus(changedDuringSave ? '此前修改已保存；保存期间的新修改仍在草稿中，请再次点击保存' : tr('api.saved'));
         // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
         broadcastStudioApiChange('providers-changed');
         return true;
     } catch(err) {
         setStatus(err.message || tr('api.saveFailed'));
         return false;
+    } finally {
+        setProvidersSaveBusy(false);
     }
 }
 function escapeHtml(str){

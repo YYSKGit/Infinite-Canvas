@@ -52,6 +52,7 @@ test('secret previews stay separate from writable secret fields', () => {
 });
 
 test('Venice model rows expose compact configurable I2I and T2V routes', () => {
+  const veniceFields = extractFunction('veniceModelFieldsHtml');
   assert.match(source, /function veniceModelRouteHtml/);
   assert.match(source, /image_edit/);
   assert.match(source, /text_to_video/);
@@ -67,12 +68,73 @@ test('Venice model rows expose compact configurable I2I and T2V routes', () => {
   assert.match(source, /modelDragHandleHtml\('ID'/);
   assert.match(source, /modelDragHandleHtml\('NM'/);
   assert.match(source, /veniceModelRouteHtml[\s\S]*venice-model-name-field/);
+  assert.match(veniceFields, /veniceModelRouteHtml\(kind, index, draft, item\)/);
   assert.doesNotMatch(css, /\.venice-model-columns/);
+
+  const routeHtml = new Function(
+    'veniceModelRouteName',
+    'tr',
+    'escapeAttr',
+    'modelDragHandleHtml',
+    `return (${extractFunction('veniceModelRouteHtml')});`
+  )(kind => kind === 'image' ? 'image_edit' : 'text_to_video', key => key, String, () => '');
+  const renderFields = new Function(
+    'tr',
+    'escapeAttr',
+    'modelDragHandleHtml',
+    'veniceModelRouteHtml',
+    `return (${veniceFields});`
+  )(key => key, String, () => '', routeHtml);
+  const rendered = renderFields(
+    'image',
+    0,
+    {id:'chroma', alias:'Chroma', route:'firered-image-edit'},
+    {protocol:'venice'}
+  );
+  assert.match(rendered, /value="firered-image-edit"/);
 });
 
-test('Venice routes follow source model rename and deletion', () => {
-  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(item\.model_routes, oldName\)/);
-  assert.match(source, /delete item\.model_routes\[removed\]/);
+test('model metadata follows stable row drafts instead of migrating on each ID keystroke', () => {
+  assert.match(source, /function createModelDraft/);
+  assert.match(source, /rowId:`model-draft-/);
+  assert.match(source, /function materializeModelDrafts/);
+  assert.match(source, /aliasDirty:false/);
+  assert.match(source, /routeDirty:false/);
+  assert.match(source, /if\(!originalIds\.has\(key\)\) routes\[key\] = value/);
+  assert.doesNotMatch(extractFunction('updateModel'), /item\.model_routes|item\.model_aliases|item\.model_protocols/);
+});
+
+test('materializing new rows cannot clear untouched metadata on existing rows', () => {
+  const drafts = {
+    image:[
+      {originalId:'grok-imagine-image-2-0', id:'grok-imagine-image-2-0', alias:'', aliasDirty:false, protocol:'', protocolDirty:false, route:'', routeDirty:false},
+      {originalId:'', id:'grok-imagine-image-2-1', alias:'2', aliasDirty:true, protocol:'', protocolDirty:false, route:'1', routeDirty:true},
+      {originalId:'', id:'grok-imagine-image-2-2', alias:'2', aliasDirty:true, protocol:'', protocolDirty:false, route:'1', routeDirty:true}
+    ],
+    chat:[],
+    video:[]
+  };
+  const materialize = new Function(
+    'syncModelDraftArrays',
+    'modelDrafts',
+    'veniceModelRouteName',
+    `return (${extractFunction('materializeModelDrafts')});`
+  )(() => {}, (_item, kind) => drafts[kind], kind => kind === 'image' ? 'image_edit' : kind === 'video' ? 'text_to_video' : '');
+  const item = {
+    _modelDrafts:drafts,
+    _modelDraftOriginalIds:new Set(['grok-imagine-image-2-0']),
+    model_aliases:{'grok-imagine-image-2-0':'Grok Imagine 2.0'},
+    model_protocols:{},
+    model_routes:{}
+  };
+  materialize(item);
+  assert.equal(item.model_aliases['grok-imagine-image-2-0'], 'Grok Imagine 2.0');
+  assert.equal(item.model_aliases['grok-imagine-image-2-1'], '2');
+  assert.equal(item.model_routes['grok-imagine-image-2-2'].image_edit, '1');
+
+  drafts.image[0].aliasDirty = true;
+  materialize(item);
+  assert.equal(item.model_aliases['grok-imagine-image-2-0'], undefined);
 });
 
 test('Venice image rows no longer expose manual capability controls', () => {
@@ -97,7 +159,7 @@ test('chat model ID and name fields use the same compact prefixes', () => {
 test('RunningHub image and video model rows reuse the ID and NM prefixes', () => {
   assert.match(source, /item\?\.id === 'runninghub'/);
   assert.match(source, /item\?\.protocol[\s\S]*=== 'runninghub'/);
-  assert.match(source, /standardModelFieldsHtml\(kind, index, model, alias, item\)/);
+  assert.match(source, /standardModelFieldsHtml\(kind, index, draft, item\)/);
 });
 
 test('prefixed model labels are drag handles that reorder only the selected model list', () => {
@@ -110,13 +172,20 @@ test('prefixed model labels are drag handles that reorder only the selected mode
   assert.match(css, /\.model-row\.is-drop-before/);
   assert.match(css, /\.model-row\.is-drop-after/);
 
+  const imageDrafts = [{id:'a'}, {id:'b'}, {id:'c'}];
+  const videoDrafts = [{id:'v1'}, {id:'v2'}];
   const item = {image_models:['a', 'b', 'c'], video_models:['v1', 'v2']};
   const reorder = new Function(
     'provider',
+    'modelDrafts',
+    'syncModelDraftArrays',
     'renderModels',
     'renderMsLoras',
     `return (${extractFunction('reorderModel')});`
-  )(() => item, () => {}, () => {});
+  )(() => item, (_item, kind) => kind === 'image' ? imageDrafts : videoDrafts, current => {
+    current.image_models = imageDrafts.map(draft => draft.id);
+    current.video_models = videoDrafts.map(draft => draft.id);
+  }, () => {}, () => {});
   assert.equal(reorder('image', 0, 3), true);
   assert.deepEqual(item.image_models, ['b', 'c', 'a']);
   assert.deepEqual(item.video_models, ['v1', 'v2']);
@@ -139,6 +208,7 @@ test('new Venice rows mark every empty text field and clear markers while typing
   assert.match(css, /body\.studio-theme-dark \.venice-model-route\.is-missing,body\.studio-theme-dark \.venice-model-field\.is-missing\s*\{[^}]*border-color:rgba\(251,191,36,\.32\)/);
   assert.ok(routeUpdate.indexOf("classList.toggle('is-missing', !target)") < routeUpdate.indexOf("if(!item || String(item.protocol"));
 
+  const draft = {id:'', route:''};
   const item = {protocol:'venice', image_models:[''], model_routes:{}};
   let routeMissing = true;
   const control = {classList:{toggle:(name, active) => { if(name === 'is-missing') routeMissing = active; }}, title:''};
@@ -146,19 +216,49 @@ test('new Venice rows mark every empty text field and clear markers while typing
   const updateRoute = new Function(
     'provider',
     'veniceModelRouteName',
+    'modelDrafts',
     'tr',
     `return (${routeUpdate});`
-  )(() => item, kind => kind === 'image' ? 'image_edit' : '', key => key);
+  )(() => item, kind => kind === 'image' ? 'image_edit' : '', () => [draft], key => key);
   updateRoute('image', 0, input);
   assert.equal(routeMissing, false);
-  assert.deepEqual(item.model_routes, {});
-  item.image_models[0] = 'source-model';
-  updateRoute('image', 0, input);
-  assert.equal(item.model_routes['source-model'].image_edit, 'edit-model');
+  assert.equal(draft.route, 'edit-model');
   input.value = '';
   updateRoute('image', 0, input);
   assert.equal(routeMissing, true);
-  assert.deepEqual(item.model_routes, {});
+  assert.equal(draft.route, '');
+});
+
+test('model saves reject incomplete or duplicate drafts and protect manual persistence', () => {
+  const validation = extractFunction('validateModelDraftsForSave');
+  assert.match(validation, /缺少模型 ID/);
+  assert.match(validation, /模型 ID 重复/);
+  assert.match(validation, /系统不会静默删除任何行/);
+  assert.match(source, /'X-Provider-Revision':providersRevision/);
+  assert.match(source, /changedDuringSave/);
+  assert.match(source, /providersDraftSnapshot\(\) !== requestSnapshot/);
+  assert.match(source, /此前修改已保存；保存期间的新修改仍在草稿中/);
+  assert.doesNotMatch(extractFunction('handleProviderDrop'), /saveProviders/);
+  assert.doesNotMatch(extractFunction('deleteProvider'), /saveProviders/);
+  assert.doesNotMatch(extractFunction('addCliProvider'), /saveProviders/);
+  assert.doesNotMatch(extractFunction('clearKeyOnly'), /saveProviders/);
+});
+
+test('save snapshots ignore object key order but preserve model row order', () => {
+  const stableValue = new Function(`return (${extractFunction('stableProviderSnapshotValue')});`)();
+  const snapshot = value => JSON.stringify(stableValue(value));
+  assert.equal(
+    snapshot([{model_routes:{chroma:{image_edit:'edit-a'}, dsfs:{image_edit:'edit-b'}}}]),
+    snapshot([{model_routes:{dsfs:{image_edit:'edit-b'}, chroma:{image_edit:'edit-a'}}}])
+  );
+  assert.notEqual(
+    snapshot([{image_models:['chroma', 'dsfs']}]),
+    snapshot([{image_models:['dsfs', 'chroma']}])
+  );
+  assert.notEqual(
+    snapshot([{model_routes:{dsfs:{image_edit:'edit-a'}}}]),
+    snapshot([{model_routes:{dsfs:{image_edit:'edit-b'}}}])
+  );
 });
 
 test('RunningHub editor locks the page behind its modal', () => {

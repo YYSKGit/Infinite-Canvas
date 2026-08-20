@@ -191,6 +191,10 @@ body.studio-theme-dark .model-protocol-select { background:var(--panel); border-
 .model-row.is-dragging { opacity:.48; }
 .model-row.is-drop-before { box-shadow:0 -2px 0 var(--api-blue); }
 .model-row.is-drop-after { box-shadow:0 2px 0 var(--api-blue); }
+.model-row.has-error { border-color:#dc2626 !important; box-shadow:0 0 0 2px rgba(220,38,38,.12) !important; }
+.model-row.has-error .model-id-input { color:#b91c1c; }
+body.studio-theme-dark .model-row.has-error { border-color:#f87171 !important; box-shadow:0 0 0 2px rgba(248,113,113,.14) !important; }
+body.studio-theme-dark .model-row.has-error .model-id-input { color:#fca5a5; }
 .venice-model-route input { width:100%; min-width:0; height:30px !important; padding:0 9px !important; color:var(--text); font-size:11.5px !important; }
 .model-prefixed-field input { width:100%; min-width:0; height:30px !important; padding:0 9px !important; }
 .model-prefixed-inputs { gap:6px; }

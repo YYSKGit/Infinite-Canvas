@@ -1099,6 +1099,19 @@ def model_list_from_values(values):
             deduped.append(item)
     return deduped
 
+def validate_provider_model_list(values, provider_name, label):
+    seen = {}
+    for index, value in enumerate(values or []):
+        model_id = str(value or "").strip()
+        if not model_id:
+            raise HTTPException(status_code=400, detail=f"{provider_name} 的{label}第 {index + 1} 行缺少模型 ID，未保存任何配置。")
+        if model_id in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{provider_name} 的{label}第 {index + 1} 行与第 {seen[model_id] + 1} 行模型 ID 重复：{model_id}，未保存任何配置。",
+            )
+        seen[model_id] = index
+
 def normalize_ms_loras(values):
     normalized = []
     seen = set()
@@ -1439,11 +1452,34 @@ def load_api_providers():
         print(f"加载 API 平台配置失败: {e}")
         return defaults
 
-def save_api_providers(providers):
+def api_providers_revision_unlocked():
+    if not os.path.exists(API_PROVIDERS_FILE):
+        return "missing"
+    with open(API_PROVIDERS_FILE, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+def api_providers_revision():
+    with GLOBAL_CONFIG_LOCK:
+        return api_providers_revision_unlocked()
+
+def save_api_providers(providers, expected_revision=None):
     os.makedirs(DATA_DIR, exist_ok=True)
     with GLOBAL_CONFIG_LOCK:
-        with open(API_PROVIDERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(providers, f, ensure_ascii=False, indent=2)
+        current_revision = api_providers_revision_unlocked()
+        if expected_revision and expected_revision != current_revision:
+            raise HTTPException(status_code=409, detail="API 配置已被另一个页面修改。为避免覆盖新数据，请刷新页面后重新应用本次修改。")
+        serialized = json.dumps(providers, ensure_ascii=False, indent=2).encode("utf-8")
+        fd, temp_path = tempfile.mkstemp(prefix="api_providers_", suffix=".json.tmp", dir=DATA_DIR)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(serialized)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, API_PROVIDERS_FILE)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        return hashlib.sha256(serialized).hexdigest()
 
 def public_provider(provider):
     if provider.get("id") == "runninghub":
@@ -13846,15 +13882,22 @@ async def ai_models():
 
 @app.get("/api/providers")
 async def api_providers():
-    return {"providers": public_api_providers()}
+    with GLOBAL_CONFIG_LOCK:
+        providers = public_api_providers()
+        revision = api_providers_revision_unlocked()
+    return {"providers": providers, "revision": revision}
 
 @app.put("/api/providers")
-async def save_providers(payload: List[ApiProviderPayload]):
+async def save_providers(payload: List[ApiProviderPayload], x_provider_revision: Optional[str] = Header(default=None, alias="X-Provider-Revision")):
     providers = []
     env_updates = {}
     # 收集每个 item 的 primary 字段
     raw_primary_flags = [bool(getattr(item, "primary", False)) for item in payload]
     for item in payload:
+        provider_name = re.sub(r"\s+", " ", str(item.name or item.id or "API 平台").strip())
+        validate_provider_model_list(item.image_models, provider_name, "生图模型")
+        validate_provider_model_list(item.chat_models, provider_name, "聊天模型")
+        validate_provider_model_list(item.video_models, provider_name, "视频模型")
         provider = normalize_provider(item.dict(exclude={"api_key"}))
         if provider["id"] == "runninghub":
             provider = preserve_runninghub_hidden_overrides(provider)
@@ -13908,11 +13951,11 @@ async def save_providers(payload: List[ApiProviderPayload]):
         winner = primary_indices[-1]
         for i, p in enumerate(providers):
             p["primary"] = (i == winner)
-    save_api_providers(providers)
+    revision = save_api_providers(providers, expected_revision=x_provider_revision)
     if env_updates:
         update_env_values(env_updates)
         reload_env_globals()   # 立即将最新 env 值同步回模块全局变量，无需重启
-    return {"providers": [public_provider(p) for p in providers]}
+    return {"providers": [public_provider(p) for p in providers], "revision": revision}
 
 # --- ModelScope Token (从 env 读取，不再支持通过 UI 修改) ---
 

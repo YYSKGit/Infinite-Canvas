@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -441,6 +442,31 @@ class VeniceBrowserPresenceTests(unittest.IsolatedAsyncioTestCase):
                 loop_task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await loop_task
+
+
+class ApiProviderPersistenceTests(unittest.TestCase):
+    def test_model_list_validation_rejects_blank_and_duplicate_rows(self):
+        with self.assertRaisesRegex(HTTPException, "第 2 行缺少模型 ID"):
+            main.validate_provider_model_list(["model-a", ""], "Venice", "生图模型")
+        with self.assertRaisesRegex(HTTPException, "第 3 行与第 1 行模型 ID 重复"):
+            main.validate_provider_model_list(["model-a", "model-b", " model-a "], "Venice", "生图模型")
+
+    def test_provider_config_write_is_atomic_and_revision_guarded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = os.path.join(tmp, "api_providers.json")
+            with patch.object(main, "DATA_DIR", tmp), patch.object(main, "API_PROVIDERS_FILE", config_path):
+                first = [{"id": "one", "image_models": ["a"]}]
+                first_revision = main.save_api_providers(first, expected_revision="missing")
+                self.assertEqual(first_revision, main.api_providers_revision())
+                with open(config_path, "r", encoding="utf-8") as handle:
+                    self.assertEqual(json.load(handle), first)
+                self.assertFalse(any(name.endswith(".json.tmp") for name in os.listdir(tmp)))
+
+                with self.assertRaisesRegex(HTTPException, "另一个页面修改") as conflict:
+                    main.save_api_providers([{"id": "two"}], expected_revision="stale")
+                self.assertEqual(conflict.exception.status_code, 409)
+                with open(config_path, "r", encoding="utf-8") as handle:
+                    self.assertEqual(json.load(handle), first)
 
 
 if __name__ == "__main__":
