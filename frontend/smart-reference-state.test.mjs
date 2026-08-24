@@ -1469,41 +1469,11 @@ test('minimap rendering reuses node and viewport DOM while preserving viewport s
     assert.doesNotMatch(extractFunction('renderMinimap'), /innerHTML|replaceChildren|querySelectorAll/);
 });
 
-test('viewport compositor promotion is transient and reason-safe', () => {
-    const classes = new Set();
-    const timers = new Map();
-    let nextTimer = 0;
-    const loaded = loadProductionFunctions([
-        'beginSmartViewportCompositing',
-        'endSmartViewportCompositing',
-        'clearSmartViewportCompositing'
-    ], {
-        SMART_VIEWPORT_COMPOSITING_RELEASE_MS:180,
-        smartViewportCompositingReasons:new Set(),
-        smartViewportCompositingReleaseTimers:new Map(),
-        world:{classList:{add:name => classes.add(name), remove:name => classes.delete(name)}},
-        setTimeout:callback => {
-            const id = ++nextTimer;
-            timers.set(id, () => { timers.delete(id); callback(); });
-            return id;
-        },
-        clearTimeout:id => timers.delete(id)
-    });
-
-    loaded.beginSmartViewportCompositing('pan');
-    loaded.endSmartViewportCompositing('pan');
-    const panRelease = [...timers.values()][0];
-    loaded.beginSmartViewportCompositing('wheel');
-    panRelease();
-    assert.equal(classes.has('smart-viewport-compositing'), true);
-    loaded.endSmartViewportCompositing('wheel', 0);
-    assert.equal(classes.has('smart-viewport-compositing'), false);
-    loaded.beginSmartViewportCompositing('minimap');
-    loaded.clearSmartViewportCompositing();
-    assert.equal(classes.has('smart-viewport-compositing'), false);
-    assert.equal(timers.size, 0);
-    assert.match(smartCanvasCss, /\.world\.smart-viewport-compositing,\.world\.canvas-reference-viewport-animating\s*\{\s*will-change:transform;/);
-    assert.doesNotMatch(smartCanvasCss, /\.world\s*\{[^}]*will-change:transform/);
+test('interactive viewport never forces whole-world compositor promotion', () => {
+    assert.doesNotMatch(smartCanvasSource, /smartViewportCompositing|SMART_VIEWPORT_COMPOSITING|smart-viewport-compositing/);
+    assert.doesNotMatch(smartCanvasCss, /\.world\.smart-viewport-compositing/);
+    assert.doesNotMatch(smartCanvasCss, /\.world\s*\{[^}]*will-change\s*:\s*transform/);
+    assert.doesNotMatch(smartCanvasCss, /\.world\.canvas-reference-viewport-animating\s*\{[^}]*will-change\s*:\s*transform/);
 });
 
 test('scheduled canvas and undo persistence wait for interaction while direct saves remain direct', async () => {
