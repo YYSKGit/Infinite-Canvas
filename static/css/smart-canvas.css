@@ -50,6 +50,7 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .shell.panning { cursor:grabbing; }
 .shell.zoom-preview { cursor:crosshair; }
 .world { position:absolute; left:0; top:0; width:6000px; height:4000px; transform-origin:0 0; }
+.world.smart-viewport-compositing,.world.canvas-reference-viewport-animating { will-change:transform; }
 .world.smart-initial-media-preparing { opacity:0; pointer-events:none; }
 .world.smart-initial-media-reveal { transition:opacity .12s ease; }
 /* 画布缩放（非 1:1）时，关闭 world 内卡片的 backdrop-filter，避免合成层位图被缩放导致“参数设置”等组件发虚。
@@ -1103,8 +1104,8 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .smart-video-progress::-webkit-slider-thumb,.smart-video-volume::-webkit-slider-thumb { width:9px; height:9px; margin-top:-3px; border:0; border-radius:50%; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.36); appearance:none; -webkit-appearance:none; }
 .smart-video-progress::-moz-range-thumb,.smart-video-volume::-moz-range-thumb { width:9px; height:9px; border:0; border-radius:50%; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.36); }
 .smart-video-progress:disabled { cursor:default; opacity:.45; }
-.smart-video-spinner { position:absolute; left:50%; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; border:2px solid rgba(255,255,255,.28); border-top-color:#fff; border-radius:50%; opacity:0; pointer-events:none; animation:smart-video-spin .72s linear infinite; }
-.smart-canvas-video-host.is-waiting .smart-video-spinner,.smart-canvas-video-host.is-capturing .smart-video-spinner { opacity:1; }
+.smart-video-spinner { position:absolute; left:50%; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; border:2px solid rgba(255,255,255,.28); border-top-color:#fff; border-radius:50%; opacity:0; pointer-events:none; animation:smart-video-spin .72s linear infinite; animation-play-state:paused; }
+.smart-canvas-video-host.is-waiting .smart-video-spinner,.smart-canvas-video-host.is-capturing .smart-video-spinner { opacity:1; animation-play-state:running; }
 .smart-canvas-video-host.has-error::before { content:'视频加载失败'; position:absolute; z-index:6; left:50%; top:50%; transform:translate(-50%,-50%); padding:6px 9px; border-radius:7px; color:#fff; background:rgba(127,29,29,.82); font-size:10px; white-space:nowrap; pointer-events:none; }
 @keyframes smart-video-spin { to { transform:rotate(360deg); } }
 @container (max-width:240px) { .smart-video-controls { left:5px; right:5px; bottom:5px; gap:4px; padding:0 5px; } .smart-video-current { display:none; } .smart-video-capture { display:none; } }

@@ -178,6 +178,9 @@ let magneticPortEl = null;
 let magneticPortPointer = null;
 let magneticPortCatchRaf = 0;
 let saveTimer = null;
+let saveScheduleToken = 0;
+let smartCanvasSaveInteractionUntil = 0;
+const smartConfigActivePointers = new Set();
 let apiProviders = [];
 let comfyWorkflows = [];
 let comfyInstanceCount = 1;
@@ -225,10 +228,14 @@ let lastConfigRefreshAt = 0;
 let backgroundDynamicParamsRenderPending = false;
 let backgroundDynamicParamsRenderTimer = 0;
 let smartMinimapState = null;
+let smartMinimapSize = null;
+let smartCanvasViewportSize = null;
+const smartMinimapNodeEls = [];
 let smartMinimapDrag = false;
 let zoomPreviewState = null;
 let runTimerInterval = null;
 let spinnerRotation = 0;
+let loadingSpinnerAnimationFrame = 0;
 let smartCascadeRunning = false;
 let smartCascadeActiveLoopId = '';
 let smartCascadeStopRequested = false;
@@ -530,9 +537,8 @@ function historyStacksForStorage(){
     }
     return {undo:storedUndo, redo:storedRedo, truncated:storedUndo.length + storedRedo.length < initialCount};
 }
-function persistSmartUndoHistoryNow(targetCanvasId=canvasId){
-    clearTimeout(smartUndoHistoryPersistTimer);
-    smartUndoHistoryPersistTimer = null;
+function persistSmartUndoHistoryNow(targetCanvasId=canvasId, options={}){
+    if(options.cancelScheduled !== false) cancelScheduledSmartUndoHistoryPersist();
     const canvasKey = String(targetCanvasId || '');
     if(!canvasKey || canvasKey !== canvasId || !canvas) return Promise.resolve(false);
     const stacks = historyStacksForStorage();
@@ -553,13 +559,42 @@ function persistSmartUndoHistoryNow(targetCanvasId=canvasId){
         return false;
     });
 }
-function scheduleSmartUndoHistoryPersist(delay=700){
+let smartUndoHistoryPersistScheduleToken = 0;
+function cancelScheduledSmartUndoHistoryPersist(){
+    smartUndoHistoryPersistScheduleToken += 1;
     clearTimeout(smartUndoHistoryPersistTimer);
-    const scheduledCanvasId = canvasId;
-    smartUndoHistoryPersistTimer = setTimeout(() => {
-        smartUndoHistoryPersistTimer = null;
-        if(scheduledCanvasId === canvasId) persistSmartUndoHistoryNow(scheduledCanvasId);
-    }, delay);
+    smartUndoHistoryPersistTimer = null;
+}
+function runScheduledSmartUndoHistoryPersist(schedule){
+    if(!schedule || schedule.token !== smartUndoHistoryPersistScheduleToken) return;
+    if(smartUndoHistoryPersistTimer === schedule.timer) smartUndoHistoryPersistTimer = null;
+    if(
+        schedule.canvasId !== canvasId
+        || schedule.canvas !== canvas
+        || schedule.generation !== smartCanvasLoadGeneration
+    ) return;
+    const interactionDelay = scheduledCanvasSaveDelay();
+    if(interactionDelay > 0){
+        schedule.timer = setTimeout(
+            () => runScheduledSmartUndoHistoryPersist(schedule),
+            Math.max(60, Math.ceil(interactionDelay))
+        );
+        if(schedule.token === smartUndoHistoryPersistScheduleToken) smartUndoHistoryPersistTimer = schedule.timer;
+        return;
+    }
+    void persistSmartUndoHistoryNow(schedule.canvasId);
+}
+function scheduleSmartUndoHistoryPersist(delay=700){
+    cancelScheduledSmartUndoHistoryPersist();
+    const schedule = {
+        token:smartUndoHistoryPersistScheduleToken,
+        canvasId,
+        canvas,
+        generation:smartCanvasLoadGeneration,
+        timer:null
+    };
+    schedule.timer = setTimeout(() => runScheduledSmartUndoHistoryPersist(schedule), delay);
+    smartUndoHistoryPersistTimer = schedule.timer;
 }
 function removeStoredSmartUndoHistory(targetCanvasId=canvasId){
     const canvasKey = String(targetCanvasId || '');
@@ -567,8 +602,7 @@ function removeStoredSmartUndoHistory(targetCanvasId=canvasId){
     return queueSmartUndoHistoryWrite(() => deleteSmartUndoHistoryRecord(canvasKey)).then(() => true).catch(() => false);
 }
 function clearSmartUndoHistory(options={}){
-    clearTimeout(smartUndoHistoryPersistTimer);
-    smartUndoHistoryPersistTimer = null;
+    cancelScheduledSmartUndoHistoryPersist();
     undoStack.length = 0;
     redoStack.length = 0;
     pendingUndoSnapshot = null;
@@ -780,15 +814,50 @@ let panoramaState = {
 };
 window.__smartCanvasPanoramaState = panoramaState;
 let viewport = {x:0, y:0, scale:1};
+let smartViewportApplyRaf = 0;
+const SMART_VIEWPORT_COMPOSITING_RELEASE_MS = 180;
+const smartViewportCompositingReasons = new Set();
+const smartViewportCompositingReleaseTimers = new Map();
 const SMART_EDGE_PAN_SIZE = 72;
 const SMART_EDGE_PAN_MAX_SPEED = 8;
 let smartEdgePanFrame = 0;
 let smartEdgePanPointer = null;
 
+function beginSmartViewportCompositing(reason){
+    const releaseTimer = smartViewportCompositingReleaseTimers.get(reason);
+    if(releaseTimer !== undefined) clearTimeout(releaseTimer);
+    smartViewportCompositingReleaseTimers.delete(reason);
+    smartViewportCompositingReasons.add(reason);
+    world?.classList.add('smart-viewport-compositing');
+}
+function endSmartViewportCompositing(reason, delay=SMART_VIEWPORT_COMPOSITING_RELEASE_MS){
+    const previousTimer = smartViewportCompositingReleaseTimers.get(reason);
+    if(previousTimer !== undefined) clearTimeout(previousTimer);
+    smartViewportCompositingReleaseTimers.delete(reason);
+    if(!smartViewportCompositingReasons.has(reason)) return;
+    const release = () => {
+        smartViewportCompositingReleaseTimers.delete(reason);
+        smartViewportCompositingReasons.delete(reason);
+        if(!smartViewportCompositingReasons.size) world?.classList.remove('smart-viewport-compositing');
+    };
+    if(delay > 0){
+        smartViewportCompositingReleaseTimers.set(reason, setTimeout(release, delay));
+        return;
+    }
+    release();
+}
+function clearSmartViewportCompositing(){
+    smartViewportCompositingReleaseTimers.forEach(timer => clearTimeout(timer));
+    smartViewportCompositingReleaseTimers.clear();
+    smartViewportCompositingReasons.clear();
+    world?.classList.remove('smart-viewport-compositing');
+}
+
 function stopSmartEdgePan(){
     if(smartEdgePanFrame) cancelAnimationFrame(smartEdgePanFrame);
     smartEdgePanFrame = 0;
     smartEdgePanPointer = null;
+    endSmartViewportCompositing('edge-pan');
 }
 function smartEdgePanSpeed(distance){
     if(distance >= SMART_EDGE_PAN_SIZE) return 0;
@@ -807,6 +876,7 @@ function runSmartEdgePan(){
     if(y < rect.top + SMART_EDGE_PAN_SIZE) dy = smartEdgePanSpeed(y - rect.top);
     else if(y > rect.bottom - SMART_EDGE_PAN_SIZE) dy = -smartEdgePanSpeed(rect.bottom - y);
     if(dx || dy){
+        if(!smartViewportCompositingReasons.has('edge-pan')) beginSmartViewportCompositing('edge-pan');
         viewport.x += dx;
         viewport.y += dy;
         // Node movement is based on its drag-start origin. Shift that origin as
@@ -3445,8 +3515,7 @@ function canvasListUrlForProject(projectId){
 async function backToCanvasList(){
     finishCanvasReferencePick();
     savePromptDraftForCurrent();
-    clearTimeout(saveTimer);
-    saveTimer = null;
+    cancelScheduledCanvasSave();
     if(canvas) await saveCanvas();
     await persistSmartUndoHistoryNow();
     window.location.href = canvasListUrlForProject(canvas?.project || sourceProjectId || 'default');
@@ -3477,6 +3546,9 @@ function smartCanvasUrl(nextCanvasId, projectId=canvas?.project || sourceProject
     return `/static/smart-canvas.html?id=${encodeURIComponent(nextCanvasId)}&project=${encodeURIComponent(rememberCanvasListProject(projectId))}`;
 }
 function resetSmartCanvasTransientStateForSwitch(){
+    if(smartViewportApplyRaf) cancelAnimationFrame(smartViewportApplyRaf);
+    smartViewportApplyRaf = 0;
+    clearSmartViewportCompositing();
     promptAssistantStreams.forEach(stream => stream.controller?.abort?.());
     promptAssistantStreams.clear();
     promptAssistantReasoningUi.clear();
@@ -3540,14 +3612,12 @@ async function switchToSmartCanvas(nextCanvasId, options={}){
     const previousUrl = smartCanvasUrl(previousCanvasId);
     try {
         savePromptDraftForCurrent();
-        clearTimeout(saveTimer);
-        saveTimer = null;
+        cancelScheduledCanvasSave();
         if(canvas) await saveCanvas();
         await persistSmartUndoHistoryNow(previousCanvasId);
         // A conflict response may schedule a retry for the canvas being left.
         // Never let that delayed callback run after canvasId changes.
-        clearTimeout(saveTimer);
-        saveTimer = null;
+        cancelScheduledCanvasSave();
         const nextUrl = smartCanvasUrl(nextCanvasId);
         if(smartCanvasHasLiveAsyncWork()){
             const finalTarget = pendingSmartCanvasSwitch?.canvasId || nextCanvasId;
@@ -5079,6 +5149,10 @@ function canvasMajorGridSize(scale, grid){
     return Math.max(1 / grid.dpr, grid.snap(worldSize * scale));
 }
 function applyViewport(){
+    if(smartViewportApplyRaf){
+        cancelAnimationFrame(smartViewportApplyRaf);
+        smartViewportApplyRaf = 0;
+    }
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
     world.style.setProperty('--canvas-counter-scale', String(1 / viewport.scale));
     // The composer lives in world coordinates so it follows its node, but its
@@ -5104,6 +5178,20 @@ function applyViewport(){
     scheduleSmartVideoResetFrameRefresh({debounce:true});
     scheduleSmartImageLodRefresh();
 }
+function scheduleInteractiveViewportApply(){
+    if(smartViewportApplyRaf) return;
+    smartViewportApplyRaf = requestAnimationFrame(() => {
+        smartViewportApplyRaf = 0;
+        applyViewport();
+    });
+}
+function flushInteractiveViewportApply(){
+    if(!smartViewportApplyRaf) return false;
+    cancelAnimationFrame(smartViewportApplyRaf);
+    smartViewportApplyRaf = 0;
+    applyViewport();
+    return true;
+}
 function screenToWorld(event){
     const rect = shell.getBoundingClientRect();
     return {
@@ -5118,12 +5206,23 @@ function viewportCenter(){
     };
 }
 function renderMinimap(){
-    if(!minimapContent || !minimapViewport) return;
+    if(!minimapContent) return;
     smartArrangeBtn?.classList.toggle('visible', selectedNodeIds().length > 0);
-    const width = minimapContent.clientWidth || 170;
-    const height = minimapContent.clientHeight || 108;
-    const viewW = shell.clientWidth / viewport.scale;
-    const viewH = shell.clientHeight / viewport.scale;
+    if(!smartMinimapSize){
+        smartMinimapSize = {
+            width:minimapContent.clientWidth || 170,
+            height:minimapContent.clientHeight || 108
+        };
+    }
+    if(!smartCanvasViewportSize){
+        smartCanvasViewportSize = {
+            width:shell.clientWidth,
+            height:shell.clientHeight
+        };
+    }
+    const {width, height} = smartMinimapSize;
+    const viewW = smartCanvasViewportSize.width / viewport.scale;
+    const viewH = smartCanvasViewportSize.height / viewport.scale;
     const viewX = -viewport.x / viewport.scale;
     const viewY = -viewport.y / viewport.scale;
     const rects = nodes.filter(n => n.id !== SMART_LOG_PREVIEW_NODE_ID).map(nodeRect);
@@ -5142,13 +5241,40 @@ function renderMinimap(){
         width:Math.max(4, r.width * scale),
         height:Math.max(4, r.height * scale)
     });
-    const nodeHtml = rects.slice(0, -1).map(r => {
-        const p = project(r);
-        return `<div class="minimap-node" style="left:${p.left}px;top:${p.top}px;width:${p.width}px;height:${p.height}px"></div>`;
-    }).join('');
+    if(!minimapViewport || minimapViewport.parentElement !== minimapContent){
+        minimapViewport = document.createElement('div');
+        minimapViewport.id = 'minimapViewport';
+        minimapViewport.className = 'smart-minimap-viewport';
+        minimapContent.appendChild(minimapViewport);
+    }
+    const nodeRects = rects.slice(0, -1);
+    while(smartMinimapNodeEls.length < nodeRects.length){
+        const el = document.createElement('div');
+        el.className = 'minimap-node';
+        minimapContent.insertBefore(el, minimapViewport);
+        smartMinimapNodeEls.push(el);
+    }
+    while(smartMinimapNodeEls.length > nodeRects.length) smartMinimapNodeEls.pop().remove();
+    nodeRects.forEach((rect, index) => {
+        const p = project(rect);
+        const el = smartMinimapNodeEls[index];
+        const signature = `${p.left}|${p.top}|${p.width}|${p.height}`;
+        if(el._smartMinimapRectSignature === signature) return;
+        el._smartMinimapRectSignature = signature;
+        el.style.left = `${p.left}px`;
+        el.style.top = `${p.top}px`;
+        el.style.width = `${p.width}px`;
+        el.style.height = `${p.height}px`;
+    });
     const view = project({x:viewX, y:viewY, width:viewW, height:viewH});
-    minimapContent.innerHTML = `${nodeHtml}<div id="minimapViewport" class="smart-minimap-viewport" style="left:${view.left}px;top:${view.top}px;width:${view.width}px;height:${view.height}px"></div>`;
-    minimapViewport = document.getElementById('minimapViewport');
+    const viewSignature = `${view.left}|${view.top}|${view.width}|${view.height}`;
+    if(minimapViewport._smartMinimapRectSignature !== viewSignature){
+        minimapViewport._smartMinimapRectSignature = viewSignature;
+        minimapViewport.style.left = `${view.left}px`;
+        minimapViewport.style.top = `${view.top}px`;
+        minimapViewport.style.width = `${view.width}px`;
+        minimapViewport.style.height = `${view.height}px`;
+    }
 }
 function minimapEventToWorld(event){
     if(!smartMinimapState) renderMinimap();
@@ -9365,7 +9491,6 @@ function bindDynamicParams(){
         }
     }));
 }
-const smartConfigActivePointers = new Set();
 const smartConfigPointerIdleWaiters = new Set();
 let smartConfigRefreshAfterPointer = false;
 function waitForSmartConfigPointerIdle(){
@@ -11304,12 +11429,73 @@ async function loadCanvas(targetCanvasId=canvasId, options={}){
         return false;
     }
 }
-function scheduleSave(){
+const SMART_CANVAS_SAVE_INTERACTION_RETRY_MS = 120;
+const SMART_CANVAS_SAVE_INTERACTION_SETTLE_MS = 180;
+function smartCanvasSaveInteractionActive(){
+    return Boolean(
+        smartConfigActivePointers.size
+        || canvasReferencePickReturnFrame
+    );
+}
+function scheduledCanvasSaveDelay(){
+    if(smartCanvasSaveInteractionActive()) return SMART_CANVAS_SAVE_INTERACTION_RETRY_MS;
+    return Math.max(0, smartCanvasSaveInteractionUntil - Date.now());
+}
+function cancelScheduledCanvasSave(){
+    saveScheduleToken += 1;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveCanvas, 450);
+    saveTimer = null;
+}
+function runScheduledCanvasSave(schedule){
+    if(!schedule || schedule.token !== saveScheduleToken) return;
+    if(saveTimer === schedule.timer) saveTimer = null;
+    if(
+        schedule.canvasId !== canvasId
+        || schedule.canvas !== canvas
+        || schedule.generation !== smartCanvasLoadGeneration
+    ) return;
+    const interactionDelay = scheduledCanvasSaveDelay();
+    if(interactionDelay > 0){
+        schedule.timer = setTimeout(
+            () => runScheduledCanvasSave(schedule),
+            Math.max(60, Math.ceil(interactionDelay))
+        );
+        if(schedule.token === saveScheduleToken) saveTimer = schedule.timer;
+        return;
+    }
+    void saveCanvas({scheduledToken:schedule.token});
+}
+function queueCanvasSave(delay){
+    cancelScheduledCanvasSave();
+    const schedule = {
+        token:saveScheduleToken,
+        canvasId,
+        canvas,
+        generation:smartCanvasLoadGeneration,
+        timer:null
+    };
+    schedule.timer = setTimeout(() => runScheduledCanvasSave(schedule), delay);
+    saveTimer = schedule.timer;
+}
+function scheduleSave(){
+    queueCanvasSave(450);
     scheduleSmartUndoHistoryPersist();
 }
-async function saveCanvas(){
+async function persistSmartUndoHistoryAfterCanvasSave(targetCanvasId){
+    if(targetCanvasId !== canvasId || !canvas) return false;
+    // A pending history timer already owns the latest snapshot. Let that timer
+    // observe the final server revision instead of serializing twice or
+    // cancelling a newer edit's history while an older PUT is completing.
+    if(smartUndoHistoryPersistTimer) return false;
+    const interactionDelay = scheduledCanvasSaveDelay();
+    if(interactionDelay > 0){
+        scheduleSmartUndoHistoryPersist(Math.max(60, Math.ceil(interactionDelay)));
+        return false;
+    }
+    return persistSmartUndoHistoryNow(targetCanvasId, {cancelScheduled:false});
+}
+async function saveCanvas(options){
+    options = options || {};
     if(!canvasId || !canvas) return;
     const requestedCanvasId = canvasId;
     const requestedCanvas = canvas;
@@ -11346,7 +11532,7 @@ async function saveCanvas(){
         if(res.ok){
             const data = await res.json();
             if(data.canvas && data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
-            await persistSmartUndoHistoryNow(requestedCanvasId);
+            await persistSmartUndoHistoryAfterCanvasSave(requestedCanvasId);
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
             // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
@@ -11362,8 +11548,9 @@ async function saveCanvas(){
             } else if(data.detail?.updated_at) {
                 canvas.updated_at = data.detail.updated_at;
             }
-            clearTimeout(saveTimer);
-            saveTimer = setTimeout(saveCanvas, 300);
+            // A newer edit may already own the active debounce timer. Preserve it
+            // instead of letting an older conflict response replace its schedule.
+            if(options.scheduledToken == null || options.scheduledToken === saveScheduleToken) queueCanvasSave(300);
         }
     } catch(e) {} finally {
         canvasSyncInFlightCount = Math.max(0, canvasSyncInFlightCount - 1);
@@ -14151,6 +14338,7 @@ function render(){
     refreshRunTimerPills();
     scheduleSmartVideoResetFrameRefresh();
     scheduleSmartImageLodRefresh();
+    syncLoadingSpinnerAnimation();
     flushQueuedNodeGeometryTransitions();
     return;
     world.innerHTML = '';
@@ -26916,6 +27104,7 @@ shell.onmousedown = e => {
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
     shell.classList.add('panning');
+    beginSmartViewportCompositing('pan');
 };
 shell.oncontextmenu = e => {
     if((e.ctrlKey || e.metaKey) || isRKeyDown){
@@ -26960,6 +27149,7 @@ minimap?.addEventListener('mousedown', e => {
     e.preventDefault();
     e.stopPropagation();
     smartMinimapDrag = true;
+    beginSmartViewportCompositing('minimap');
     centerViewportOnWorldPoint(minimapEventToWorld(e));
 });
 smartArrangeBtn?.addEventListener('mousedown', e => e.stopPropagation());
@@ -27236,7 +27426,7 @@ window.onmousemove = e => {
         if(Math.abs(dx) + Math.abs(dy) > 3) didPan = true;
         viewport.x = panState.ox + dx;
         viewport.y = panState.oy + dy;
-        applyViewport();
+        scheduleInteractiveViewportApply();
         return;
     }
     if(!dragState) return;
@@ -27347,13 +27537,16 @@ window.onmouseup = e => {
         thumbDragState = null;
     }
     if(panState) {
+        flushInteractiveViewportApply();
         panState = null;
         shell.classList.remove('panning');
+        endSmartViewportCompositing('pan');
         scheduleSave();
         setTimeout(() => { didPan = false; }, 0);
     }
     if(smartMinimapDrag){
         smartMinimapDrag = false;
+        endSmartViewportCompositing('minimap');
     }
     if(dragState && !dragState.activated){
         // A press/release inside the activation radius is a click, not a drag.
@@ -27512,6 +27705,8 @@ shell.addEventListener('wheel', e => {
     e.preventDefault();
     stopCanvasReferenceViewportAnimation();
     beginComposerWheelScaleSync();
+    beginSmartViewportCompositing('wheel');
+    endSmartViewportCompositing('wheel');
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
@@ -27520,7 +27715,7 @@ shell.addEventListener('wheel', e => {
     viewport.scale = safeScale(viewport.scale * factor);
     viewport.x = sx - before.x * viewport.scale;
     viewport.y = sy - before.y * viewport.scale;
-    applyViewport();
+    scheduleInteractiveViewportApply();
     scheduleSave();
 }, {passive:false});
 shell.ondragover = e => setSmartDropCopyEffect(e, true);
@@ -27663,10 +27858,16 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => {
     if(String(e.key || '').toLowerCase() === 'r') isRKeyDown = false;
 });
+function finishSmartCanvasSavePointerInteraction(){
+    if(smartConfigActivePointers.size) return;
+    smartCanvasSaveInteractionUntil = Date.now() + SMART_CANVAS_SAVE_INTERACTION_SETTLE_MS;
+}
 window.addEventListener('blur', () => {
     isRKeyDown = false;
+    clearSmartViewportCompositing();
     setHoveredConnectionKey('');
     smartConfigActivePointers.clear();
+    finishSmartCanvasSavePointerInteraction();
     releaseSmartConfigPointerIdleWaiters();
     finishNodeBoxResize();
 });
@@ -28798,12 +28999,23 @@ document.getElementById('imageEditStage').addEventListener('wheel', event => {
     stage.scrollTop = contentY * scale - my;
 }, {passive:false});
 window.addEventListener('resize', () => {
+    smartMinimapSize = null;
+    smartCanvasViewportSize = null;
     if(composerExpanded && selectedNode()) positionComposerForNode(selectedNode());
     if(cropState) syncImageEditOverflow();
     if(panoramaState.enabled) resizePanoramaViewer();
     scheduleSmartVideoResetFrameRefresh({settle:true});
     scheduleSmartImageLodRefresh({settle:true});
 });
+if(typeof ResizeObserver === 'function' && shell && minimapContent){
+    const smartCanvasLayoutResizeObserver = new ResizeObserver(() => {
+        smartMinimapSize = null;
+        smartCanvasViewportSize = null;
+        renderMinimap();
+    });
+    smartCanvasLayoutResizeObserver.observe(shell);
+    smartCanvasLayoutResizeObserver.observe(minimapContent);
+}
 document.addEventListener('keydown', event => {
     if(event.key === 'Escape' && composerExpanded){
         event.preventDefault();
@@ -28840,6 +29052,7 @@ document.addEventListener('pointerdown', event => {
 }, true);
 function finishSmartConfigPointer(event){
     smartConfigActivePointers.delete(event.pointerId);
+    finishSmartCanvasSavePointerInteraction();
     releaseSmartConfigPointerIdleWaiters();
     // click is dispatched after pointerup; a new task guarantees that the
     // selected option has persisted before any refresh replaces its DOM.
@@ -28869,15 +29082,27 @@ window.addEventListener('studio-lang-change', () => {
     }
     render();
 });
-// 全局转圈动画循环 - 保持动画连续性，不受 DOM 重新渲染影响
+// 仅在可见的加载覆盖层存在时推进相位；完整 render 后仍从同一相位继续。
 function animateSpinners() {
+    loadingSpinnerAnimationFrame = 0;
+    const spinners = document.querySelectorAll('.loading-spinner');
+    if(!spinners.length) return;
     spinnerRotation = (spinnerRotation + 6) % 360;
-    document.querySelectorAll('.loading-spinner').forEach(el => {
+    spinners.forEach(el => {
         el.style.setProperty('--spinner-rotation', spinnerRotation + 'deg');
     });
-    requestAnimationFrame(animateSpinners);
+    loadingSpinnerAnimationFrame = requestAnimationFrame(animateSpinners);
 }
-requestAnimationFrame(animateSpinners);
+function syncLoadingSpinnerAnimation(){
+    if(!document.querySelector('.loading-spinner')){
+        if(loadingSpinnerAnimationFrame) cancelAnimationFrame(loadingSpinnerAnimationFrame);
+        loadingSpinnerAnimationFrame = 0;
+        return;
+    }
+    if(!loadingSpinnerAnimationFrame){
+        loadingSpinnerAnimationFrame = requestAnimationFrame(animateSpinners);
+    }
+}
 
 window.onload = async () => {
     applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark');

@@ -461,7 +461,7 @@ test('wheel zoom temporarily synchronizes the composer counter-scale without cha
     assert.equal(composerClasses.has('canvas-wheel-viewport-scaling'), false);
     assert.equal(worldClasses.has('canvas-wheel-viewport-scaling'), false);
     assert.equal(loaded.sandbox.composerWheelScaleSyncTimer, null);
-    assert.match(smartCanvasSource, /shell\.addEventListener\('wheel'[\s\S]*?stopCanvasReferenceViewportAnimation\(\)[\s\S]*?beginComposerWheelScaleSync\(\)[\s\S]*?applyViewport\(\)/);
+    assert.match(smartCanvasSource, /shell\.addEventListener\('wheel'[\s\S]*?stopCanvasReferenceViewportAnimation\(\)[\s\S]*?beginComposerWheelScaleSync\(\)[\s\S]*?scheduleInteractiveViewportApply\(\)/);
 });
 
 test('generation mode support ignores stale API video state for RunningHub', () => {
@@ -1364,4 +1364,324 @@ test('live generation freezes image LOD and keeps decoded media reusable', () =>
 
 test('fresh loading overlays inherit the current spinner phase', () => {
     assert.match(extractFunction('nodeBodyHtml'), /--spinner-rotation:\$\{spinnerRotation\}deg/);
+});
+
+test('raw pan and wheel events batch viewport application without delaying direct callers', () => {
+    const scheduled = [];
+    const cancelled = [];
+    let applyCount = 0;
+    const loaded = loadProductionFunctions([
+        'scheduleInteractiveViewportApply',
+        'flushInteractiveViewportApply'
+    ], {
+        smartViewportApplyRaf:0,
+        requestAnimationFrame:callback => {
+            const id = scheduled.length + 1;
+            scheduled.push({id, callback});
+            return id;
+        },
+        cancelAnimationFrame:id => cancelled.push(id),
+        applyViewport:() => { applyCount++; }
+    });
+
+    loaded.scheduleInteractiveViewportApply();
+    loaded.scheduleInteractiveViewportApply();
+    assert.equal(scheduled.length, 1);
+    scheduled[0].callback();
+    assert.equal(applyCount, 1);
+    assert.equal(loaded.sandbox.smartViewportApplyRaf, 0);
+
+    loaded.scheduleInteractiveViewportApply();
+    assert.equal(loaded.flushInteractiveViewportApply(), true);
+    assert.equal(applyCount, 2);
+    assert.deepEqual(cancelled, [2]);
+    assert.equal(loaded.flushInteractiveViewportApply(), false);
+
+    const panStart = smartCanvasSource.indexOf('if(panState){', smartCanvasSource.indexOf('window.onmousemove'));
+    const panEnd = smartCanvasSource.indexOf('if(!dragState)', panStart);
+    const panSource = smartCanvasSource.slice(panStart, panEnd);
+    assert.match(panSource, /scheduleInteractiveViewportApply\(\)/);
+    assert.doesNotMatch(panSource, /applyViewport\(\)/);
+    assert.match(smartCanvasSource, /if\(panState\) \{[\s\S]*?flushInteractiveViewportApply\(\)[\s\S]*?scheduleSave\(\)/);
+
+    const wheelStart = smartCanvasSource.indexOf("shell.addEventListener('wheel'");
+    const wheelEnd = smartCanvasSource.indexOf('shell.ondragover', wheelStart);
+    const wheelSource = smartCanvasSource.slice(wheelStart, wheelEnd);
+    assert.match(wheelSource, /scheduleInteractiveViewportApply\(\)/);
+    assert.doesNotMatch(wheelSource, /applyViewport\(\)/);
+    assert.match(extractFunction('centerViewportOnWorldPoint'), /applyViewport\(\)/);
+});
+
+test('minimap rendering reuses node and viewport DOM while preserving viewport stacking', () => {
+    let created = 0;
+    const content = {children:[], clientWidth:170, clientHeight:108};
+    const makeElement = className => {
+        const element = {
+            className,
+            id:'',
+            parentElement:null,
+            style:{},
+            classList:{contains:name => element.className.split(/\s+/).includes(name)},
+            remove:() => {
+                const index = content.children.indexOf(element);
+                if(index >= 0) content.children.splice(index, 1);
+                element.parentElement = null;
+            }
+        };
+        return element;
+    };
+    content.appendChild = element => {
+        element.parentElement = content;
+        content.children.push(element);
+    };
+    content.insertBefore = (element, before) => {
+        element.parentElement = content;
+        content.children.splice(content.children.indexOf(before), 0, element);
+    };
+    const viewportElement = makeElement('smart-minimap-viewport');
+    viewportElement.id = 'minimapViewport';
+    content.appendChild(viewportElement);
+    const loaded = loadProductionFunctions(['renderMinimap'], {
+        minimapContent:content,
+        minimapViewport:viewportElement,
+        smartMinimapSize:null,
+        smartCanvasViewportSize:null,
+        smartMinimapNodeEls:[],
+        smartArrangeBtn:null,
+        selectedNodeIds:() => [],
+        shell:{clientWidth:1200, clientHeight:800},
+        viewport:{x:0, y:0, scale:1},
+        nodes:[{id:'node-1', x:40, y:60, width:200, height:100}],
+        SMART_LOG_PREVIEW_NODE_ID:'__preview__',
+        nodeRect:node => ({x:node.x, y:node.y, width:node.width, height:node.height}),
+        document:{createElement:() => { created++; return makeElement(''); }}
+    });
+
+    loaded.renderMinimap();
+    const firstNodeElement = content.children[0];
+    assert.equal(created, 1);
+    assert.equal(content.children.at(-1), viewportElement);
+    loaded.sandbox.viewport.x = 120;
+    loaded.renderMinimap();
+    assert.equal(created, 1);
+    assert.equal(content.children[0], firstNodeElement);
+    assert.equal(content.children.at(-1), viewportElement);
+    assert.doesNotMatch(extractFunction('renderMinimap'), /innerHTML|replaceChildren|querySelectorAll/);
+});
+
+test('viewport compositor promotion is transient and reason-safe', () => {
+    const classes = new Set();
+    const timers = new Map();
+    let nextTimer = 0;
+    const loaded = loadProductionFunctions([
+        'beginSmartViewportCompositing',
+        'endSmartViewportCompositing',
+        'clearSmartViewportCompositing'
+    ], {
+        SMART_VIEWPORT_COMPOSITING_RELEASE_MS:180,
+        smartViewportCompositingReasons:new Set(),
+        smartViewportCompositingReleaseTimers:new Map(),
+        world:{classList:{add:name => classes.add(name), remove:name => classes.delete(name)}},
+        setTimeout:callback => {
+            const id = ++nextTimer;
+            timers.set(id, () => { timers.delete(id); callback(); });
+            return id;
+        },
+        clearTimeout:id => timers.delete(id)
+    });
+
+    loaded.beginSmartViewportCompositing('pan');
+    loaded.endSmartViewportCompositing('pan');
+    const panRelease = [...timers.values()][0];
+    loaded.beginSmartViewportCompositing('wheel');
+    panRelease();
+    assert.equal(classes.has('smart-viewport-compositing'), true);
+    loaded.endSmartViewportCompositing('wheel', 0);
+    assert.equal(classes.has('smart-viewport-compositing'), false);
+    loaded.beginSmartViewportCompositing('minimap');
+    loaded.clearSmartViewportCompositing();
+    assert.equal(classes.has('smart-viewport-compositing'), false);
+    assert.equal(timers.size, 0);
+    assert.match(smartCanvasCss, /\.world\.smart-viewport-compositing,\.world\.canvas-reference-viewport-animating\s*\{\s*will-change:transform;/);
+    assert.doesNotMatch(smartCanvasCss, /\.world\s*\{[^}]*will-change:transform/);
+});
+
+test('scheduled canvas and undo persistence wait for interaction while direct saves remain direct', async () => {
+    const timers = [];
+    const cancelled = [];
+    let saveCount = 0;
+    let savedToken = 0;
+    let now = 1000;
+    const canvas = {id:'canvas-object'};
+    const interactionContext = {
+        smartConfigActivePointers:new Set([11, 12]),
+        smartCanvasSaveInteractionUntil:0,
+        canvasReferencePickReturnFrame:0,
+        SMART_CANVAS_SAVE_INTERACTION_RETRY_MS:120,
+        canvasId:'canvas-1',
+        canvas,
+        smartCanvasLoadGeneration:3,
+        saveTimer:null,
+        saveScheduleToken:0,
+        Date:{now:() => now},
+        setTimeout:(callback, delay) => {
+            const timer = {callback, delay};
+            timers.push(timer);
+            return timer;
+        },
+        clearTimeout:timer => cancelled.push(timer),
+        saveCanvas:options => {
+            saveCount++;
+            savedToken = options.scheduledToken;
+        }
+    };
+    const loaded = loadProductionFunctions([
+        'smartCanvasSaveInteractionActive',
+        'scheduledCanvasSaveDelay',
+        'cancelScheduledCanvasSave',
+        'runScheduledCanvasSave',
+        'queueCanvasSave'
+    ], interactionContext);
+
+    loaded.queueCanvasSave(450);
+    const staleTimer = timers.at(-1);
+    loaded.queueCanvasSave(300);
+    const activeTimer = timers.at(-1);
+    assert.equal(loaded.sandbox.saveScheduleToken, 2);
+    staleTimer.callback();
+    assert.equal(loaded.sandbox.saveTimer, activeTimer);
+
+    activeTimer.callback();
+    assert.equal(saveCount, 0);
+    assert.equal(timers.at(-1).delay, 120);
+    loaded.sandbox.smartConfigActivePointers.delete(11);
+    timers.at(-1).callback();
+    assert.equal(saveCount, 0);
+    assert.equal(timers.at(-1).delay, 120);
+    loaded.sandbox.smartConfigActivePointers.delete(12);
+    loaded.sandbox.smartCanvasSaveInteractionUntil = 1100;
+    timers.pop().callback();
+    assert.equal(saveCount, 0);
+    assert.equal(timers.at(-1).delay, 100);
+    now = 1100;
+    timers.pop().callback();
+    assert.equal(saveCount, 1);
+    assert.equal(savedToken, 2);
+    assert.equal(cancelled.includes(staleTimer), true);
+
+    let undoPersistCount = 0;
+    let undoDelay = 120;
+    const undoTimers = [];
+    const undoCancelled = [];
+    const undoLoaded = loadProductionFunctions([
+        'cancelScheduledSmartUndoHistoryPersist',
+        'runScheduledSmartUndoHistoryPersist',
+        'scheduleSmartUndoHistoryPersist'
+    ], {
+        smartUndoHistoryPersistTimer:null,
+        smartUndoHistoryPersistScheduleToken:0,
+        canvasId:'canvas-1',
+        canvas,
+        smartCanvasLoadGeneration:3,
+        scheduledCanvasSaveDelay:() => undoDelay,
+        setTimeout:(callback, delay) => {
+            const timer = {callback, delay};
+            undoTimers.push(timer);
+            return timer;
+        },
+        clearTimeout:timer => undoCancelled.push(timer),
+        persistSmartUndoHistoryNow:() => { undoPersistCount++; }
+    });
+    undoLoaded.scheduleSmartUndoHistoryPersist(700);
+    const staleUndoTimer = undoTimers.at(-1);
+    undoLoaded.scheduleSmartUndoHistoryPersist(500);
+    const activeUndoTimer = undoTimers.at(-1);
+    staleUndoTimer.callback();
+    assert.equal(undoLoaded.sandbox.smartUndoHistoryPersistTimer, activeUndoTimer);
+    activeUndoTimer.callback();
+    assert.equal(undoPersistCount, 0);
+    undoDelay = 0;
+    undoTimers.pop().callback();
+    assert.equal(undoPersistCount, 1);
+    assert.equal(undoCancelled.includes(staleUndoTimer), true);
+
+    let afterSavePersistCount = 0;
+    let afterSaveScheduleDelay = 0;
+    let afterSaveInteractionDelay = 120;
+    const afterSaveLoaded = loadProductionFunctions(['persistSmartUndoHistoryAfterCanvasSave'], {
+        canvasId:'canvas-1',
+        canvas,
+        smartUndoHistoryPersistTimer:{pending:true},
+        scheduledCanvasSaveDelay:() => afterSaveInteractionDelay,
+        scheduleSmartUndoHistoryPersist:delay => { afterSaveScheduleDelay = delay; },
+        persistSmartUndoHistoryNow:() => { afterSavePersistCount++; return true; }
+    });
+    assert.equal(await afterSaveLoaded.persistSmartUndoHistoryAfterCanvasSave('canvas-1'), false);
+    assert.equal(afterSavePersistCount, 0);
+    afterSaveLoaded.sandbox.smartUndoHistoryPersistTimer = null;
+    assert.equal(await afterSaveLoaded.persistSmartUndoHistoryAfterCanvasSave('canvas-1'), false);
+    assert.equal(afterSaveScheduleDelay, 120);
+    afterSaveInteractionDelay = 0;
+    assert.equal(await afterSaveLoaded.persistSmartUndoHistoryAfterCanvasSave('canvas-1'), true);
+    assert.equal(afterSavePersistCount, 1);
+
+    assert.equal((smartCanvasSource.match(/await saveCanvas\(\)/g) || []).length, 4);
+    assert.match(extractFunction('scheduleSave'), /queueCanvasSave\(450\)/);
+    assert.match(extractFunction('saveCanvas'), /queueCanvasSave\(300\)/);
+    assert.match(smartCanvasSource, /const smartConfigActivePointers = new Set\(\);/);
+    assert.doesNotMatch(smartCanvasSource, /smartCanvasSavePointerActive/);
+});
+
+test('video and loading spinners stop all invisible animation work without touching video state', () => {
+    assert.match(smartCanvasCss, /\.smart-video-spinner\s*\{[^}]*animation:smart-video-spin \.72s linear infinite;[^}]*animation-play-state:paused;/);
+    assert.match(smartCanvasCss, /\.smart-canvas-video-host\.is-waiting \.smart-video-spinner,\.smart-canvas-video-host\.is-capturing \.smart-video-spinner\s*\{[^}]*opacity:1;[^}]*animation-play-state:running;/);
+    assert.doesNotMatch(smartCanvasCss, /\.smart-video-spinner\s*\{[^}]*animation:none/);
+
+    const frames = [];
+    const cancelled = [];
+    let spinners = [];
+    let nextFrame = 0;
+    const loaded = loadProductionFunctions(['animateSpinners', 'syncLoadingSpinnerAnimation'], {
+        loadingSpinnerAnimationFrame:0,
+        spinnerRotation:0,
+        document:{
+            querySelector:() => spinners[0] || null,
+            querySelectorAll:() => spinners
+        },
+        requestAnimationFrame:callback => {
+            const frame = {id:++nextFrame, callback};
+            frames.push(frame);
+            return frame.id;
+        },
+        cancelAnimationFrame:id => cancelled.push(id)
+    });
+    const makeSpinner = () => {
+        const element = {rotation:'', style:null};
+        element.style = {setProperty:(_name, value) => { element.rotation = value; }};
+        return element;
+    };
+    let spinner = makeSpinner();
+
+    loaded.syncLoadingSpinnerAnimation();
+    assert.equal(frames.length, 0);
+    spinners = [spinner];
+    loaded.syncLoadingSpinnerAnimation();
+    loaded.syncLoadingSpinnerAnimation();
+    assert.equal(frames.length, 1);
+    frames[0].callback();
+    assert.equal(spinner.rotation, '6deg');
+    assert.equal(frames.length, 2);
+
+    spinner = makeSpinner();
+    spinners = [spinner];
+    frames[1].callback();
+    assert.equal(spinner.rotation, '12deg');
+    assert.equal(frames.length, 3);
+    spinners = [];
+    loaded.syncLoadingSpinnerAnimation();
+    assert.deepEqual(cancelled, [3]);
+    assert.equal(loaded.sandbox.loadingSpinnerAnimationFrame, 0);
+
+    assert.match(extractFunction('render'), /syncLoadingSpinnerAnimation\(\)[\s\S]*?flushQueuedNodeGeometryTransitions\(\)[\s\S]*?return;/);
+    assert.doesNotMatch(smartCanvasSource, /\nrequestAnimationFrame\(animateSpinners\);\s*\n\s*window\.onload/);
 });
